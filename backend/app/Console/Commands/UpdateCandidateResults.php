@@ -40,14 +40,27 @@ class UpdateCandidateResults extends Command
             $close = (float) $quote->close;
             $suggestedBuy = (float) $candidate->suggested_buy;
 
-            $hitTarget = $high >= (float) $candidate->target_price;
-            $hitStopLoss = $low <= (float) $candidate->stop_loss;
+            $targetPrice = (float) $candidate->target_price;
+            $stopLoss = (float) $candidate->stop_loss;
+
+            $hitTarget = $high >= $targetPrice;
+            $hitStopLoss = $low <= $stopLoss;
 
             $maxProfit = $suggestedBuy > 0
                 ? round(($high - $suggestedBuy) / $suggestedBuy * 100, 2)
                 : 0;
             $maxLoss = $suggestedBuy > 0
                 ? round(($suggestedBuy - $low) / $suggestedBuy * 100, 2)
+                : 0;
+
+            // 回測指標
+            $buyReachable = $low <= $suggestedBuy;
+            $targetReachable = $high >= $targetPrice;
+            $buyGap = $suggestedBuy > 0
+                ? round(($suggestedBuy - $low) / $suggestedBuy * 100, 2)
+                : 0;
+            $targetGap = $targetPrice > 0
+                ? round(($high - $targetPrice) / $targetPrice * 100, 2)
                 : 0;
 
             CandidateResult::create([
@@ -60,6 +73,10 @@ class UpdateCandidateResults extends Command
                 'hit_stop_loss' => $hitStopLoss,
                 'max_profit_percent' => $maxProfit,
                 'max_loss_percent' => $maxLoss,
+                'buy_reachable' => $buyReachable,
+                'target_reachable' => $targetReachable,
+                'buy_gap_percent' => $buyGap,
+                'target_gap_percent' => $targetGap,
             ]);
 
             $count++;

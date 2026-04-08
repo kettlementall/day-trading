@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Candidate;
+use App\Services\BacktestService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -73,31 +74,13 @@ class CandidateController extends Controller
     public function stats(Request $request): JsonResponse
     {
         $days = $request->get('days', 30);
-        $since = now()->subDays($days)->toDateString();
+        $from = now()->subDays($days)->toDateString();
+        $to = now()->toDateString();
 
-        $total = Candidate::where('trade_date', '>=', $since)->count();
-        $withResult = Candidate::where('trade_date', '>=', $since)
-            ->whereHas('result')
-            ->count();
-        $hitTarget = Candidate::where('trade_date', '>=', $since)
-            ->whereHas('result', fn ($q) => $q->where('hit_target', true))
-            ->count();
+        $service = new BacktestService();
+        $metrics = $service->computeMetrics($from, $to);
+        $metrics['period_days'] = $days;
 
-        $hitRate = $withResult > 0 ? round($hitTarget / $withResult * 100, 1) : 0;
-
-        $avgProfit = Candidate::where('trade_date', '>=', $since)
-            ->whereHas('result')
-            ->with('result')
-            ->get()
-            ->avg(fn ($c) => $c->result->max_profit_percent);
-
-        return response()->json([
-            'period_days' => $days,
-            'total_candidates' => $total,
-            'evaluated' => $withResult,
-            'hit_target' => $hitTarget,
-            'hit_rate' => $hitRate,
-            'avg_max_profit' => round($avgProfit ?? 0, 2),
-        ]);
+        return response()->json($metrics);
     }
 }

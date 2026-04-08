@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\BacktestController;
 use App\Http\Controllers\Api\CandidateController;
 use App\Http\Controllers\Api\DataSyncController;
 use App\Http\Controllers\Api\FormulaSettingController;
@@ -35,6 +36,11 @@ Route::post('/data-sync', [DataSyncController::class, 'sync']);
 Route::get('/news/dashboard', [NewsController::class, 'dashboard']);
 Route::post('/news/fetch', [NewsController::class, 'fetch']);
 Route::get('/news/fetch-status', [NewsController::class, 'fetchStatus']);
+
+// 回測系統
+Route::get('/backtest/rounds', [BacktestController::class, 'rounds']);
+Route::post('/backtest/optimize', [BacktestController::class, 'optimize']);
+Route::post('/backtest/rounds/{round}/apply', [BacktestController::class, 'apply']);
 
 // 系統規格
 Route::get('/spec', function () {

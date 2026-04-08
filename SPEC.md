@@ -27,6 +27,7 @@
 | 18:00 | `news:fetch`                | 盤後新聞抓取                   |
 | 18:15 | `news:compute-indices`      | 計算新聞指數                   |
 | 22:00 | `stock:health-check`        | 健康檢查（確認當日資料完整）   |
+| 週一 07:00 | `stock:backtest --optimize --apply` | 自動回測分析並套用建議（過去30天）  |
 
 ### 資料依賴流程
 
@@ -296,7 +297,7 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 
 ---
 
-## 5. 實際表現與績效統計
+## 5. 回測系統
 
 ### 5.1 盤後結果回填（`stock:update-results`）
 
@@ -306,32 +307,102 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 
 **判定邏輯：**
 
-| 欄位                | 計算方式                                                    |
-|--------------------|-----------------------------------------------------------|
-| `actual_open`      | 當日 `daily_quotes.open`                                   |
-| `actual_high`      | 當日 `daily_quotes.high`                                   |
-| `actual_low`       | 當日 `daily_quotes.low`                                    |
-| `actual_close`     | 當日 `daily_quotes.close`                                  |
-| `hit_target`       | 當日最高價 ≥ 候選標的的 `target_price` → `true`             |
-| `hit_stop_loss`    | 當日最低價 ≤ 候選標的的 `stop_loss` → `true`                |
-| `max_profit_percent` | `(high - suggested_buy) / suggested_buy × 100`            |
-| `max_loss_percent` | `(suggested_buy - low) / suggested_buy × 100`              |
+| 欄位                 | 計算方式                                                    |
+|---------------------|-----------------------------------------------------------|
+| `actual_open`       | 當日 `daily_quotes.open`                                   |
+| `actual_high`       | 當日 `daily_quotes.high`                                   |
+| `actual_low`        | 當日 `daily_quotes.low`                                    |
+| `actual_close`      | 當日 `daily_quotes.close`                                  |
+| `hit_target`        | 當日最高價 ≥ 候選標的的 `target_price` → `true`             |
+| `hit_stop_loss`     | 當日最低價 ≤ 候選標的的 `stop_loss` → `true`                |
+| `max_profit_percent`| `(high - suggested_buy) / suggested_buy × 100`             |
+| `max_loss_percent`  | `(suggested_buy - low) / suggested_buy × 100`              |
+| `buy_reachable`     | 當日最低價 ≤ 建議買入價 → `true`                            |
+| `target_reachable`  | 當日最高價 ≥ 目標價 → `true`                                |
+| `buy_gap_percent`   | `(suggested_buy - low) / suggested_buy × 100`（正值=買得到）|
+| `target_gap_percent`| `(high - target_price) / target_price × 100`（正值=超過目標）|
 
 **注意事項：**
 - 需要當日 `daily_quotes` 資料才能計算（依賴 14:30 的 `stock:fetch-daily`）
 - 若當日無行情資料（如該股停牌），則跳過不建立結果
 - 已有結果的候選標的不會重複計算（`whereDoesntHave('result')`）
 
-### 5.2 績效統計
+### 5.2 回測核心指標
 
-定義於 `CandidateController::stats()`。
+定義於 `BacktestService::computeMetrics()`，由 `CandidateController::stats()` 呼叫。
 
-| 指標         | 計算方式                                        |
-|-------------|------------------------------------------------|
-| 候選標的數   | 期間內 `candidates` 總筆數                       |
-| 已驗證       | 有對應 `candidate_results` 的筆數                |
-| 命中率       | `hit_target = true` 數 / 已驗證數 × 100         |
-| 平均最高獲利 | 所有已驗證標的 `max_profit_percent` 的平均值      |
+| 指標           | 欄位                | 計算方式                                                      |
+|---------------|--------------------|------------------------------------------------------------- |
+| 候選標的數     | `total_candidates` | 期間內 `candidates` 總筆數                                     |
+| 已驗證         | `evaluated`        | 有對應 `candidate_results` 的筆數                               |
+| 買入可達率     | `buy_reach_rate`   | `buy_reachable = true` 數 / 已驗證數 × 100                    |
+| 目標可達率     | `target_reach_rate`| `target_reachable = true` 數 / 已驗證數 × 100                  |
+| 雙達率         | `dual_reach_rate`  | 同時 `buy_reachable AND target_reachable` 數 / 已驗證數 × 100  |
+| 期望值         | `expected_value`   | 見下方計算公式                                                  |
+| 停損觸及率     | `hit_stop_loss_rate`| `hit_stop_loss = true` 數 / 已驗證數 × 100                    |
+| 平均買入間距   | `avg_buy_gap`      | 所有已驗證標的 `buy_gap_percent` 平均值                         |
+| 平均目標間距   | `avg_target_gap`   | 所有已驗證標的 `target_gap_percent` 平均值                      |
+| 平均風報比     | `avg_risk_reward`  | 所有已驗證標的 `risk_reward_ratio` 平均值                       |
+
+#### 期望值計算公式
+
+對每筆已驗證候選標的，依情境計算該筆模擬損益：
+
+```
+if buy_reachable AND target_reachable:
+    profit = (target_price - suggested_buy) / suggested_buy × 100
+elif buy_reachable AND hit_stop_loss:
+    profit = -(suggested_buy - stop_loss) / suggested_buy × 100
+elif buy_reachable:
+    profit = (actual_close - suggested_buy) / suggested_buy × 100
+else:
+    profit = 0（未買到不計算）
+
+expected_value = avg(所有 buy_reachable 為 true 的 profit)
+```
+
+#### 策略分類分析
+
+指標可依策略類型（`bounce` / `breakout`）分別統計，回傳於 `by_strategy` 欄位。
+
+#### 日別趨勢
+
+回傳 `daily` 陣列，每日包含 `buy_reach_rate`、`target_reach_rate`、`dual_reach_rate`，供前端繪製趨勢圖。
+
+### 5.3 AI 公式優化（`stock:backtest`）
+
+定義於 `BacktestOptimizer`，可透過指令或 API 觸發。
+
+```bash
+# 僅查看回測指標
+php artisan stock:backtest --from=2026-03-01 --to=2026-04-08
+
+# 執行 AI 優化分析
+php artisan stock:backtest --from=2026-03-01 --to=2026-04-08 --optimize
+
+# 分析並自動套用建議
+php artisan stock:backtest --from=2026-03-01 --to=2026-04-08 --optimize --apply
+```
+
+**優化流程：**
+
+1. 計算指定期間的回測指標
+2. 讀取目前所有 `FormulaSetting` 參數
+3. 呼叫 Claude API 分析數據偏差，建議參數調整（無 API key 時降級為規則式分析）
+4. 將分析結果存入 `backtest_rounds` 表
+5. 若指定 `--apply`，自動套用建議到 `formula_settings`
+
+**規則式降級邏輯：**
+
+| 條件                              | 調整方向                                 |
+|----------------------------------|----------------------------------------|
+| 買入可達率 < 50%                  | 提高 `suggested_buy.fallback_pct`       |
+| 買入可達率 > 80% 且間距 > 2%      | 降低 `suggested_buy.fallback_pct`       |
+| 目標可達率 < 40%                  | 降低 `target_price.fallback_pct`        |
+| 目標可達率 > 75% 且間距 > 2%      | 提高 `target_price.fallback_pct`        |
+| 停損觸及率 > 50%                  | 提高 `stop_loss.fallback_pct`（收緊）    |
+
+**排程：** 每週一 07:00 自動執行過去 30 天回測分析（`stock:backtest --optimize`）。
 
 ---
 
@@ -345,7 +416,8 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 | `margin_trades`       | 融資融券           | `stock_id`, `date`, `margin_change`                   |
 | `intraday_quotes`     | 盤中即時行情       | `stock_id`, `date`, `current_price`, `estimated_volume_ratio`, `open_change_percent`, `first_5min_high`, `first_5min_low`, `external_ratio` |
 | `candidates`          | 候選標的           | `stock_id`, `trade_date`, `suggested_buy`, `target_price`, `stop_loss`, `risk_reward_ratio`, `score`, `strategy_type`, `strategy_detail`, `reasons`, `morning_*` |
-| `candidate_results`   | 盤後結果           | `candidate_id`, `actual_open/high/low/close`, `hit_target`, `hit_stop_loss`, `max_profit_percent`, `max_loss_percent` |
+| `candidate_results`   | 盤後結果           | `candidate_id`, `actual_open/high/low/close`, `hit_target`, `hit_stop_loss`, `max_profit_percent`, `max_loss_percent`, `buy_reachable`, `target_reachable`, `buy_gap_percent`, `target_gap_percent` |
+| `backtest_rounds`     | 回測優化紀錄       | `analyzed_from`, `analyzed_to`, `sample_count`, `metrics_before` (JSON), `metrics_after` (JSON), `suggestions` (JSON), `applied`, `applied_at` |
 | `screening_rules`     | 自訂篩選規則       | `conditions` (JSON), `is_active`, `sort_order`        |
 | `formula_settings`    | 公式參數設定       | `type`, `config` (JSON)                               |
 | `news_articles`       | 新聞文章           | `source`, `title`, `url`, `industry`, `sentiment_score`, `sentiment_label`, `ai_analysis`, `fetched_date`, `published_at` |
@@ -359,7 +431,7 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 |--------|--------------------------|------------------------|
 | GET    | `/api/candidates`         | 候選標的列表（含盤前確認、盤後結果） |
 | GET    | `/api/candidates/dates`   | 有資料的日期列表        |
-| GET    | `/api/candidates/stats`   | 績效統計               |
+| GET    | `/api/candidates/stats`   | 回測統計指標            |
 | GET    | `/api/candidates/morning` | 盤前確認結果            |
 | GET    | `/api/candidates/{id}`    | 單一候選標的詳情        |
 | GET    | `/api/stocks`             | 股票列表               |
@@ -373,6 +445,9 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 | GET    | `/api/news/dashboard`     | 消息面儀表板            |
 | POST   | `/api/news/fetch`         | 手動觸發新聞抓取        |
 | GET    | `/api/news/fetch-status`  | 新聞抓取進度            |
+| GET    | `/api/backtest/rounds`    | 回測優化歷史列表        |
+| POST   | `/api/backtest/optimize`  | 觸發 AI 優化分析        |
+| POST   | `/api/backtest/rounds/{id}/apply` | 套用優化建議  |
 | GET    | `/api/spec`               | 系統規格文件（SPEC.md）  |
 
 ---
@@ -396,7 +471,7 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 |-----------|---------------------|---------------------|
 | `/`       | `CandidatesView`    | 當沖候選標的（主頁） |
 | `/history`| `HistoryView`       | 歷史紀錄             |
-| `/stats`  | `StatsView`         | 績效統計             |
+| `/stats`  | `StatsView`         | 回測分析             |
 | `/news`   | `NewsView`          | 消息面               |
 | `/settings`| `SettingsView`     | 篩選設定             |
 | `/spec`   | `SpecView`          | 系統規格書            |

@@ -38,3 +38,6 @@ Schedule::command('news:compute-indices')->dailyAt('18:15');
 
 // 每日 22:00 健康檢查（確認當日資料抓取正常）
 Schedule::command('stock:health-check')->dailyAt('22:00');
+
+// 每週一 07:00 自動執行回測分析並套用建議（過去30天）
+Schedule::command('stock:backtest --optimize --apply')->weeklyOn(1, '07:00');

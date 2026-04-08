@@ -68,6 +68,16 @@ export const fetchNews = (date) =>
 export const getNewsFetchStatus = (date) =>
   api.get('/news/fetch-status', { params: { date } })
 
+// 回測系統
+export const getBacktestRounds = () =>
+  api.get('/backtest/rounds')
+
+export const triggerBacktestOptimize = (from, to) =>
+  api.post('/backtest/optimize', { from, to })
+
+export const applyBacktestRound = (id) =>
+  api.post(`/backtest/rounds/${id}/apply`)
+
 // 系統規格
 export const getSpec = () =>
   api.get('/spec')

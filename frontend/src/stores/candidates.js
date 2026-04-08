@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getCandidates, getCandidateDates, getCandidateStats } from '../api'
+import { getCandidates, getCandidateDates, getCandidateStats, getBacktestRounds, triggerBacktestOptimize, applyBacktestRound } from '../api'
 import dayjs from 'dayjs'
 
 export const useCandidateStore = defineStore('candidates', () => {
@@ -52,14 +52,42 @@ export const useCandidateStore = defineStore('candidates', () => {
     dates.value = data
   }
 
+  const backtestRounds = ref([])
+  const optimizing = ref(false)
+
   async function fetchStats(days = 30) {
     const { data } = await getCandidateStats(days)
     stats.value = data
   }
 
+  async function fetchBacktestRounds() {
+    const { data } = await getBacktestRounds()
+    backtestRounds.value = data
+  }
+
+  async function optimize(from, to) {
+    optimizing.value = true
+    try {
+      const { data } = await triggerBacktestOptimize(from, to)
+      backtestRounds.value.unshift(data)
+      return data
+    } finally {
+      optimizing.value = false
+    }
+  }
+
+  async function applyRound(id) {
+    const { data } = await applyBacktestRound(id)
+    const idx = backtestRounds.value.findIndex(r => r.id === id)
+    if (idx !== -1) backtestRounds.value[idx] = data
+    return data
+  }
+
   return {
     candidates, currentDate, dates, stats, loading,
     morningFilter, filteredCandidates, morningSummary, lastUpdatedAt,
+    backtestRounds, optimizing,
     fetchCandidates, fetchDates, fetchStats,
+    fetchBacktestRounds, optimize, applyRound,
   }
 })
