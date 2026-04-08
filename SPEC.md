@@ -296,7 +296,33 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 
 ---
 
-## 5. 績效統計
+## 5. 實際表現與績效統計
+
+### 5.1 盤後結果回填（`stock:update-results`）
+
+定義於 `UpdateCandidateResults`，每日 **15:00** 收盤後自動執行。
+
+**觸發條件：** 當日有候選標的（`candidates`）且尚未建立對應結果（`candidate_results`）。
+
+**判定邏輯：**
+
+| 欄位                | 計算方式                                                    |
+|--------------------|-----------------------------------------------------------|
+| `actual_open`      | 當日 `daily_quotes.open`                                   |
+| `actual_high`      | 當日 `daily_quotes.high`                                   |
+| `actual_low`       | 當日 `daily_quotes.low`                                    |
+| `actual_close`     | 當日 `daily_quotes.close`                                  |
+| `hit_target`       | 當日最高價 ≥ 候選標的的 `target_price` → `true`             |
+| `hit_stop_loss`    | 當日最低價 ≤ 候選標的的 `stop_loss` → `true`                |
+| `max_profit_percent` | `(high - suggested_buy) / suggested_buy × 100`            |
+| `max_loss_percent` | `(suggested_buy - low) / suggested_buy × 100`              |
+
+**注意事項：**
+- 需要當日 `daily_quotes` 資料才能計算（依賴 14:30 的 `stock:fetch-daily`）
+- 若當日無行情資料（如該股停牌），則跳過不建立結果
+- 已有結果的候選標的不會重複計算（`whereDoesntHave('result')`）
+
+### 5.2 績效統計
 
 定義於 `CandidateController::stats()`。
 
