@@ -43,6 +43,7 @@ class StockScreener
 
         foreach ($stocks as $stock) {
             $quotes = DailyQuote::where('stock_id', $stock->id)
+                ->where('date', '<', $tradeDate)
                 ->orderByDesc('date')
                 ->limit(60)
                 ->get();
