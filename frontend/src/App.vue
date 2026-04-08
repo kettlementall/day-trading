@@ -1,0 +1,72 @@
+<template>
+  <div class="app-container">
+    <router-view />
+    <nav class="bottom-nav">
+      <router-link to="/" class="nav-item" active-class="active">
+        <el-icon><TrendCharts /></el-icon>
+        <span>候選標的</span>
+      </router-link>
+      <router-link to="/history" class="nav-item" active-class="active">
+        <el-icon><Calendar /></el-icon>
+        <span>歷史紀錄</span>
+      </router-link>
+      <router-link to="/stats" class="nav-item" active-class="active">
+        <el-icon><DataAnalysis /></el-icon>
+        <span>績效統計</span>
+      </router-link>
+      <router-link to="/news" class="nav-item" active-class="active">
+        <el-icon><ChatLineSquare /></el-icon>
+        <span>消息面</span>
+      </router-link>
+      <router-link to="/settings" class="nav-item" active-class="active">
+        <el-icon><Setting /></el-icon>
+        <span>設定</span>
+      </router-link>
+    </nav>
+  </div>
+</template>
+
+<script setup>
+</script>
+
+<style scoped>
+.app-container {
+  min-height: 100vh;
+  padding-bottom: 60px;
+  background: #f5f7fa;
+}
+
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  background: #fff;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  border-top: 1px solid #e4e7ed;
+  z-index: 999;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-decoration: none;
+  color: #909399;
+  font-size: 11px;
+  padding: 4px 12px;
+}
+
+.nav-item .el-icon {
+  font-size: 22px;
+}
+
+.nav-item.active {
+  color: #409eff;
+}
+</style>
