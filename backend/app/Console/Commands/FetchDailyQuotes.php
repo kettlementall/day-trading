@@ -43,6 +43,16 @@ class FetchDailyQuotes extends Command
                 return;
             }
 
+            // 從回傳的 date 欄位取得實際交易日，避免假日存錯日期
+            $actualDate = $json['date'] ?? $date;
+            $actualSqlDate = $this->toSqlDate($actualDate);
+            $requestedSqlDate = $this->toSqlDate($date);
+
+            if ($actualSqlDate !== $requestedSqlDate) {
+                $this->warn("TWSE 回傳日期 {$actualSqlDate} 與請求日期 {$requestedSqlDate} 不符（非交易日），跳過");
+                return;
+            }
+
             // 支援新版 tables 結構與舊版 data9/data8
             $rows = $json['data9'] ?? $json['data8'] ?? [];
             if (empty($rows) && !empty($json['tables'])) {
@@ -91,7 +101,7 @@ class FetchDailyQuotes extends Command
                 $amplitude = $prevClose > 0 ? round(($high - $low) / $prevClose * 100, 2) : 0;
 
                 DailyQuote::updateOrCreate(
-                    ['stock_id' => $stock->id, 'date' => $this->toSqlDate($date)],
+                    ['stock_id' => $stock->id, 'date' => $actualSqlDate],
                     [
                         'open' => $open,
                         'high' => $high,
@@ -108,7 +118,7 @@ class FetchDailyQuotes extends Command
                 $count++;
             }
 
-            $this->info("TWSE: 匯入 {$count} 筆");
+            $this->info("TWSE: 匯入 {$count} 筆 (交易日: {$actualSqlDate})");
         } catch (\Exception $e) {
             Log::error("TWSE fetch error: " . $e->getMessage());
             $this->error("TWSE 抓取失敗: " . $e->getMessage());
@@ -122,7 +132,22 @@ class FetchDailyQuotes extends Command
         try {
             $response = Http::timeout(30)->get($url);
             $json = $response->json();
+
+            // 從回傳的 reportDate 取得實際交易日
+            $actualRocDate = $json['reportDate'] ?? $rocDate;
+            $actualSqlDate = $this->rocToSqlDate($actualRocDate);
+            $requestedSqlDate = $this->rocToSqlDate($rocDate);
+
+            if ($actualSqlDate !== $requestedSqlDate) {
+                $this->warn("TPEX 回傳日期 {$actualSqlDate} 與請求日期 {$requestedSqlDate} 不符（非交易日），跳過");
+                return;
+            }
+
             $rows = $json['aaData'] ?? [];
+            if (empty($rows)) {
+                $this->warn("TPEX: 無資料");
+                return;
+            }
             $count = 0;
 
             foreach ($rows as $row) {
@@ -152,7 +177,7 @@ class FetchDailyQuotes extends Command
                 $amplitude = $prevClose > 0 ? round(($high - $low) / $prevClose * 100, 2) : 0;
 
                 DailyQuote::updateOrCreate(
-                    ['stock_id' => $stock->id, 'date' => $this->rocToSqlDate($rocDate)],
+                    ['stock_id' => $stock->id, 'date' => $actualSqlDate],
                     [
                         'open' => $open,
                         'high' => $high,
@@ -169,7 +194,7 @@ class FetchDailyQuotes extends Command
                 $count++;
             }
 
-            $this->info("TPEX: 匯入 {$count} 筆");
+            $this->info("TPEX: 匯入 {$count} 筆 (交易日: {$actualSqlDate})");
         } catch (\Exception $e) {
             Log::error("TPEX fetch error: " . $e->getMessage());
             $this->error("TPEX 抓取失敗: " . $e->getMessage());

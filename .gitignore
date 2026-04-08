@@ -20,3 +20,4 @@ frontend/dist/
 
 # Docker
 mysql-data/
+backend/SPEC.md

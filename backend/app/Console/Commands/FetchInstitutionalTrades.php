@@ -37,9 +37,18 @@ class FetchInstitutionalTrades extends Command
                 return;
             }
 
+            // 驗證回傳日期是否與請求日期一致
+            $actualDate = $json['date'] ?? $date;
+            $sqlDate = substr($actualDate, 0, 4) . '-' . substr($actualDate, 4, 2) . '-' . substr($actualDate, 6, 2);
+            $requestedSqlDate = substr($date, 0, 4) . '-' . substr($date, 4, 2) . '-' . substr($date, 6, 2);
+
+            if ($sqlDate !== $requestedSqlDate) {
+                $this->warn("回傳日期 {$sqlDate} 與請求日期 {$requestedSqlDate} 不符（非交易日），跳過");
+                return;
+            }
+
             $rows = $json['data'] ?? [];
             $count = 0;
-            $sqlDate = substr($date, 0, 4) . '-' . substr($date, 4, 2) . '-' . substr($date, 6, 2);
 
             foreach ($rows as $row) {
                 $symbol = trim($row[0]);
