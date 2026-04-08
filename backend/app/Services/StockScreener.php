@@ -314,6 +314,11 @@ class StockScreener
             // 最低門檻
             if ($score < 30 || empty($reasons)) continue;
 
+            // 當日漲跌停價（台股 ±10%）
+            $prevClose = $closes[0];
+            $limitUp = $this->tickRound($prevClose * 1.10, $prevClose, 'down');
+            $limitDown = $this->tickRound($prevClose * 0.90, $prevClose, 'up');
+
             // 計算建議價格（依策略類型調整）
             $priceFactor = $newsFactor['price_factor'];
             $suggestedBuy = $this->calcSuggestedBuy(
@@ -322,14 +327,18 @@ class StockScreener
             $targetPrice = $this->calcTargetPrice($closes, $highs, $atr, $bollinger, $targetConfig);
             $stopLoss = $this->calcStopLoss($closes, $lows, $atr, $stopConfig);
 
-            // 消息面修正：偏空壓低目標、收緊停損；偏多略放寬目���
+            // 消息面修正：偏空壓低目標、收緊停損；偏多略放寬目標
             if ($priceFactor !== 1.0) {
                 $targetPrice = round($suggestedBuy + ($targetPrice - $suggestedBuy) * $priceFactor, 2);
-                // 偏空時停損也收緊（空間縮小）
                 if ($priceFactor < 1.0) {
                     $stopLoss = round($suggestedBuy - ($suggestedBuy - $stopLoss) * (2.0 - $priceFactor), 2);
                 }
             }
+
+            // 當沖限價：所有價格必須在漲跌停範圍內
+            $suggestedBuy = max($limitDown, min($limitUp, $suggestedBuy));
+            $targetPrice = max($limitDown, min($limitUp, $targetPrice));
+            $stopLoss = max($limitDown, min($limitUp, $stopLoss));
 
             $profitSpace = $targetPrice - $suggestedBuy;
             $lossSpace = $suggestedBuy - $stopLoss;
@@ -685,6 +694,35 @@ class StockScreener
         $result['score_adj'] = max(-15, min(15, $scoreAdj));
 
         return $result;
+    }
+
+    /**
+     * 台股升降單位（tick size）四捨五入
+     *
+     * 股價區間       升降單位
+     * < 10          0.01
+     * 10 ~ 50       0.05
+     * 50 ~ 100      0.10
+     * 100 ~ 500     0.50
+     * 500 ~ 1000    1.00
+     * >= 1000       5.00
+     */
+    private function tickRound(float $price, float $refPrice, string $direction = 'nearest'): float
+    {
+        $tick = match (true) {
+            $refPrice < 10 => 0.01,
+            $refPrice < 50 => 0.05,
+            $refPrice < 100 => 0.10,
+            $refPrice < 500 => 0.50,
+            $refPrice < 1000 => 1.00,
+            default => 5.00,
+        };
+
+        return match ($direction) {
+            'up' => ceil($price / $tick) * $tick,
+            'down' => floor($price / $tick) * $tick,
+            default => round($price / $tick) * $tick,
+        };
     }
 
     private function matchRule(ScreeningRule $rule, $quote, $inst, $margin): bool

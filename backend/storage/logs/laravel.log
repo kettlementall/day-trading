@@ -134,3 +134,20 @@
 #23 /var/www/artisan(12): Illuminate\\Foundation\\Console\\Kernel->handle(Object(Symfony\\Component\\Console\\Input\\ArgvInput), Object(Symfony\\Component\\Console\\Output\\ConsoleOutput))
 #24 {main}
 "} 
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 2465  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 2466  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 2467  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 3380  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 3714  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 4906  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 6944  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 2376  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 2382  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 2476  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 2493  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 3231  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 3312  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 1802  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 2308  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 2845  
+[2026-04-08 18:24:53] local.WARNING: 盤中資料缺失: 3026  
