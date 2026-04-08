@@ -41,6 +41,28 @@
                                                        15:00 盤後結果回填
 ```
 
+### 非交易日處理
+
+所有市場資料抓取指令（`stock:fetch-daily`、`stock:fetch-institutional`、`stock:fetch-margin`）皆具備日期驗證機制：
+
+- 從 TWSE/TPEX API 回傳的 `date` / `reportDate` 欄位取得**實際交易日**
+- 若實際交易日與請求日期不符（代表該日為假日），自動跳過不存入
+- 避免假日期間 API 回傳上一交易日資料被存到錯誤日期的問題
+
+排程在假日仍會執行，但因上述驗證機制，不會產生錯誤資料。
+
+### 資料修復
+
+若發現歷史資料日期錯位，可使用修復指令：
+
+```bash
+# 檢查（不修改）
+php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08 --dry-run
+
+# 執行修復（刪除假日錯誤資料 → 重新抓取正確交易日）
+php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
+```
+
 ---
 
 ## 2. 選股評分規則
