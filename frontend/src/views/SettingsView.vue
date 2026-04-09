@@ -21,7 +21,7 @@
               <div v-if="formulas.strategy.config.bounce.enabled" class="formula-body">
                 <div class="param-row">
                   <span>加分</span>
-                  <el-input-number v-model="formulas.strategy.config.bounce.score" :min="0" :max="30" size="small" />
+                  <el-input-number v-model="formulas.strategy.config.bounce.score" :min="-15" :max="30" size="small" />
                   <span class="unit">分</span>
                 </div>
                 <div class="param-row">
@@ -55,7 +55,7 @@
               <div v-if="formulas.strategy.config.breakout.enabled" class="formula-body">
                 <div class="param-row">
                   <span>加分</span>
-                  <el-input-number v-model="formulas.strategy.config.breakout.score" :min="0" :max="30" size="small" />
+                  <el-input-number v-model="formulas.strategy.config.breakout.score" :min="-15" :max="30" size="small" />
                   <span class="unit">分</span>
                 </div>
                 <div class="param-row">
@@ -92,7 +92,7 @@
                     <div class="scoring-right">
                       <el-input-number
                         v-model="formulas.scoring.config[item.key].score"
-                        :min="0" :max="30" size="small"
+                        :min="-15" :max="30" size="small"
                         :disabled="!formulas.scoring.config[item.key].enabled"
                         style="width: 80px"
                       />

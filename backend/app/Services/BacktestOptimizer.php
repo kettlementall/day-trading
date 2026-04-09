@@ -28,7 +28,7 @@ class BacktestOptimizer
 
         // 取得目前公式參數
         $currentSettings = [];
-        foreach (['suggested_buy', 'target_price', 'stop_loss', 'strategy', 'news_sentiment'] as $type) {
+        foreach (['suggested_buy', 'target_price', 'stop_loss', 'strategy', 'scoring', 'news_sentiment', 'screen_thresholds'] as $type) {
             $currentSettings[$type] = FormulaSetting::getConfig($type);
         }
 
@@ -79,7 +79,7 @@ class BacktestOptimizer
         $prompt = $this->buildPrompt($metrics, $currentSettings);
 
         try {
-            $response = Http::timeout(60)
+            $response = Http::timeout(120)
                 ->withHeaders([
                     'x-api-key' => $this->apiKey,
                     'anthropic-version' => '2023-06-01',
@@ -87,7 +87,7 @@ class BacktestOptimizer
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
-                    'max_tokens' => 3000,
+                    'max_tokens' => 4096,
                     'messages' => [
                         ['role' => 'user', 'content' => $prompt],
                     ],
@@ -124,6 +124,54 @@ class BacktestOptimizer
 
         $settingsJson = json_encode($currentSettings, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 
+        // 每日趨勢
+        $dailyJson = json_encode($metrics['daily'] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+
+        // 個股明細（取全部有結果的候選）
+        $from = $metrics['period']['from'] ?? now()->subDays(30)->format('Y-m-d');
+        $to = $metrics['period']['to'] ?? now()->format('Y-m-d');
+        $candidates = \App\Models\Candidate::whereBetween('trade_date', [$from, $to])
+            ->whereHas('result')
+            ->with(['result', 'stock:id,symbol,name,industry'])
+            ->orderBy('trade_date')
+            ->get();
+
+        $details = $candidates->map(function ($c) {
+            $r = $c->result;
+            $suggestedBuy = (float) $c->suggested_buy;
+            $profit = null;
+            if ($suggestedBuy > 0 && $r->buy_reachable) {
+                if ($r->buy_reachable && $r->target_reachable) {
+                    $profit = round(((float) $c->target_price - $suggestedBuy) / $suggestedBuy * 100, 2);
+                } elseif ($r->hit_stop_loss) {
+                    $profit = round(-($suggestedBuy - (float) $c->stop_loss) / $suggestedBuy * 100, 2);
+                } else {
+                    $profit = round(((float) $r->actual_close - $suggestedBuy) / $suggestedBuy * 100, 2);
+                }
+            }
+
+            return [
+                'date' => \Carbon\Carbon::parse($c->trade_date)->format('m/d'),
+                'stock' => $c->stock->symbol . ' ' . $c->stock->name,
+                'industry' => $c->stock->industry ?? '-',
+                'strategy' => $c->strategy_type ?? '-',
+                'score' => $c->score,
+                'buy' => $suggestedBuy,
+                'target' => (float) $c->target_price,
+                'stop' => (float) $c->stop_loss,
+                'rr' => (float) $c->risk_reward_ratio,
+                'actual_low' => (float) $r->actual_low,
+                'actual_high' => (float) $r->actual_high,
+                'actual_close' => (float) $r->actual_close,
+                'buy_ok' => $r->buy_reachable ? 'Y' : 'N',
+                'target_ok' => $r->target_reachable ? 'Y' : 'N',
+                'stop_hit' => $r->hit_stop_loss ? 'Y' : 'N',
+                'profit_pct' => $profit,
+                'reasons' => implode(', ', is_array($c->reasons) ? $c->reasons : []),
+            ];
+        })->toArray();
+        $detailsJson = json_encode($details, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+
         return <<<PROMPT
 你是台股當沖交易系統的優化專家，負責同時優化「價格公式」和「選股邏輯」。以下是過去一段時間的回測統計數據和目前的參數設定。
 
@@ -148,6 +196,27 @@ class BacktestOptimizer
 - screening.avg_score_by_outcome: 依結果分組的平均分數（win=雙達, loss=觸停損, miss=未買到）
   - 若 win 和 loss 的平均分數接近，代表評分系統無法區分好壞標的
   - 若 miss 平均分數高，代表高分股但買不到，價格公式需調整
+
+## 每日趨勢
+{$dailyJson}
+
+觀察每日指標是否穩定、是否有特定日期表現異常（可能受大盤影響）。
+
+## 個股明細
+{$detailsJson}
+
+### 欄位說明
+- buy/target/stop: 建議買入價/目標價/停損價
+- actual_low/actual_high/actual_close: 實際最低/最高/收盤
+- buy_ok/target_ok/stop_hit: 是否可買到/達標/觸停損
+- profit_pct: 實際報酬率 %（null=沒買到）
+- reasons: 觸發的選股理由
+
+請從個股明細觀察：
+- 哪些類型的股票（產業、策略）賺錢或虧錢
+- 買入價 vs 實際最低價的差距是否有規律（是否系統性偏低）
+- 高分但虧損或低分但賺錢的標的，分析原因
+- 觸發理由的組合是否與結果相關
 
 ## 目前參數設定
 {$settingsJson}
@@ -183,48 +252,62 @@ class BacktestOptimizer
   - breakout: 突破追多（prev_high_days=前高回看天數, near_breakout_pct=接近突破比例, score=策略加分）
 - news_sentiment: 消息面修正的閾值和係數
 
+#### 篩選門檻參數
+- screen_thresholds: 控制候選標的篩選的硬門檻
+  - min_volume: 最低成交量（張），低於此量的股票直接跳過
+  - min_price: 最低股價，低於此價的股票直接跳過
+  - min_score: 最低評分門檻，低於此分數的股票不列入候選
+  - min_risk_reward: 最低風報比，低於此值的不列入
+  - max_candidates: 每日最大候選數
+
 ## 任務
 
-同時分析「價格公式」和「選股邏輯」，找出改善空間。
+同時分析「價格公式」、「選股邏輯」和「篩選門檻」，找出改善空間。
 
-### 優化目標
-1. 提高雙達率（dual_reach_rate）
-2. 提高期望值（expected_value）
-3. 維持合理的風報比（>= 1.5）
-4. 提升選股品質：讓高分候選股對應更好的交易結果
+### 優化目標（按優先順序）
+1. **提高買入可達率**（buy_reach_rate 目標 >= 50%）— 買不到的策略沒意義
+2. **提高雙達率**（dual_reach_rate 目標 >= 15%）
+3. **維持正期望值**（expected_value > 0.3%，扣手續費後仍有利）
+4. **風報比合理**（1.5 ~ 3.0 最佳，過高代表定價太保守）
+5. 提升選股品質：讓高分候選股對應更好的交易結果
 
-### 選股優化方向
+### 分析方向
+- 從個股明細觀察買入價 vs 實際最低價的差距模式，判斷是系統性偏低還是個別問題
 - 若某策略（bounce/breakout）表現明顯較差，考慮降低該策略的 score 或調整其門檻
 - 若 reason_frequency 中某因子觸發率極高但結果不佳，考慮降低其 score 或收緊門檻
-- 若 reason_frequency 中某因子觸發率極低，考慮放寬門檻讓更多股票受益
 - 若 avg_score_by_outcome 中 win 和 loss 分數接近，代表評分區辨力不足，需調整權重分布
-- 若候選數太少（candidates_per_day < 5），可放寬某些門檻；太多（> 15）可收緊
+- 若候選數太少（< 5/天），可降低 min_score 或放寬因子門檻；太多（> 15）可收緊
+- 若風報比過高（> 4），代表目標太遠或停損太緊，應適度調整
 
 請用 JSON 回覆（不要加其他文字），格式如下：
 {
-  "analysis": "問題分析摘要（中文，包含價格和選股兩方面的分析）",
+  "analysis": "問題分析摘要（中文，含價格、選股、門檻三方面分析，引用具體數據）",
   "adjustments": {
     "suggested_buy": { "要修改的參數key": 新值 },
     "target_price": { "要修改的參數key": 新值 },
     "stop_loss": { "要修改的參數key": 新值 },
     "scoring": { "因子名.參數key": 新值 },
-    "strategy": { "策略名.參數key": 新值 }
+    "strategy": { "策略名.參數key": 新值 },
+    "screen_thresholds": { "參數key": 新值 }
   },
   "reasoning": {
     "suggested_buy": "調整原因",
     "target_price": "調整原因",
     "stop_loss": "調整原因",
     "scoring": "選股評分調整原因",
-    "strategy": "策略參數調整原因"
+    "strategy": "策略參數調整原因",
+    "screen_thresholds": "門檻調整原因"
   }
 }
 
 注意：
-- 只調整有明確數據支持的參數，不要亂改
+- 只調整有明確數據支持的參數，引用具體數據說明原因
 - 每次調整幅度不要太大（每個參數最多調整 10-20%）
 - 如果某類參數已經表現良好，可以不調整（不需要在 adjustments 中列出）
 - adjustments 的 key 使用點分隔路徑（如 "sources.atr.multiplier", "volume_surge.score", "bounce.washout_drop_pct"）
 - scoring 和 strategy 的調整也使用點分隔路徑
+- screen_thresholds 的 key 直接使用參數名（如 "min_score", "min_risk_reward"）
+- score 可以設為負值（-15 ~ 30），負分代表該因子觸發時扣分
 PROMPT;
     }
 

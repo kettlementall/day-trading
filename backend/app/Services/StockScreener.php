@@ -27,6 +27,7 @@ class StockScreener
         $stopConfig = FormulaSetting::getConfig('stop_loss');
         $strategyConfig = FormulaSetting::getConfig('strategy');
         $scoringConfig = FormulaSetting::getConfig('scoring');
+        $screenConfig = FormulaSetting::getConfig('screen_thresholds');
         $newsConfig = FormulaSetting::getConfig('news_sentiment');
         $candidates = collect();
 
@@ -59,8 +60,10 @@ class StockScreener
             $amplitudes = $quotes->pluck('amplitude')->map(fn ($v) => (float) $v)->toArray();
             $latest = $quotes->first();
 
-            // 基礎門檻：成交量 > 500 張 & 股價 > 10
-            if ($volumes[0] / 1000 < 500 || $closes[0] < 10) continue;
+            // 基礎門檻
+            $minVolume = $screenConfig['min_volume'] ?? 500;
+            $minPrice = $screenConfig['min_price'] ?? 10;
+            if ($volumes[0] / 1000 < $minVolume || $closes[0] < $minPrice) continue;
 
             // 計算技術指標
             $ma5 = TechnicalIndicator::sma($closes, 5);
@@ -313,7 +316,8 @@ class StockScreener
             }
 
             // 最低門檻
-            if ($score < 30 || empty($reasons)) continue;
+            $minScore = $screenConfig['min_score'] ?? 30;
+            if ($score < $minScore || empty($reasons)) continue;
 
             // 當日漲跌停價（台股 ±10%）
             $prevClose = $closes[0];
@@ -345,8 +349,9 @@ class StockScreener
             $lossSpace = $suggestedBuy - $stopLoss;
             $riskReward = $lossSpace > 0 ? round($profitSpace / $lossSpace, 2) : 0;
 
-            // 風報比 < 1.5 不列入
-            if ($riskReward < 1.5) continue;
+            // 風報比門檻
+            $minRR = $screenConfig['min_risk_reward'] ?? 1.5;
+            if ($riskReward < $minRR) continue;
 
             $candidates->push([
                 'stock_id' => $stock->id,
@@ -363,8 +368,9 @@ class StockScreener
             ]);
         }
 
-        // 依分數排序，取前 20 名
-        $candidates = $candidates->sortByDesc('score')->take(20);
+        // 依分數排序，取前 N 名
+        $maxCandidates = $screenConfig['max_candidates'] ?? 20;
+        $candidates = $candidates->sortByDesc('score')->take($maxCandidates);
 
         // 寫入資料庫
         foreach ($candidates as $data) {
