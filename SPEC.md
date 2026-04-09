@@ -369,30 +369,59 @@ expected_value = avg(所有 buy_reachable 為 true 的 profit)
 
 回傳 `daily` 陣列，每日包含 `buy_reach_rate`、`target_reach_rate`、`dual_reach_rate`，供前端繪製趨勢圖。
 
-### 5.3 AI 公式優化（`stock:backtest`）
+### 5.3 選股品質指標
 
-定義於 `BacktestOptimizer`，可透過指令或 API 觸發。
+定義於 `BacktestService::calcScreeningMetrics()`，隨回測指標一同計算，供 AI 優化選股邏輯使用。
+
+| 指標                     | 欄位                      | 說明                                                    |
+|-------------------------|--------------------------|--------------------------------------------------------|
+| 平均評分                 | `screening.avg_score`     | 所有候選標的的平均 `score`                                |
+| 每日候選數               | `screening.candidates_per_day` | 候選總數 / 交易天數                                  |
+| 策略分布                 | `screening.strategy_distribution` | 各策略（bounce/breakout）的候選數量               |
+| 選股理由觸發頻率         | `screening.reason_frequency` | 各 `reasons` 出現的百分比（了解哪些評分因子活躍）      |
+| 依結果分組平均分數       | `screening.avg_score_by_outcome` | win（雙達）/ loss（觸停損）/ miss（未買到）的平均分數 |
+
+#### 選股品質解讀
+
+- **win 和 loss 平均分數接近**：評分系統區辨力不足，無法有效區分好壞標的，需調整權重分布
+- **miss 平均分數高**：高分股買不到，代表價格公式偏保守需放寬
+- **某理由觸發率極高**：該因子普遍性太強，對篩選無實質貢獻，考慮降低權重或收緊門檻
+- **某理由觸發率極低**：門檻可能太嚴，可考慮放寬讓更多股票受益
+
+### 5.4 AI 優化（`stock:backtest`）
+
+定義於 `BacktestOptimizer`，可透過指令或 API 觸發。同時優化**價格公式**和**選股邏輯**。
 
 ```bash
-# 僅查看回測指標
-php artisan stock:backtest --from=2026-03-01 --to=2026-04-08
+# 僅查看回測指標（含選股品質）
+php artisan stock:backtest --from=2026-03-01 --to=2026-04-09
 
 # 執行 AI 優化分析
-php artisan stock:backtest --from=2026-03-01 --to=2026-04-08 --optimize
+php artisan stock:backtest --from=2026-03-01 --to=2026-04-09 --optimize
 
 # 分析並自動套用建議
-php artisan stock:backtest --from=2026-03-01 --to=2026-04-08 --optimize --apply
+php artisan stock:backtest --from=2026-03-01 --to=2026-04-09 --optimize --apply
 ```
 
 **優化流程：**
 
-1. 計算指定期間的回測指標
-2. 讀取目前所有 `FormulaSetting` 參數
-3. 呼叫 Claude API 分析數據偏差，建議參數調整（無 API key 時降級為規則式分析）
+1. 計算指定期間的回測指標（含選股品質指標）
+2. 讀取目前所有 `FormulaSetting` 參數（含 `scoring`、`strategy`）
+3. 呼叫 Claude API 同時分析價格偏差與選股品質，建議參數調整（無 API key 時降級為規則式分析）
 4. 將分析結果存入 `backtest_rounds` 表
 5. 若指定 `--apply`，自動套用建議到 `formula_settings`
 
-**規則式降級邏輯：**
+**AI 可調整的參數範圍：**
+
+| 類型            | 說明                                           | 範例參數                                              |
+|----------------|-----------------------------------------------|------------------------------------------------------|
+| `suggested_buy` | 買入價公式                                     | `fallback_pct`, `sources.atr.multiplier`              |
+| `target_price`  | 目標價公式                                     | `fallback_pct`, `filter_upper_pct`                    |
+| `stop_loss`     | 停損價公式                                     | `fallback_pct`, `sources.atr.multiplier`              |
+| `scoring`       | 評分因子權重與閾值                              | `volume_surge.score`, `rsi_moderate.min`, `high_volatility.min_amplitude` |
+| `strategy`      | 策略分類參數                                    | `bounce.score`, `bounce.washout_drop_pct`, `breakout.near_breakout_pct` |
+
+**規則式降級邏輯（價格公式）：**
 
 | 條件                              | 調整方向                                 |
 |----------------------------------|----------------------------------------|
@@ -402,7 +431,17 @@ php artisan stock:backtest --from=2026-03-01 --to=2026-04-08 --optimize --apply
 | 目標可達率 > 75% 且間距 > 2%      | 提高 `target_price.fallback_pct`        |
 | 停損觸及率 > 50%                  | 提高 `stop_loss.fallback_pct`（收緊）    |
 
-**排程：** 每週一 07:00 自動執行過去 30 天回測分析（`stock:backtest --optimize`）。
+**規則式降級邏輯（選股）：**
+
+| 條件                                    | 調整方向                                             |
+|-----------------------------------------|----------------------------------------------------|
+| win/loss 平均分數差距 < 5 分             | 提高 `volume_surge.score` 和 `ma_bullish.score` 增加區辨力 |
+| 跌深反彈策略期望值 < -1% 且明顯劣於突破  | 降低 `strategy.bounce.score`                         |
+| 突破追多策略期望值 < -1% 且明顯劣於反彈  | 降低 `strategy.breakout.score`                       |
+| 每日候選數 < 5                           | 放寬 `high_volatility.min_amplitude`                 |
+| 每日候選數 > 15                          | 收緊 `volume_surge.ratio`                            |
+
+**排程：** 每週一 07:00 自動執行過去 30 天回測分析（`stock:backtest --optimize --apply`）。
 
 ---
 
@@ -479,4 +518,4 @@ php artisan stock:backtest --from=2026-03-01 --to=2026-04-08 --optimize --apply
 
 ---
 
-*最後更新：2026-04-08*
+*最後更新：2026-04-09*

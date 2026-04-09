@@ -30,6 +30,43 @@ class RunBacktest extends Command
 
         $this->displayMetrics($metrics);
 
+        // 顯示選股品質指標
+        if (!empty($metrics['screening'])) {
+            $screening = $metrics['screening'];
+            $this->newLine();
+            $this->info('▎ 選股品質');
+
+            $screeningRows = [
+                ['平均評分', $screening['avg_score']],
+                ['每日候選數', $screening['candidates_per_day']],
+            ];
+
+            if (!empty($screening['strategy_distribution'])) {
+                foreach ($screening['strategy_distribution'] as $type => $count) {
+                    $label = $type === 'bounce' ? '跌深反彈' : ($type === 'breakout' ? '突破追多' : $type);
+                    $screeningRows[] = ["策略分布 - {$label}", $count . ' 檔'];
+                }
+            }
+
+            $outcome = $screening['avg_score_by_outcome'] ?? [];
+            if (!empty($outcome)) {
+                $screeningRows[] = ['獲利組平均分數', $outcome['win'] ?? 0];
+                $screeningRows[] = ['虧損組平均分數', $outcome['loss'] ?? 0];
+                $screeningRows[] = ['未買到組平均分數', $outcome['miss'] ?? 0];
+            }
+
+            $this->table(['指標', '數值'], $screeningRows);
+
+            if (!empty($screening['reason_frequency'])) {
+                $this->info('  選股理由觸發頻率（前10）：');
+                $i = 0;
+                foreach ($screening['reason_frequency'] as $reason => $pct) {
+                    if (++$i > 10) break;
+                    $this->line("    {$reason}: {$pct}%");
+                }
+            }
+        }
+
         // 顯示策略分類指標
         if (!empty($metrics['by_strategy'])) {
             foreach ($metrics['by_strategy'] as $type => $stratMetrics) {

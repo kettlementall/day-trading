@@ -87,7 +87,7 @@ class BacktestOptimizer
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
-                    'max_tokens' => 2000,
+                    'max_tokens' => 3000,
                     'messages' => [
                         ['role' => 'user', 'content' => $prompt],
                     ],
@@ -119,12 +119,13 @@ class BacktestOptimizer
             'avg_risk_reward' => $metrics['avg_risk_reward'],
             'evaluated' => $metrics['evaluated'],
             'by_strategy' => $metrics['by_strategy'] ?? [],
+            'screening' => $metrics['screening'] ?? [],
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 
         $settingsJson = json_encode($currentSettings, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 
         return <<<PROMPT
-你是台股當沖交易系統的公式優化專家。以下是過去一段時間的回測統計數據和目前的公式參數設定。
+你是台股當沖交易系統的優化專家，負責同時優化「價格公式」和「選股邏輯」。以下是過去一段時間的回測統計數據和目前的參數設定。
 
 ## 回測指標
 {$metricsJson}
@@ -139,35 +140,82 @@ class BacktestOptimizer
 - avg_target_gap: 平均目標間距 %（正值=最高價超過目標價，越大越容易達標）
 - avg_risk_reward: 平均風報比
 
-## 目前公式參數
+### 選股品質指標說明
+- screening.avg_score: 候選股平均評分
+- screening.candidates_per_day: 每日平均候選數
+- screening.strategy_distribution: 各策略的候選數量（bounce=跌深反彈, breakout=突破追多）
+- screening.reason_frequency: 各選股理由的觸發頻率 %（了解哪些評分因子在運作）
+- screening.avg_score_by_outcome: 依結果分組的平均分數（win=雙達, loss=觸停損, miss=未買到）
+  - 若 win 和 loss 的平均分數接近，代表評分系統無法區分好壞標的
+  - 若 miss 平均分數高，代表高分股但買不到，價格公式需調整
+
+## 目前參數設定
 {$settingsJson}
 
 ### 參數說明
+
+#### 價格公式參數
 - suggested_buy: 建議買入價計算。sources 控制取哪些支撐價，filter_lower_pct 是下限過濾，fallback_pct 是預設倍率
 - target_price: 目標價計算。sources 控制取哪些目標價，filter_upper_pct 是上限過濾，fallback_pct 是預設倍率
 - stop_loss: 停損價計算。sources.atr.multiplier 控制 ATR 倍率，fallback_pct 是預設倍率
-- strategy: 策略分類的參數設定
+
+#### 選股邏輯參數
+- scoring: 各評分因子的設定。每個因子有 enabled（是否啟用）、score（加分值）及各自的閾值參數
+  - volume_surge: 量能放大（ratio=倍數門檻）
+  - ma_bullish: 均線多頭排列
+  - above_ma5: 站上5MA
+  - kd_golden_cross: KD黃金交叉
+  - rsi_moderate: RSI適中（min/max 定義合理範圍）
+  - foreign_buy: 外資買超
+  - consecutive_buy: 法人連續買超（min_days=最少天數）
+  - trust_buy: 投信買超
+  - margin_decrease: 融資減少
+  - amplitude_moderate: 振幅適中（min/max 定義範圍）
+  - break_prev_high: 突破前高
+  - bollinger_position: 布林通道位置
+  - high_volatility: 高波動當沖適性（min_amplitude=最低振幅, lookback_days=回看天數）
+  - strong_trend: 近期強勢趨勢（min_gain_pct=最低漲幅%, lookback_days=回看天數）
+  - foreign_big_buy: 外資大買（volume_ratio=佔成交量比例門檻）
+  - dealer_big_buy: 自營大買（volume_ratio=佔成交量比例門檻）
+  - high_volume: 萬張量能（min_lots=最低張數）
+- strategy: 策略分類參數
+  - bounce: 跌深反彈（washout_drop_pct=急跌幅度, two_day_drop_pct=兩日累跌, washout_lookback_days=回看天數, bounce_from_low_pct=反彈幅度, score=策略加分）
+  - breakout: 突破追多（prev_high_days=前高回看天數, near_breakout_pct=接近突破比例, score=策略加分）
 - news_sentiment: 消息面修正的閾值和係數
 
 ## 任務
 
-分析回測數據，找出公式參數的改善空間，目標是：
+同時分析「價格公式」和「選股邏輯」，找出改善空間。
+
+### 優化目標
 1. 提高雙達率（dual_reach_rate）
 2. 提高期望值（expected_value）
 3. 維持合理的風報比（>= 1.5）
+4. 提升選股品質：讓高分候選股對應更好的交易結果
+
+### 選股優化方向
+- 若某策略（bounce/breakout）表現明顯較差，考慮降低該策略的 score 或調整其門檻
+- 若 reason_frequency 中某因子觸發率極高但結果不佳，考慮降低其 score 或收緊門檻
+- 若 reason_frequency 中某因子觸發率極低，考慮放寬門檻讓更多股票受益
+- 若 avg_score_by_outcome 中 win 和 loss 分數接近，代表評分區辨力不足，需調整權重分布
+- 若候選數太少（candidates_per_day < 5），可放寬某些門檻；太多（> 15）可收緊
 
 請用 JSON 回覆（不要加其他文字），格式如下：
 {
-  "analysis": "問題分析摘要（中文）",
+  "analysis": "問題分析摘要（中文，包含價格和選股兩方面的分析）",
   "adjustments": {
     "suggested_buy": { "要修改的參數key": 新值 },
     "target_price": { "要修改的參數key": 新值 },
-    "stop_loss": { "要修改的參數key": 新值 }
+    "stop_loss": { "要修改的參數key": 新值 },
+    "scoring": { "因子名.參數key": 新值 },
+    "strategy": { "策略名.參數key": 新值 }
   },
   "reasoning": {
     "suggested_buy": "調整原因",
     "target_price": "調整原因",
-    "stop_loss": "調整原因"
+    "stop_loss": "調整原因",
+    "scoring": "選股評分調整原因",
+    "strategy": "策略參數調整原因"
   }
 }
 
@@ -175,7 +223,8 @@ class BacktestOptimizer
 - 只調整有明確數據支持的參數，不要亂改
 - 每次調整幅度不要太大（每個參數最多調整 10-20%）
 - 如果某類參數已經表現良好，可以不調整（不需要在 adjustments 中列出）
-- adjustments 的 key 使用點分隔路徑（如 "sources.atr.multiplier"）
+- adjustments 的 key 使用點分隔路徑（如 "sources.atr.multiplier", "volume_surge.score", "bounce.washout_drop_pct"）
+- scoring 和 strategy 的調整也使用點分隔路徑
 PROMPT;
     }
 
@@ -209,6 +258,8 @@ PROMPT;
         $stopRate = $metrics['hit_stop_loss_rate'];
         $avgBuyGap = $metrics['avg_buy_gap'];
         $avgTargetGap = $metrics['avg_target_gap'];
+
+        // ===== 價格公式調整 =====
 
         // 買入可達率偏低：提高 fallback_pct 讓建議買入價更接近收盤價
         if ($buyRate < 50) {
@@ -249,6 +300,75 @@ PROMPT;
             $adjustments['stop_loss'] = ['fallback_pct' => $newFallback];
             $reasoning['stop_loss'] = "停損觸及率 {$stopRate}%，收緊停損幅度";
             $analysis[] = "停損觸及率偏高（{$stopRate}%）";
+        }
+
+        // ===== 選股邏輯調整 =====
+
+        $screening = $metrics['screening'] ?? [];
+        $scoringChanges = [];
+        $scoringReasons = [];
+        $strategyChanges = [];
+        $strategyReasons = [];
+
+        // 評分區辨力不足：win 和 loss 分數太接近
+        $scoreByOutcome = $screening['avg_score_by_outcome'] ?? [];
+        $winScore = $scoreByOutcome['win'] ?? 0;
+        $lossScore = $scoreByOutcome['loss'] ?? 0;
+        if ($winScore > 0 && $lossScore > 0 && abs($winScore - $lossScore) < 5) {
+            // 區辨力不足時，提高與趨勢相關的因子權重、降低普遍性因子
+            $currentVolSurge = $currentSettings['scoring']['volume_surge']['score'] ?? 15;
+            $currentMaBullish = $currentSettings['scoring']['ma_bullish']['score'] ?? 15;
+            $scoringChanges['volume_surge.score'] = min(20, $currentVolSurge + 2);
+            $scoringChanges['ma_bullish.score'] = min(20, $currentMaBullish + 2);
+            $scoringReasons[] = "win/loss 平均分數差距僅 " . round(abs($winScore - $lossScore), 1) . " 分，提高關鍵因子權重增加區辨力";
+            $analysis[] = "選股評分區辨力不足";
+        }
+
+        // 策略表現差異：某策略明顯劣於另一策略
+        $byStrategy = $metrics['by_strategy'] ?? [];
+        $bounceEV = $byStrategy['bounce']['expected_value'] ?? null;
+        $breakoutEV = $byStrategy['breakout']['expected_value'] ?? null;
+        if ($bounceEV !== null && $breakoutEV !== null) {
+            if ($bounceEV < -1 && $breakoutEV > $bounceEV + 2) {
+                $currentScore = $currentSettings['strategy']['bounce']['score'] ?? 15;
+                $newScore = max(5, $currentScore - 3);
+                $strategyChanges['bounce.score'] = $newScore;
+                $strategyReasons[] = "跌深反彈策略期望值 {$bounceEV}% 明顯偏低，降低策略加分從 {$currentScore} 到 {$newScore}";
+                $analysis[] = "跌深反彈策略表現差";
+            } elseif ($breakoutEV < -1 && $bounceEV > $breakoutEV + 2) {
+                $currentScore = $currentSettings['strategy']['breakout']['score'] ?? 15;
+                $newScore = max(5, $currentScore - 3);
+                $strategyChanges['breakout.score'] = $newScore;
+                $strategyReasons[] = "突破追多策略期望值 {$breakoutEV}% 明顯偏低，降低策略加分從 {$currentScore} 到 {$newScore}";
+                $analysis[] = "突破追多策略表現差";
+            }
+        }
+
+        // 候選數太少或太多
+        $candidatesPerDay = $screening['candidates_per_day'] ?? 0;
+        if ($candidatesPerDay > 0 && $candidatesPerDay < 5) {
+            // 放寬高波動門檻
+            $currentMinAmp = $currentSettings['scoring']['high_volatility']['min_amplitude'] ?? 5;
+            $newMinAmp = max(3, $currentMinAmp - 0.5);
+            $scoringChanges['high_volatility.min_amplitude'] = $newMinAmp;
+            $scoringReasons[] = "每日候選數僅 {$candidatesPerDay}，放寬高波動門檻從 {$currentMinAmp}% 到 {$newMinAmp}%";
+            $analysis[] = "每日候選數偏少（{$candidatesPerDay}）";
+        } elseif ($candidatesPerDay > 15) {
+            // 收緊量能門檻
+            $currentRatio = $currentSettings['scoring']['volume_surge']['ratio'] ?? 1.5;
+            $newRatio = min(2.5, $currentRatio + 0.2);
+            $scoringChanges['volume_surge.ratio'] = $newRatio;
+            $scoringReasons[] = "每日候選數 {$candidatesPerDay} 過多，收緊量能放大門檻從 {$currentRatio}x 到 {$newRatio}x";
+            $analysis[] = "每日候選數過多（{$candidatesPerDay}）";
+        }
+
+        if (!empty($scoringChanges)) {
+            $adjustments['scoring'] = $scoringChanges;
+            $reasoning['scoring'] = implode('；', $scoringReasons);
+        }
+        if (!empty($strategyChanges)) {
+            $adjustments['strategy'] = $strategyChanges;
+            $reasoning['strategy'] = implode('；', $strategyReasons);
         }
 
         return [

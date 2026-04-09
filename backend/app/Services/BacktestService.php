@@ -29,6 +29,9 @@ class BacktestService
         $metrics = $this->calcMetricsFromCollection($candidates, $total);
         $metrics['period'] = ['from' => $from, 'to' => $to];
 
+        // 選股品質指標
+        $metrics['screening'] = $this->calcScreeningMetrics($candidates);
+
         // 按策略分類（僅在非篩選模式下）
         if (!$strategyType) {
             $metrics['by_strategy'] = [];
@@ -109,6 +112,66 @@ class BacktestService
             'avg_buy_gap' => round($candidates->avg(fn ($c) => (float) $c->result->buy_gap_percent), 2),
             'avg_target_gap' => round($candidates->avg(fn ($c) => (float) $c->result->target_gap_percent), 2),
             'avg_risk_reward' => round($candidates->avg(fn ($c) => (float) $c->risk_reward_ratio), 2),
+        ];
+    }
+
+    /**
+     * 計算選股品質指標（供 AI 優化選股邏輯使用）
+     */
+    private function calcScreeningMetrics(Collection $candidates): array
+    {
+        if ($candidates->isEmpty()) {
+            return [
+                'avg_score' => 0,
+                'candidates_per_day' => 0,
+                'strategy_distribution' => [],
+                'reason_frequency' => [],
+                'avg_score_by_outcome' => ['win' => 0, 'loss' => 0, 'miss' => 0],
+            ];
+        }
+
+        // 平均分數
+        $avgScore = round($candidates->avg('score'), 1);
+
+        // 每日平均候選數
+        $tradeDays = $candidates->pluck('trade_date')->unique()->count();
+        $candidatesPerDay = $tradeDays > 0 ? round($candidates->count() / $tradeDays, 1) : 0;
+
+        // 策略分布
+        $strategyDist = $candidates->groupBy('strategy_type')->map->count()->toArray();
+
+        // 選股理由出現頻率（了解哪些評分因子在運作）
+        $reasonCounts = [];
+        foreach ($candidates as $c) {
+            $reasons = is_array($c->reasons) ? $c->reasons : [];
+            foreach ($reasons as $reason) {
+                $reasonCounts[$reason] = ($reasonCounts[$reason] ?? 0) + 1;
+            }
+        }
+        arsort($reasonCounts);
+        // 轉為百分比
+        $total = $candidates->count();
+        $reasonFreq = [];
+        foreach ($reasonCounts as $reason => $count) {
+            $reasonFreq[$reason] = round($count / $total * 100, 1);
+        }
+
+        // 依結果分組的平均分數（判斷高分是否對應好結果）
+        $wins = $candidates->filter(fn ($c) => $c->result->buy_reachable && $c->result->target_reachable);
+        $losses = $candidates->filter(fn ($c) => $c->result->buy_reachable && $c->result->hit_stop_loss);
+        $misses = $candidates->filter(fn ($c) => !$c->result->buy_reachable);
+        $avgScoreByOutcome = [
+            'win' => $wins->isNotEmpty() ? round($wins->avg('score'), 1) : 0,
+            'loss' => $losses->isNotEmpty() ? round($losses->avg('score'), 1) : 0,
+            'miss' => $misses->isNotEmpty() ? round($misses->avg('score'), 1) : 0,
+        ];
+
+        return [
+            'avg_score' => $avgScore,
+            'candidates_per_day' => $candidatesPerDay,
+            'strategy_distribution' => $strategyDist,
+            'reason_frequency' => $reasonFreq,
+            'avg_score_by_outcome' => $avgScoreByOutcome,
         ];
     }
 
