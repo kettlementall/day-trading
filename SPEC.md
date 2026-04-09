@@ -27,7 +27,7 @@
 | 18:00 | `news:fetch`                | 盤後新聞抓取                   |
 | 18:15 | `news:compute-indices`      | 計算新聞指數                   |
 | 22:00 | `stock:health-check`        | 健康檢查（確認當日資料完整）   |
-| 週一 07:00 | `stock:backtest --optimize --apply` | 自動回測分析並套用建議（過去30天）  |
+| 週一 07:00 | `stock:backtest --validated` | 帶驗證的自動回測優化（過去60天，最多10次嘗試）  |
 
 ### 資料依賴流程
 
@@ -400,11 +400,15 @@ expected_value = avg(所有 buy_reachable 為 true 的 profit)
 # 僅查看回測指標（含選股品質）
 php artisan stock:backtest --from=2026-03-01 --to=2026-04-09
 
-# 執行 AI 優化分析
+# 執行 AI 優化分析（單次，不自動套用）
 php artisan stock:backtest --from=2026-03-01 --to=2026-04-09 --optimize
 
-# 分析並自動套用建議
+# 分析並自動套用建議（單次）
 php artisan stock:backtest --from=2026-03-01 --to=2026-04-09 --optimize --apply
+
+# 帶驗證的優化循環（建議 → 重跑 → 比較 → 回滾重試，最多10次）
+php artisan stock:backtest --validated
+php artisan stock:backtest --validated --max-attempts=5
 ```
 
 **核心原則：一次只調一類參數。** 同時調整價格 + 評分 + 門檻會導致結果不可控（改評分會改變選哪些股票，使價格指標失去參考意義）。AI 每次從以下三類中選擇問題最嚴重的一類調整：
@@ -413,7 +417,22 @@ php artisan stock:backtest --from=2026-03-01 --to=2026-04-09 --optimize --apply
 2. **選股評分**（scoring / strategy）— 評分區辨力不足時
 3. **篩選門檻**（screen_thresholds）— 候選數太多或太少時
 
-**優化流程：**
+#### 帶驗證的優化循環（`--validated`）
+
+排程預設使用此模式，確保每次調整都經過驗證，不會盲目套用：
+
+1. 保存目前參數快照
+2. 用目前參數重跑過去 60 天的選股 + 結果回填，取得 **baseline 指標**
+3. 迴圈（最多 10 次）：
+   a. AI 分析當前指標，建議一類參數調整
+   b. 套用建議
+   c. 重跑同期間選股 + 結果回填，取得**新指標**
+   d. 加權比較（期望值 ×3 + 雙達率 ×0.5 + 買入可達率 ×0.1 - 停損率 ×0.1）
+   e. 若改善 → 採用，繼續嘗試下一輪
+   f. 若未改善 → 回滾參數，重新嘗試
+4. 最終使用歷次嘗試中的最佳參數
+
+#### 單次優化流程（`--optimize`）
 
 1. 計算指定期間的回測指標（含選股品質指標）
 2. 讀取目前所有 `FormulaSetting` 參數（含 `scoring`、`strategy`）
@@ -451,7 +470,7 @@ php artisan stock:backtest --from=2026-03-01 --to=2026-04-09 --optimize --apply
 | 每日候選數 < 5                           | 放寬 `high_volatility.min_amplitude`                 |
 | 每日候選數 > 15                          | 收緊 `volume_surge.ratio`                            |
 
-**排程：** 每週一 07:00 自動執行過去 30 天回測分析（`stock:backtest --optimize --apply`）。
+**排程：** 每週一 07:00 自動執行帶驗證的優化循環（`stock:backtest --validated`，過去 60 天，最多 10 次嘗試）。
 
 ---
 

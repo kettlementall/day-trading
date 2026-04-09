@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getCandidates, getCandidateDates, getCandidateStats, getBacktestRounds, triggerBacktestOptimize, applyBacktestRound } from '../api'
+import { getCandidates, getCandidateDates, getCandidateStats, getBacktestRounds, triggerBacktestOptimize, applyBacktestRound, getOptimizeValidatedUrl } from '../api'
 import dayjs from 'dayjs'
 
 export const useCandidateStore = defineStore('candidates', () => {
@@ -54,6 +54,9 @@ export const useCandidateStore = defineStore('candidates', () => {
 
   const backtestRounds = ref([])
   const optimizing = ref(false)
+  const validating = ref(false)
+  const validationLogs = ref([])
+  const validationResult = ref(null)
 
   async function fetchStats(days = 30) {
     const { data } = await getCandidateStats(days)
@@ -83,11 +86,42 @@ export const useCandidateStore = defineStore('candidates', () => {
     return data
   }
 
+  function optimizeValidated(from, to, maxAttempts = 10) {
+    validating.value = true
+    validationLogs.value = []
+    validationResult.value = null
+
+    return new Promise((resolve, reject) => {
+      const url = getOptimizeValidatedUrl(from, to, maxAttempts)
+      const eventSource = new EventSource(url)
+
+      eventSource.addEventListener('log', (e) => {
+        const { message } = JSON.parse(e.data)
+        validationLogs.value.push(message)
+      })
+
+      eventSource.addEventListener('done', (e) => {
+        validationResult.value = JSON.parse(e.data)
+        validating.value = false
+        eventSource.close()
+        // 重新載入 rounds
+        fetchBacktestRounds()
+        resolve(validationResult.value)
+      })
+
+      eventSource.onerror = () => {
+        validating.value = false
+        eventSource.close()
+        reject(new Error('SSE connection failed'))
+      }
+    })
+  }
+
   return {
     candidates, currentDate, dates, stats, loading,
     morningFilter, filteredCandidates, morningSummary, lastUpdatedAt,
-    backtestRounds, optimizing,
+    backtestRounds, optimizing, validating, validationLogs, validationResult,
     fetchCandidates, fetchDates, fetchStats,
-    fetchBacktestRounds, optimize, applyRound,
+    fetchBacktestRounds, optimize, applyRound, optimizeValidated,
   }
 })

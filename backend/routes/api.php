@@ -40,6 +40,7 @@ Route::get('/news/fetch-status', [NewsController::class, 'fetchStatus']);
 // 回測系統
 Route::get('/backtest/rounds', [BacktestController::class, 'rounds']);
 Route::post('/backtest/optimize', [BacktestController::class, 'optimize']);
+Route::get('/backtest/optimize-validated', [BacktestController::class, 'optimizeValidated']);
 Route::post('/backtest/rounds/{round}/apply', [BacktestController::class, 'apply']);
 
 // 系統規格

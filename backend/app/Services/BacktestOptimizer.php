@@ -70,6 +70,163 @@ class BacktestOptimizer
     }
 
     /**
+     * 帶驗證的優化循環：AI 建議 → 套用 → 重跑 → 比較 → 若退步則回滾重試，最多 maxAttempts 次
+     */
+    public function optimizeWithValidation(string $from, string $to, int $maxAttempts = 10, ?\Closure $logger = null): array
+    {
+        $log = $logger ?? function (string $msg) { Log::info($msg); };
+        $backtestService = new BacktestService();
+
+        // 1. 保存原始參數
+        $originalSettings = $this->snapshotSettings();
+
+        // 2. 用目前參數重跑一次取得 baseline
+        $log("▎ 重跑 baseline（{$from} ~ {$to}）...");
+        $baselineMetrics = $backtestService->rescreen($from, $to);
+        $log($this->formatMetricsSummary('Baseline', $baselineMetrics));
+
+        $bestMetrics = $baselineMetrics;
+        $bestSettings = $originalSettings;
+        $rounds = [];
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            $log("\n▎ 第 {$attempt}/{$maxAttempts} 次嘗試...");
+
+            // 3. 回滾到最佳參數（確保 AI 基於正確的參數分析）
+            $this->restoreSettings($bestSettings);
+
+            // 4. 重跑以取得當前指標（供 AI 分析用）
+            $currentMetrics = $backtestService->rescreen($from, $to);
+
+            // 5. AI 分析並建議
+            $round = $this->analyze($from, $to);
+            $rounds[] = $round;
+            $suggestions = $round->suggestions;
+            $focus = $suggestions['focus'] ?? 'unknown';
+            $log("  AI 建議（{$focus}）：{$suggestions['analysis']}");
+
+            if (empty($suggestions['adjustments'])) {
+                $log("  AI 無建議調整，結束。");
+                break;
+            }
+
+            // 6. 套用建議
+            $this->applyRound($round);
+            $log("  已套用建議，重跑驗證...");
+
+            // 7. 重跑取得新指標
+            $newMetrics = $backtestService->rescreen($from, $to);
+            $log($this->formatMetricsSummary('新指標', $newMetrics));
+
+            // 8. 更新 round 的 metrics_after
+            $round->update(['metrics_after' => $newMetrics]);
+
+            // 9. 比較是否改善
+            if ($this->isImproved($bestMetrics, $newMetrics)) {
+                $log("  ✓ 指標改善！採用此調整。");
+                $bestMetrics = $newMetrics;
+                $bestSettings = $this->snapshotSettings();
+            } else {
+                $log("  ✗ 指標未改善，回滾。");
+                $round->update(['applied' => false, 'applied_at' => null]);
+            }
+        }
+
+        // 10. 確保最終使用最佳參數
+        $this->restoreSettings($bestSettings);
+        $backtestService->rescreen($from, $to);
+
+        $improved = $this->isImproved($baselineMetrics, $bestMetrics);
+        $log("\n▎ 最終結果：" . ($improved ? '已改善' : '維持原樣'));
+        $log($this->formatMetricsComparison($baselineMetrics, $bestMetrics));
+
+        return [
+            'baseline' => $baselineMetrics,
+            'final' => $bestMetrics,
+            'improved' => $improved,
+            'attempts' => count($rounds),
+            'rounds' => array_map(fn ($r) => $r->id, $rounds),
+        ];
+    }
+
+    /**
+     * 判斷新指標是否比基準改善（加權評分）
+     */
+    private function isImproved(array $baseline, array $new): bool
+    {
+        // 核心指標：期望值、雙達率、買入可達率
+        $baseScore = $this->calcOverallScore($baseline);
+        $newScore = $this->calcOverallScore($new);
+
+        return $newScore > $baseScore;
+    }
+
+    private function calcOverallScore(array $metrics): float
+    {
+        // 期望值權重最高（獲利能力），雙達率次之（策略可行性），買入可達率再次
+        return ($metrics['expected_value'] ?? 0) * 3
+             + ($metrics['dual_reach_rate'] ?? 0) * 0.5
+             + ($metrics['buy_reach_rate'] ?? 0) * 0.1
+             - ($metrics['hit_stop_loss_rate'] ?? 0) * 0.1;
+    }
+
+    private function snapshotSettings(): array
+    {
+        $snapshot = [];
+        foreach (['suggested_buy', 'target_price', 'stop_loss', 'strategy', 'scoring', 'news_sentiment', 'screen_thresholds'] as $type) {
+            $setting = FormulaSetting::where('type', $type)->first();
+            if ($setting) {
+                $snapshot[$type] = $setting->config;
+            }
+        }
+        return $snapshot;
+    }
+
+    private function restoreSettings(array $snapshot): void
+    {
+        foreach ($snapshot as $type => $config) {
+            FormulaSetting::where('type', $type)->update(['config' => $config]);
+        }
+    }
+
+    private function formatMetricsSummary(string $label, array $m): string
+    {
+        return sprintf(
+            "  %s: 候選%d | 買入%.1f%% | 目標%.1f%% | 雙達%.1f%% | EV%.2f%% | 停損%.1f%% | RR%.2f",
+            $label,
+            $m['total_candidates'] ?? 0,
+            $m['buy_reach_rate'] ?? 0,
+            $m['target_reach_rate'] ?? 0,
+            $m['dual_reach_rate'] ?? 0,
+            $m['expected_value'] ?? 0,
+            $m['hit_stop_loss_rate'] ?? 0,
+            $m['avg_risk_reward'] ?? 0
+        );
+    }
+
+    private function formatMetricsComparison(array $before, array $after): string
+    {
+        $keys = [
+            'buy_reach_rate' => '買入可達率',
+            'target_reach_rate' => '目標可達率',
+            'dual_reach_rate' => '雙達率',
+            'expected_value' => '期望值',
+            'hit_stop_loss_rate' => '停損率',
+            'avg_risk_reward' => '風報比',
+        ];
+
+        $lines = [];
+        foreach ($keys as $key => $label) {
+            $b = $before[$key] ?? 0;
+            $a = $after[$key] ?? 0;
+            $arrow = $a > $b ? '↑' : ($a < $b ? '↓' : '=');
+            $suffix = in_array($key, ['avg_risk_reward']) ? '' : '%';
+            $lines[] = sprintf("  %s: %.2f%s → %.2f%s %s", $label, $b, $suffix, $a, $suffix, $arrow);
+        }
+        return implode("\n", $lines);
+    }
+
+    /**
      * 驗證並修正價格參數，防止 RR 崩潰
      */
     private function sanitizePriceAdjustments(array $adjustments): array

@@ -4,8 +4,11 @@ namespace App\Services;
 
 use App\Models\Candidate;
 use App\Models\CandidateResult;
+use App\Models\DailyQuote;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class BacktestService
 {
@@ -173,6 +176,36 @@ class BacktestService
             'reason_frequency' => $reasonFreq,
             'avg_score_by_outcome' => $avgScoreByOutcome,
         ];
+    }
+
+    /**
+     * 重新篩選：清除候選資料，對指定期間每個交易日重跑選股 + 結果回填，回傳新指標
+     */
+    public function rescreen(string $from, string $to): array
+    {
+        // 清除期間內的候選資料
+        $candidateIds = Candidate::whereBetween('trade_date', [$from, $to])->pluck('id');
+        if ($candidateIds->isNotEmpty()) {
+            CandidateResult::whereIn('candidate_id', $candidateIds)->delete();
+            Candidate::whereIn('id', $candidateIds)->delete();
+        }
+
+        // 取得期間內的交易日
+        $tradingDays = DailyQuote::whereBetween('date', [$from, $to])
+            ->selectRaw('DATE(date) as d')
+            ->distinct()
+            ->orderBy('d')
+            ->pluck('d');
+
+        // 逐日重跑選股 + 結果回填
+        foreach ($tradingDays as $date) {
+            Artisan::call('stock:screen-candidates', ['date' => $date]);
+            Artisan::call('stock:update-results', ['date' => $date]);
+        }
+
+        Log::info("BacktestService::rescreen completed: {$from} ~ {$to}, {$tradingDays->count()} trading days");
+
+        return $this->computeMetrics($from, $to);
     }
 
     /**

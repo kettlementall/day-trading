@@ -78,6 +78,11 @@ export const triggerBacktestOptimize = (from, to) =>
 export const applyBacktestRound = (id) =>
   api.post(`/backtest/rounds/${id}/apply`)
 
+export const getOptimizeValidatedUrl = (from, to, maxAttempts = 10) => {
+  const base = api.defaults.baseURL || '/api'
+  return `${base}/backtest/optimize-validated?from=${from}&to=${to}&max_attempts=${maxAttempts}`
+}
+
 // 系統規格
 export const getSpec = () =>
   api.get('/spec')

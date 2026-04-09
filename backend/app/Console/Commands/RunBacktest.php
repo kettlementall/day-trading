@@ -9,20 +9,27 @@ use Illuminate\Console\Command;
 class RunBacktest extends Command
 {
     protected $signature = 'stock:backtest
-        {--from= : 分析起始日（預設30天前）}
+        {--from= : 分析起始日（預設60天前）}
         {--to= : 分析結束日（預設今天）}
-        {--optimize : 執行 AI 優化分析}
-        {--apply : 自動套用 AI 建議}';
+        {--optimize : 執行 AI 優化分析（單次）}
+        {--apply : 自動套用 AI 建議（搭配 --optimize）}
+        {--validated : 帶驗證的優化循環（AI 建議 → 重跑 → 比較 → 回滾重試，最多10次）}
+        {--max-attempts=10 : 最大嘗試次數（搭配 --validated）}';
 
     protected $description = '執行回測分析，檢視交易建議的實戰表現';
 
     public function handle(): int
     {
-        $from = $this->option('from') ?? now()->subDays(30)->format('Y-m-d');
+        $from = $this->option('from') ?? now()->subDays(60)->format('Y-m-d');
         $to = $this->option('to') ?? now()->format('Y-m-d');
 
         $this->info("回測期間：{$from} ~ {$to}");
         $this->newLine();
+
+        // 帶驗證的優化循環
+        if ($this->option('validated')) {
+            return $this->runValidatedOptimization($from, $to);
+        }
 
         // 顯示回測指標
         $service = new BacktestService();
@@ -77,7 +84,7 @@ class RunBacktest extends Command
             }
         }
 
-        // AI 優化
+        // AI 優化（單次）
         if ($this->option('optimize')) {
             $this->newLine();
             $this->info('正在執行 AI 優化分析...');
@@ -117,6 +124,35 @@ class RunBacktest extends Command
 
             $this->line("  回測紀錄 ID：{$round->id}");
         }
+
+        return self::SUCCESS;
+    }
+
+    private function runValidatedOptimization(string $from, string $to): int
+    {
+        $maxAttempts = (int) $this->option('max-attempts');
+        $optimizer = new BacktestOptimizer();
+
+        $this->info("▎ 啟動帶驗證的優化循環（最多 {$maxAttempts} 次嘗試）");
+        $this->newLine();
+
+        $result = $optimizer->optimizeWithValidation(
+            $from,
+            $to,
+            $maxAttempts,
+            fn (string $msg) => $this->line($msg)
+        );
+
+        $this->newLine();
+        $this->info('═══════════════════════════════════');
+
+        if ($result['improved']) {
+            $this->info("✓ 優化成功（第 {$result['attempts']} 輪找到改善）");
+        } else {
+            $this->warn("✗ {$result['attempts']} 輪嘗試皆未改善，維持原參數");
+        }
+
+        $this->info('═══════════════════════════════════');
 
         return self::SUCCESS;
     }

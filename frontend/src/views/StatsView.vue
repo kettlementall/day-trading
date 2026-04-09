@@ -84,25 +84,60 @@
       <div class="stock-card" style="margin-top: 16px;">
         <div class="ai-header">
           <h3>AI 公式優化</h3>
-          <el-button type="primary" size="small" :loading="store.optimizing" @click="runOptimize">
-            執行分析
-          </el-button>
+          <div class="ai-buttons">
+            <el-button size="small" :loading="store.optimizing" @click="runOptimize">
+              單次分析
+            </el-button>
+            <el-button type="primary" size="small" :loading="store.validating" @click="runValidated">
+              自動優化
+            </el-button>
+          </div>
         </div>
 
+        <!-- 驗證優化進度 -->
+        <div v-if="store.validating || store.validationResult" class="validation-section">
+          <div v-if="store.validating" class="validation-status">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>優化循環執行中...</span>
+          </div>
+
+          <!-- 執行日誌 -->
+          <div v-if="store.validationLogs.length" class="validation-logs" ref="logBox">
+            <div v-for="(log, i) in store.validationLogs" :key="i" class="log-line">{{ log }}</div>
+          </div>
+
+          <!-- 最終結果 -->
+          <div v-if="store.validationResult" class="validation-result">
+            <div :class="['result-badge', store.validationResult.improved ? 'improved' : 'unchanged']">
+              {{ store.validationResult.improved ? '已改善' : '維持原樣' }}
+              <span class="attempt-count">（{{ store.validationResult.attempts }} 次嘗試）</span>
+            </div>
+            <table class="comparison-table">
+              <thead>
+                <tr><th>指標</th><th>優化前</th><th>優化後</th><th></th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in comparisonRows" :key="item.key">
+                  <td>{{ item.label }}</td>
+                  <td>{{ item.before }}</td>
+                  <td>{{ item.after }}</td>
+                  <td :class="item.cls">{{ item.arrow }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 歷史紀錄 -->
         <div v-if="store.backtestRounds.length" class="rounds-list">
+          <h4 style="margin: 12px 0 8px;">優化紀錄</h4>
           <div v-for="round in store.backtestRounds" :key="round.id" class="round-item">
             <div class="round-header">
               <span class="round-date">{{ round.analyzed_from }} ~ {{ round.analyzed_to }}</span>
               <span class="round-count">{{ round.sample_count }} 筆</span>
               <el-tag v-if="round.applied" type="success" size="small">已套用</el-tag>
-              <el-button
-                v-else
-                type="warning"
-                size="small"
-                @click="applyRound(round.id)"
-              >
-                套用建議
-              </el-button>
+              <el-tag v-else type="info" size="small">未套用</el-tag>
+              <el-tag v-if="round.suggestions?.focus" size="small">{{ focusLabel(round.suggestions.focus) }}</el-tag>
             </div>
             <div class="round-analysis">{{ round.suggestions?.analysis }}</div>
             <div v-if="round.suggestions?.adjustments" class="round-adjustments">
@@ -111,22 +146,35 @@
                 <span v-for="(val, key) in changes" :key="key" class="adj-item">{{ key }}: {{ val }}</span>
               </div>
             </div>
+            <!-- before/after 指標對比 -->
+            <div v-if="round.metrics_after" class="round-comparison">
+              <span class="cmp-item">
+                EV: {{ round.metrics_before?.expected_value }}%
+                → {{ round.metrics_after?.expected_value }}%
+                {{ round.metrics_after?.expected_value > round.metrics_before?.expected_value ? '↑' : '↓' }}
+              </span>
+              <span class="cmp-item">
+                雙達: {{ round.metrics_before?.dual_reach_rate }}%
+                → {{ round.metrics_after?.dual_reach_rate }}%
+              </span>
+            </div>
           </div>
         </div>
-        <el-empty v-else description="尚無優化紀錄" :image-size="60" />
+        <el-empty v-else-if="!store.validating && !store.validationResult" description="尚無優化紀錄" :image-size="60" />
       </div>
     </template>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useCandidateStore } from '../stores/candidates'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
+import { Loading } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
@@ -135,6 +183,7 @@ const store = useCandidateStore()
 const days = ref(30)
 const loading = ref(false)
 const stats = computed(() => store.stats)
+const logBox = ref(null)
 
 async function fetchData() {
   loading.value = true
@@ -154,11 +203,54 @@ async function runOptimize() {
   await store.optimize(from, to)
 }
 
-async function applyRound(id) {
-  await store.applyRound(id)
-  // 重新載入指標看套用後效果
-  await store.fetchStats(days.value)
+async function runValidated() {
+  const from = dayjs().subtract(60, 'day').format('YYYY-MM-DD')
+  const to = dayjs().format('YYYY-MM-DD')
+  try {
+    await store.optimizeValidated(from, to)
+    await store.fetchStats(days.value)
+  } catch (e) {
+    console.error('Validated optimization failed:', e)
+  }
 }
+
+function focusLabel(focus) {
+  const map = { price: '價格', scoring: '評分', thresholds: '門檻' }
+  return map[focus] || focus
+}
+
+const comparisonRows = computed(() => {
+  const r = store.validationResult
+  if (!r) return []
+  const keys = [
+    { key: 'buy_reach_rate', label: '買入可達率', suffix: '%', higherBetter: true },
+    { key: 'target_reach_rate', label: '目標可達率', suffix: '%', higherBetter: true },
+    { key: 'dual_reach_rate', label: '雙達率', suffix: '%', higherBetter: true },
+    { key: 'expected_value', label: '期望值', suffix: '%', higherBetter: true },
+    { key: 'hit_stop_loss_rate', label: '停損率', suffix: '%', higherBetter: false },
+    { key: 'avg_risk_reward', label: '風報比', suffix: '', higherBetter: true },
+  ]
+  return keys.map(({ key, label, suffix, higherBetter }) => {
+    const b = r.baseline?.[key] ?? 0
+    const a = r.final?.[key] ?? 0
+    const better = higherBetter ? a > b : a < b
+    const same = Math.abs(a - b) < 0.01
+    return {
+      key,
+      label,
+      before: (key === 'avg_risk_reward' ? b.toFixed(2) : b.toFixed(1)) + suffix,
+      after: (key === 'avg_risk_reward' ? a.toFixed(2) : a.toFixed(1)) + suffix,
+      arrow: same ? '=' : (better ? '↑' : '↓'),
+      cls: same ? '' : (better ? 'highlight-up' : 'highlight-down'),
+    }
+  })
+})
+
+// 自動滾動日誌到底部
+watch(() => store.validationLogs.length, async () => {
+  await nextTick()
+  if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight
+})
 
 const chartOption = computed(() => {
   const daily = stats.value?.daily || []
@@ -305,6 +397,89 @@ onMounted(() => fetchData())
 
 .ai-header h3 { margin: 0; }
 
+.ai-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.validation-section {
+  margin-bottom: 12px;
+}
+
+.validation-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #409eff;
+  margin-bottom: 8px;
+}
+
+.validation-logs {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-family: monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 10px;
+  border-radius: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.validation-result {
+  margin-bottom: 8px;
+}
+
+.result-badge {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.result-badge.improved {
+  background: #f0f9eb;
+  color: #67c23a;
+}
+
+.result-badge.unchanged {
+  background: #fdf6ec;
+  color: #e6a23c;
+}
+
+.attempt-count {
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.comparison-table {
+  width: 100%;
+  font-size: 12px;
+  border-collapse: collapse;
+}
+
+.comparison-table th {
+  text-align: left;
+  color: #909399;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.comparison-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #f4f4f5;
+}
+
 .rounds-list {
   display: flex;
   flex-direction: column;
@@ -321,6 +496,7 @@ onMounted(() => fetchData())
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 6px;
 }
 
@@ -353,5 +529,17 @@ onMounted(() => fetchData())
 
 .adj-item {
   margin-right: 8px;
+}
+
+.round-comparison {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.cmp-item {
+  color: #606266;
+  font-family: monospace;
 }
 </style>

@@ -59,5 +59,5 @@ scheduledCommand('news:compute-indices', '新聞指數(18:15)')->dailyAt('18:15'
 // 每日 22:00 健康檢查（健康檢查自己會發通知，不重複）
 Schedule::command('stock:health-check')->dailyAt('22:00')->appendOutputTo($scheduleLog);
 
-// 每週一 07:00 自動執行回測分析並套用建議（過去30天）
-scheduledCommand('stock:backtest --optimize --apply', '週回測優化')->weeklyOn(1, '07:00');
+// 每週一 07:00 自動執行帶驗證的回測優化（過去60天，最多10次嘗試）
+scheduledCommand('stock:backtest --validated', '週回測優化')->weeklyOn(1, '07:00');
