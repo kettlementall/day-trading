@@ -51,6 +51,9 @@ class BacktestOptimizer
     {
         $adjustments = $round->suggestions['adjustments'] ?? [];
 
+        // 安全檢查：驗證價格參數不會造成 RR 崩潰
+        $adjustments = $this->sanitizePriceAdjustments($adjustments);
+
         foreach ($adjustments as $type => $changes) {
             $setting = FormulaSetting::where('type', $type)->first();
             if (!$setting) continue;
@@ -64,6 +67,46 @@ class BacktestOptimizer
             'applied' => true,
             'applied_at' => now(),
         ]);
+    }
+
+    /**
+     * 驗證並修正價格參數，防止 RR 崩潰
+     */
+    private function sanitizePriceAdjustments(array $adjustments): array
+    {
+        $buyFallback = $adjustments['suggested_buy']['fallback_pct']
+            ?? FormulaSetting::getConfig('suggested_buy')['fallback_pct']
+            ?? 0.998;
+        $targetFallback = $adjustments['target_price']['fallback_pct']
+            ?? FormulaSetting::getConfig('target_price')['fallback_pct']
+            ?? 1.025;
+        $stopFallback = $adjustments['stop_loss']['fallback_pct']
+            ?? FormulaSetting::getConfig('stop_loss')['fallback_pct']
+            ?? 0.988;
+
+        // 限制 buy fallback 範圍
+        if ($buyFallback > 1.005) {
+            Log::warning("BacktestOptimizer: buy fallback {$buyFallback} clamped to 1.005");
+            $adjustments['suggested_buy']['fallback_pct'] = 1.005;
+            $buyFallback = 1.005;
+        }
+
+        // 確保 target - buy >= 0.02
+        if ($targetFallback - $buyFallback < 0.02) {
+            $newTarget = $buyFallback + 0.025;
+            Log::warning("BacktestOptimizer: target fallback {$targetFallback} raised to {$newTarget} (min 2% spread)");
+            $adjustments['target_price']['fallback_pct'] = $newTarget;
+            $targetFallback = $newTarget;
+        }
+
+        // 確保 buy > stop
+        if ($stopFallback >= $buyFallback) {
+            $newStop = $buyFallback - 0.01;
+            Log::warning("BacktestOptimizer: stop fallback {$stopFallback} lowered to {$newStop}");
+            $adjustments['stop_loss']['fallback_pct'] = $newStop;
+        }
+
+        return $adjustments;
     }
 
     /**
@@ -264,10 +307,14 @@ date=日期, symbol=股票代號, ind=產業, strat=策略, score=評分, buy/ta
 
 ### 參數說明
 
-#### 價格公式參數
-- suggested_buy: 建議買入價計算。sources 控制取哪些支撐價，filter_lower_pct 是下限過濾，filter_upper_pct 是上限過濾（允許 >1.0 以設高於昨收的買入價），fallback_pct 是預設倍率
-- target_price: 目標價計算。sources 控制取哪些目標價，filter_upper_pct 是上限過濾，fallback_pct 是預設倍率
+#### 價格公式參數（重要：fallback 作為價格下限/上限機制）
+- suggested_buy: 建議買入價計算。系統取所有支撐來源的最高值，但 **fallback_pct 作為買入價的下限**（即 buy >= close * fallback_pct 永遠成立）。因此 fallback_pct > 1.0 會強制買入價高於昨收，大幅壓縮獲利空間。**建議 fallback_pct 維持在 0.99~1.005 之間**。
+  - sources 控制取哪些支撐價，filter_lower_pct/filter_upper_pct 過濾有效支撐範圍
+- target_price: 目標價計算。系統取有效目標中的最低值，fallback 用於無有效目標時。**target 的基準是 max(close, suggestedBuy)**，所以 target >= buy * fallback_pct。
+  - sources 控制取哪些目標價，filter_upper_pct 是上限過濾，fallback_pct 是預設倍率
 - stop_loss: 停損價計算。sources.atr.multiplier 控制 ATR 倍率，fallback_pct 是預設倍率
+
+⚠️ 風報比公式：RR = (target - buy) / (buy - stop)。若 buy 接近 close（fallback≈1.0）而 target 的 fallback 僅 1.01，則獲利空間只有 ~1%，配合 stop 在 2% 以下，RR < 0.5 會篩掉所有候選。請確保 target_fallback - buy_fallback >= 0.02（至少 2% 獲利空間）。
 
 #### 選股邏輯參數
 - scoring: 各評分因子的設定。每個因子有 enabled（是否啟用）、score（加分值）及各自的閾值參數
@@ -350,11 +397,13 @@ date=日期, symbol=股票代號, ind=產業, strat=策略, score=評分, buy/ta
 - screen_thresholds 的 key 直接使用參數名（如 "min_score", "min_risk_reward"）
 - score 可以設為負值（-15 ~ 30），負分代表該因子觸發時扣分
 
-⚠️ 硬性約束（違反會造成系統異常）：
+⚠️ 硬性約束（違反會造成系統異常或篩掉所有候選）：
 - suggested_buy.fallback_pct 必須 < target_price.fallback_pct（買入價必須低於目標價）
 - suggested_buy.filter_upper_pct 必須 < target_price.filter_upper_pct
 - stop_loss.fallback_pct 必須 < suggested_buy.fallback_pct（停損必須低於買入價）
-- 調整前請自行驗證：買入價 < 目標價、停損 < 買入價，否則不要提交該調整
+- target_price.fallback_pct - suggested_buy.fallback_pct >= 0.02（確保至少 2% 獲利空間）
+- suggested_buy.fallback_pct 範圍：0.985 ~ 1.005（過高會壓垮風報比，過低會降低買入可達率）
+- 調整前請自行驗證：買入價 < 目標價、停損 < 買入價、風報比 >= 1.3，否則不要提交該調整
 PROMPT;
     }
 
