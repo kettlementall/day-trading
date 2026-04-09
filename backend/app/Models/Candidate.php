@@ -16,7 +16,7 @@ class Candidate extends Model
     ];
 
     protected $casts = [
-        'trade_date' => 'date',
+        'trade_date' => 'date:Y-m-d',
         'suggested_buy' => 'decimal:2',
         'target_price' => 'decimal:2',
         'stop_loss' => 'decimal:2',

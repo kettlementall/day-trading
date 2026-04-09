@@ -13,7 +13,7 @@ class NewsArticle extends Model
     ];
 
     protected $casts = [
-        'fetched_date' => 'date',
+        'fetched_date' => 'date:Y-m-d',
         'published_at' => 'datetime',
         'sentiment_score' => 'decimal:2',
         'ai_analysis' => 'array',

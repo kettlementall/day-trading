@@ -13,8 +13,8 @@ class BacktestRound extends Model
     ];
 
     protected $casts = [
-        'analyzed_from' => 'date',
-        'analyzed_to' => 'date',
+        'analyzed_from' => 'date:Y-m-d',
+        'analyzed_to' => 'date:Y-m-d',
         'metrics_before' => 'array',
         'metrics_after' => 'array',
         'suggestions' => 'array',

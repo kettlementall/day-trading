@@ -13,7 +13,7 @@ class NewsIndex extends Model
     ];
 
     protected $casts = [
-        'date' => 'date',
+        'date' => 'date:Y-m-d',
         'sentiment' => 'decimal:2',
         'heatmap' => 'decimal:2',
         'panic' => 'decimal:2',

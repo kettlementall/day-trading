@@ -15,7 +15,7 @@ class IntradayQuote extends Model
     ];
 
     protected $casts = [
-        'date' => 'date',
+        'date' => 'date:Y-m-d',
         'open' => 'decimal:2',
         'high' => 'decimal:2',
         'low' => 'decimal:2',
