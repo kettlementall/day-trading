@@ -108,6 +108,38 @@ class BacktestOptimizer
 
     private function buildPrompt(array $metrics, array $currentSettings): string
     {
+        // 最近已套用的回測歷史（最多 5 輪）
+        $recentRounds = BacktestRound::where('applied', true)
+            ->orderByDesc('created_at')
+            ->limit(5)
+            ->get()
+            ->reverse()
+            ->values();
+
+        $historyItems = $recentRounds->map(function ($round) {
+            $m = $round->metrics_before ?? [];
+            return [
+                'round' => $round->id,
+                'date' => $round->created_at->format('Y-m-d H:i'),
+                'period' => $round->analyzed_from . ' ~ ' . $round->analyzed_to,
+                'samples' => $round->sample_count,
+                'metrics' => [
+                    'buy_reach_rate' => $m['buy_reach_rate'] ?? null,
+                    'target_reach_rate' => $m['target_reach_rate'] ?? null,
+                    'dual_reach_rate' => $m['dual_reach_rate'] ?? null,
+                    'expected_value' => $m['expected_value'] ?? null,
+                    'hit_stop_loss_rate' => $m['hit_stop_loss_rate'] ?? null,
+                    'avg_risk_reward' => $m['avg_risk_reward'] ?? null,
+                ],
+                'adjustments' => $round->suggestions['adjustments'] ?? [],
+                'analysis' => $round->suggestions['analysis'] ?? '',
+            ];
+        })->toArray();
+
+        $historyJson = !empty($historyItems)
+            ? json_encode($historyItems, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
+            : '（無歷史記錄）';
+
         $metricsJson = json_encode([
             'buy_reach_rate' => $metrics['buy_reach_rate'],
             'target_reach_rate' => $metrics['target_reach_rate'],
@@ -136,12 +168,14 @@ class BacktestOptimizer
             ->orderBy('trade_date')
             ->get();
 
-        $details = $candidates->map(function ($c) {
+        // 用 TSV 精簡格式減少 token 數
+        $detailLines = ["date\tsymbol\tind\tstrat\tscore\tbuy\ttarget\tstop\trr\tlow\thigh\tclose\tbuy?\ttgt?\tstop?\tproft%\treasons"];
+        foreach ($candidates as $c) {
             $r = $c->result;
             $suggestedBuy = (float) $c->suggested_buy;
-            $profit = null;
+            $profit = '-';
             if ($suggestedBuy > 0 && $r->buy_reachable) {
-                if ($r->buy_reachable && $r->target_reachable) {
+                if ($r->target_reachable) {
                     $profit = round(((float) $c->target_price - $suggestedBuy) / $suggestedBuy * 100, 2);
                 } elseif ($r->hit_stop_loss) {
                     $profit = round(-($suggestedBuy - (float) $c->stop_loss) / $suggestedBuy * 100, 2);
@@ -149,33 +183,44 @@ class BacktestOptimizer
                     $profit = round(((float) $r->actual_close - $suggestedBuy) / $suggestedBuy * 100, 2);
                 }
             }
-
-            return [
-                'date' => \Carbon\Carbon::parse($c->trade_date)->format('m/d'),
-                'stock' => $c->stock->symbol . ' ' . $c->stock->name,
-                'industry' => $c->stock->industry ?? '-',
-                'strategy' => $c->strategy_type ?? '-',
-                'score' => $c->score,
-                'buy' => $suggestedBuy,
-                'target' => (float) $c->target_price,
-                'stop' => (float) $c->stop_loss,
-                'rr' => (float) $c->risk_reward_ratio,
-                'actual_low' => (float) $r->actual_low,
-                'actual_high' => (float) $r->actual_high,
-                'actual_close' => (float) $r->actual_close,
-                'buy_ok' => $r->buy_reachable ? 'Y' : 'N',
-                'target_ok' => $r->target_reachable ? 'Y' : 'N',
-                'stop_hit' => $r->hit_stop_loss ? 'Y' : 'N',
-                'profit_pct' => $profit,
-                'reasons' => implode(', ', is_array($c->reasons) ? $c->reasons : []),
-            ];
-        })->toArray();
-        $detailsJson = json_encode($details, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+            $reasons = implode('|', is_array($c->reasons) ? $c->reasons : []);
+            $detailLines[] = implode("\t", [
+                \Carbon\Carbon::parse($c->trade_date)->format('m/d'),
+                $c->stock->symbol,
+                $c->stock->industry ?? '-',
+                $c->strategy_type ?? '-',
+                $c->score,
+                $suggestedBuy,
+                (float) $c->target_price,
+                (float) $c->stop_loss,
+                (float) $c->risk_reward_ratio,
+                (float) $r->actual_low,
+                (float) $r->actual_high,
+                (float) $r->actual_close,
+                $r->buy_reachable ? 'Y' : 'N',
+                $r->target_reachable ? 'Y' : 'N',
+                $r->hit_stop_loss ? 'Y' : 'N',
+                $profit,
+                $reasons,
+            ]);
+        }
+        $detailsTsv = implode("\n", $detailLines);
 
         return <<<PROMPT
-你是台股當沖交易系統的優化專家，負責同時優化「價格公式」和「選股邏輯」。以下是過去一段時間的回測統計數據和目前的參數設定。
+你是台股當沖交易系統的優化專家，負責同時優化「價格公式」、「選股邏輯」和「篩選門檻」。
 
-## 回測指標
+## 歷史調整記錄
+以下是過去已套用的回測優化記錄（從舊到新），包含當時的指標和做的調整。請仔細參考，避免重複無效的調整或來回反覆：
+
+{$historyJson}
+
+### 使用歷史記錄的原則
+- 如果某個方向的調整在前幾輪已經做過但指標沒改善，不要再往同方向調
+- 如果某個調整有效（指標改善），可以沿著同方向微調
+- 注意趨勢：指標是在改善還是惡化？找出哪些調整是有效的
+- 避免來回震盪（例如一輪調高、下一輪又調低同一個參數）
+
+## 本次回測指標
 {$metricsJson}
 
 ### 指標說明
@@ -203,14 +248,10 @@ class BacktestOptimizer
 觀察每日指標是否穩定、是否有特定日期表現異常（可能受大盤影響）。
 
 ## 個股明細
-{$detailsJson}
+{$detailsTsv}
 
-### 欄位說明
-- buy/target/stop: 建議買入價/目標價/停損價
-- actual_low/actual_high/actual_close: 實際最低/最高/收盤
-- buy_ok/target_ok/stop_hit: 是否可買到/達標/觸停損
-- profit_pct: 實際報酬率 %（null=沒買到）
-- reasons: 觸發的選股理由
+### 欄位說明（tab 分隔）
+date=日期, symbol=股票代號, ind=產業, strat=策略, score=評分, buy/target/stop=建議價, rr=風報比, low/high/close=實際價, buy?/tgt?/stop?=是否達到(Y/N), proft%=報酬率(-=沒買到), reasons=選股理由(|分隔)
 
 請從個股明細觀察：
 - 哪些類型的股票（產業、策略）賺錢或虧錢
