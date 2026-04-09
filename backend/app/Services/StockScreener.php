@@ -329,7 +329,7 @@ class StockScreener
             $suggestedBuy = $this->calcSuggestedBuy(
                 $closes, $lows, $highs, $indicators, $buyConfig, $strategyType
             );
-            $targetPrice = $this->calcTargetPrice($closes, $highs, $atr, $bollinger, $targetConfig);
+            $targetPrice = $this->calcTargetPrice($closes, $highs, $atr, $bollinger, $targetConfig, $suggestedBuy);
             $stopLoss = $this->calcStopLoss($closes, $lows, $atr, $stopConfig);
 
             // 消息面修正：偏空壓低目標、收緊停損；偏多略放寬目標
@@ -555,19 +555,18 @@ class StockScreener
         $filterLower = $cfg['filter_lower_pct'] ?? 0.95;
         $filterUpper = $cfg['filter_upper_pct'] ?? 1.05;
         $fallback = $cfg['fallback_pct'] ?? 0.99;
+        $fallbackPrice = $close * $fallback;
 
         $validSupports = array_filter($supports, fn ($s) =>
             $s > $close * $filterLower && $s < $close * $filterUpper
         );
 
-        if (empty($validSupports)) {
-            return round($close * $fallback, 2);
-        }
-
-        return round(max($validSupports), 2);
+        // 取最高支撐價，但不低於 fallback（fallback 作為買入價下限）
+        $bestSupport = !empty($validSupports) ? max($validSupports) : $fallbackPrice;
+        return round(max($bestSupport, $fallbackPrice), 2);
     }
 
-    private function calcTargetPrice(array $closes, array $highs, ?float $atr, ?array $bollinger, array $cfg): float
+    private function calcTargetPrice(array $closes, array $highs, ?float $atr, ?array $bollinger, array $cfg, float $suggestedBuy = 0): float
     {
         $close = $closes[0];
         $sources = $cfg['sources'] ?? [];
@@ -593,10 +592,13 @@ class StockScreener
         $filterUpper = $cfg['filter_upper_pct'] ?? 1.10;
         $fallback = $cfg['fallback_pct'] ?? 1.03;
 
-        $validTargets = array_filter($targets, fn ($t) => $t > $close && $t < $close * $filterUpper);
+        // 目標價的基準改為 max(close, suggestedBuy)，確保目標價高於買入價
+        $base = $suggestedBuy > 0 ? max($close, $suggestedBuy) : $close;
+
+        $validTargets = array_filter($targets, fn ($t) => $t > $base && $t < $close * $filterUpper);
 
         if (empty($validTargets)) {
-            return round($close * $fallback, 2);
+            return round($base * $fallback, 2);
         }
 
         return round(min($validTargets), 2);
