@@ -42,6 +42,10 @@
                                                        15:00 盤後結果回填
 ```
 
+### 排程日誌
+
+所有排程指令的 stdout 輸出皆追加寫入 `storage/logs/schedule.log`，可用於確認各指令是否有實際執行。
+
 ### 非交易日處理
 
 所有市場資料抓取指令（`stock:fetch-daily`、`stock:fetch-institutional`、`stock:fetch-margin`）皆具備日期驗證機制：
