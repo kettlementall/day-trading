@@ -265,7 +265,7 @@ date=日期, symbol=股票代號, ind=產業, strat=策略, score=評分, buy/ta
 ### 參數說明
 
 #### 價格公式參數
-- suggested_buy: 建議買入價計算。sources 控制取哪些支撐價，filter_lower_pct 是下限過濾，fallback_pct 是預設倍率
+- suggested_buy: 建議買入價計算。sources 控制取哪些支撐價，filter_lower_pct 是下限過濾，filter_upper_pct 是上限過濾（允許 >1.0 以設高於昨收的買入價），fallback_pct 是預設倍率
 - target_price: 目標價計算。sources 控制取哪些目標價，filter_upper_pct 是上限過濾，fallback_pct 是預設倍率
 - stop_loss: 停損價計算。sources.atr.multiplier 控制 ATR 倍率，fallback_pct 是預設倍率
 
@@ -349,6 +349,12 @@ date=日期, symbol=股票代號, ind=產業, strat=策略, score=評分, buy/ta
 - scoring 和 strategy 的調整也使用點分隔路徑
 - screen_thresholds 的 key 直接使用參數名（如 "min_score", "min_risk_reward"）
 - score 可以設為負值（-15 ~ 30），負分代表該因子觸發時扣分
+
+⚠️ 硬性約束（違反會造成系統異常）：
+- suggested_buy.fallback_pct 必須 < target_price.fallback_pct（買入價必須低於目標價）
+- suggested_buy.filter_upper_pct 必須 < target_price.filter_upper_pct
+- stop_loss.fallback_pct 必須 < suggested_buy.fallback_pct（停損必須低於買入價）
+- 調整前請自行驗證：買入價 < 目標價、停損 < 買入價，否則不要提交該調整
 PROMPT;
     }
 

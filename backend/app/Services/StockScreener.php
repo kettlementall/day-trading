@@ -503,15 +503,18 @@ class StockScreener
         $close = $closes[0];
         $sources = $cfg['sources'] ?? [];
 
-        // === 策略導向定價 ===
+        // === 收集所有支撐價來源（策略 + 通用） ===
+        $supports = [];
+
+        // 策略導向來源
         if ($strategyType === 'bounce') {
             $ma10 = $indicators['ma10'] ?? null;
             if ($ma10 && $ma10 > $close * 0.95 && $ma10 < $close * 1.07) {
-                return round($ma10, 2);
+                $supports[] = $ma10;
             }
             $ma5 = $indicators['ma5'] ?? null;
             if ($ma5 && $ma5 > $close * 0.95 && $ma5 < $close * 1.05) {
-                return round($ma5, 2);
+                $supports[] = $ma5;
             }
         }
 
@@ -519,13 +522,12 @@ class StockScreener
             if (count($highs) >= 6) {
                 $prevHigh = max(array_slice($highs, 1, 5));
                 if ($prevHigh > $close * 0.98 && $prevHigh < $close * 1.08) {
-                    return round($prevHigh, 2);
+                    $supports[] = $prevHigh;
                 }
             }
         }
 
-        // === 通用邏輯 ===
-        $supports = [];
+        // 通用來源
 
         $recentLow = $sources['recent_low'] ?? ['enabled' => true, 'days' => 5];
         if ($recentLow['enabled'] ?? true) {
@@ -551,9 +553,12 @@ class StockScreener
         }
 
         $filterLower = $cfg['filter_lower_pct'] ?? 0.95;
+        $filterUpper = $cfg['filter_upper_pct'] ?? 1.05;
         $fallback = $cfg['fallback_pct'] ?? 0.99;
 
-        $validSupports = array_filter($supports, fn ($s) => $s < $close && $s > $close * $filterLower);
+        $validSupports = array_filter($supports, fn ($s) =>
+            $s > $close * $filterLower && $s < $close * $filterUpper
+        );
 
         if (empty($validSupports)) {
             return round($close * $fallback, 2);
