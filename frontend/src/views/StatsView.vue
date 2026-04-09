@@ -131,32 +131,39 @@
         <!-- 歷史紀錄 -->
         <div v-if="store.backtestRounds.length" class="rounds-list">
           <h4 style="margin: 12px 0 8px;">優化紀錄</h4>
-          <div v-for="round in store.backtestRounds" :key="round.id" class="round-item">
+          <div v-for="round in store.backtestRounds" :key="round.id"
+               :class="['round-item', { 'round-rolled-back': round.metrics_after && !round.applied }]">
             <div class="round-header">
-              <span class="round-date">{{ round.analyzed_from }} ~ {{ round.analyzed_to }}</span>
+              <span class="round-date">{{ formatDate(round.analyzed_from) }} ~ {{ formatDate(round.analyzed_to) }}</span>
               <span class="round-count">{{ round.sample_count }} 筆</span>
-              <el-tag v-if="round.applied" type="success" size="small">已套用</el-tag>
+              <el-tag v-if="round.metrics_after && round.applied" type="success" size="small">驗證通過</el-tag>
+              <el-tag v-else-if="round.metrics_after && !round.applied" type="danger" size="small">已回滾</el-tag>
+              <el-tag v-else-if="round.applied" type="success" size="small">已套用</el-tag>
               <el-tag v-else type="info" size="small">未套用</el-tag>
               <el-tag v-if="round.suggestions?.focus" size="small">{{ focusLabel(round.suggestions.focus) }}</el-tag>
             </div>
+
+            <!-- before/after 完整對比 -->
+            <div v-if="round.metrics_after" class="round-comparison-full">
+              <table class="comparison-table">
+                <thead><tr><th></th><th>調整前</th><th>調整後</th><th></th></tr></thead>
+                <tbody>
+                  <tr v-for="item in roundComparison(round)" :key="item.key">
+                    <td>{{ item.label }}</td>
+                    <td>{{ item.before }}</td>
+                    <td>{{ item.after }}</td>
+                    <td :class="item.cls">{{ item.arrow }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
             <div class="round-analysis">{{ round.suggestions?.analysis }}</div>
             <div v-if="round.suggestions?.adjustments" class="round-adjustments">
               <div v-for="(changes, type) in round.suggestions.adjustments" :key="type">
                 <span class="adj-type">[{{ type }}]</span>
                 <span v-for="(val, key) in changes" :key="key" class="adj-item">{{ key }}: {{ val }}</span>
               </div>
-            </div>
-            <!-- before/after 指標對比 -->
-            <div v-if="round.metrics_after" class="round-comparison">
-              <span class="cmp-item">
-                EV: {{ round.metrics_before?.expected_value }}%
-                → {{ round.metrics_after?.expected_value }}%
-                {{ round.metrics_after?.expected_value > round.metrics_before?.expected_value ? '↑' : '↓' }}
-              </span>
-              <span class="cmp-item">
-                雙達: {{ round.metrics_before?.dual_reach_rate }}%
-                → {{ round.metrics_after?.dual_reach_rate }}%
-              </span>
             </div>
           </div>
         </div>
@@ -217,6 +224,36 @@ async function runValidated() {
 function focusLabel(focus) {
   const map = { price: '價格', scoring: '評分', thresholds: '門檻' }
   return map[focus] || focus
+}
+
+function formatDate(d) {
+  if (!d) return ''
+  return d.slice(0, 10)
+}
+
+function roundComparison(round) {
+  const b = round.metrics_before || {}
+  const a = round.metrics_after || {}
+  const keys = [
+    { key: 'buy_reach_rate', label: '買入可達', suffix: '%', higherBetter: true },
+    { key: 'target_reach_rate', label: '目標可達', suffix: '%', higherBetter: true },
+    { key: 'dual_reach_rate', label: '雙達率', suffix: '%', higherBetter: true },
+    { key: 'expected_value', label: '期望值', suffix: '%', higherBetter: true },
+    { key: 'hit_stop_loss_rate', label: '停損率', suffix: '%', higherBetter: false },
+  ]
+  return keys.map(({ key, label, suffix, higherBetter }) => {
+    const bv = b[key] ?? 0
+    const av = a[key] ?? 0
+    const better = higherBetter ? av > bv : av < bv
+    const same = Math.abs(av - bv) < 0.01
+    return {
+      key, label,
+      before: bv.toFixed(1) + suffix,
+      after: av.toFixed(1) + suffix,
+      arrow: same ? '=' : (better ? '↑' : '↓'),
+      cls: same ? '' : (better ? 'highlight-up' : 'highlight-down'),
+    }
+  })
 }
 
 const comparisonRows = computed(() => {
@@ -490,6 +527,15 @@ onMounted(() => fetchData())
   border: 1px solid #ebeef5;
   border-radius: 6px;
   padding: 10px;
+}
+
+.round-rolled-back {
+  opacity: 0.65;
+  border-color: #fde2e2;
+}
+
+.round-comparison-full {
+  margin: 6px 0;
 }
 
 .round-header {

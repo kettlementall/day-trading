@@ -89,50 +89,55 @@ class BacktestOptimizer
         $bestSettings = $originalSettings;
         $rounds = [];
 
-        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-            $log("\n▎ 第 {$attempt}/{$maxAttempts} 次嘗試...");
+        try {
+            for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+                $log("\n▎ 第 {$attempt}/{$maxAttempts} 次嘗試...");
 
-            // 3. 回滾到最佳參數（確保 AI 基於正確的參數分析）
-            $this->restoreSettings($bestSettings);
+                // 3. 回滾到最佳參數（確保 AI 基於正確的參數分析）
+                $this->restoreSettings($bestSettings);
 
-            // 4. 重跑以取得當前指標（供 AI 分析用）
-            $currentMetrics = $backtestService->rescreen($from, $to);
+                // 4. 重跑以取得當前指標（供 AI 分析用）
+                $currentMetrics = $backtestService->rescreen($from, $to);
 
-            // 5. AI 分析並建議
-            $round = $this->analyze($from, $to);
-            $rounds[] = $round;
-            $suggestions = $round->suggestions;
-            $focus = $suggestions['focus'] ?? 'unknown';
-            $log("  AI 建議（{$focus}）：{$suggestions['analysis']}");
+                // 5. AI 分析並建議
+                $round = $this->analyze($from, $to);
+                $rounds[] = $round;
+                $suggestions = $round->suggestions;
+                $focus = $suggestions['focus'] ?? 'unknown';
+                $log("  AI 建議（{$focus}）：{$suggestions['analysis']}");
 
-            if (empty($suggestions['adjustments'])) {
-                $log("  AI 無建議調整，結束。");
-                break;
+                if (empty($suggestions['adjustments'])) {
+                    $log("  AI 無建議調整，結束。");
+                    break;
+                }
+
+                // 6. 套用建議
+                $this->applyRound($round);
+                $log("  已套用建議，重跑驗證...");
+
+                // 7. 重跑取得新指標
+                $newMetrics = $backtestService->rescreen($from, $to);
+                $log($this->formatMetricsSummary('新指標', $newMetrics));
+
+                // 8. 更新 round 的 metrics_after
+                $round->update(['metrics_after' => $newMetrics]);
+
+                // 9. 比較是否改善
+                if ($this->isImproved($bestMetrics, $newMetrics)) {
+                    $log("  ✓ 指標改善！採用此調整。");
+                    $bestMetrics = $newMetrics;
+                    $bestSettings = $this->snapshotSettings();
+                } else {
+                    $log("  ✗ 指標未改善，回滾。");
+                    $round->update(['applied' => false, 'applied_at' => null]);
+                }
             }
-
-            // 6. 套用建議
-            $this->applyRound($round);
-            $log("  已套用建議，重跑驗證...");
-
-            // 7. 重跑取得新指標
-            $newMetrics = $backtestService->rescreen($from, $to);
-            $log($this->formatMetricsSummary('新指標', $newMetrics));
-
-            // 8. 更新 round 的 metrics_after
-            $round->update(['metrics_after' => $newMetrics]);
-
-            // 9. 比較是否改善
-            if ($this->isImproved($bestMetrics, $newMetrics)) {
-                $log("  ✓ 指標改善！採用此調整。");
-                $bestMetrics = $newMetrics;
-                $bestSettings = $this->snapshotSettings();
-            } else {
-                $log("  ✗ 指標未改善，回滾。");
-                $round->update(['applied' => false, 'applied_at' => null]);
-            }
+        } catch (\Exception $e) {
+            Log::error("BacktestOptimizer: 優化循環異常，回滾至最佳參數: {$e->getMessage()}");
+            $log("\n▎ 錯誤：{$e->getMessage()}，回滾至最佳參數...");
         }
 
-        // 10. 確保最終使用最佳參數
+        // 10. 一定會執行：還原最佳參數並重跑，確保資料一致
         $this->restoreSettings($bestSettings);
         $backtestService->rescreen($from, $to);
 
