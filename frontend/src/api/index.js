@@ -73,7 +73,7 @@ export const getBacktestRounds = () =>
   api.get('/backtest/rounds')
 
 export const triggerBacktestOptimize = (from, to) =>
-  api.post('/backtest/optimize', { from, to })
+  api.post('/backtest/optimize', { from, to }, { timeout: 120000 })
 
 export const applyBacktestRound = (id) =>
   api.post(`/backtest/rounds/${id}/apply`)

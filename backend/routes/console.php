@@ -1,45 +1,63 @@
 <?php
 
+use App\Services\TelegramService;
 use Illuminate\Support\Facades\Schedule;
 
 $scheduleLog = storage_path('logs/schedule.log');
 
+/**
+ * 註冊排程任務並自動加上 Telegram 通知
+ */
+function scheduledCommand(string $command, string $label): \Illuminate\Console\Scheduling\Event
+{
+    $scheduleLog = storage_path('logs/schedule.log');
+
+    return Schedule::command($command)
+        ->appendOutputTo($scheduleLog)
+        ->onSuccess(function () use ($label) {
+            app(TelegramService::class)->send("✅ *{$label}* 完成");
+        })
+        ->onFailure(function () use ($label) {
+            app(TelegramService::class)->send("❌ *{$label}* 失敗，請檢查 logs");
+        });
+}
+
 // 每日 14:30 收盤後抓取行情資料
-Schedule::command('stock:fetch-daily')->dailyAt('14:30')->appendOutputTo($scheduleLog);
+scheduledCommand('stock:fetch-daily', '每日行情抓取')->dailyAt('14:30');
 
 // 每日 16:00 抓取三大法人
-Schedule::command('stock:fetch-institutional')->dailyAt('16:00')->appendOutputTo($scheduleLog);
+scheduledCommand('stock:fetch-institutional', '三大法人抓取')->dailyAt('16:00');
 
 // 每日 16:30 抓取融資融券
-Schedule::command('stock:fetch-margin')->dailyAt('16:30')->appendOutputTo($scheduleLog);
+scheduledCommand('stock:fetch-margin', '融資融券抓取')->dailyAt('16:30');
 
 // 每日 08:00 執行選股篩選（等 06:00 隔夜新聞抓完後，含消息面修正）
-Schedule::command('stock:screen-candidates')->dailyAt('08:00')->appendOutputTo($scheduleLog);
+scheduledCommand('stock:screen-candidates', '選股篩選')->dailyAt('08:00');
 
-// 每日 09:05 & 09:30 抓取盤中即時行情（第一次抓5分K，第二次抓30分鐘後狀態）
-Schedule::command('stock:fetch-intraday')->dailyAt('09:05')->appendOutputTo($scheduleLog);
-Schedule::command('stock:fetch-intraday')->dailyAt('09:30')->appendOutputTo($scheduleLog);
+// 每日 09:05 & 09:30 抓取盤中即時行情
+scheduledCommand('stock:fetch-intraday', '盤中行情(09:05)')->dailyAt('09:05');
+scheduledCommand('stock:fetch-intraday', '盤中行情(09:30)')->dailyAt('09:30');
 
 // 每日 09:35 執行盤前確認篩選
-Schedule::command('stock:screen-morning')->dailyAt('09:35')->appendOutputTo($scheduleLog);
+scheduledCommand('stock:screen-morning', '盤前確認篩選')->dailyAt('09:35');
 
 // 每日 15:00 更新前日候選標的的實際結果
-Schedule::command('stock:update-results')->dailyAt('15:00')->appendOutputTo($scheduleLog);
+scheduledCommand('stock:update-results', '候選結果回填')->dailyAt('15:00');
 
 // 每日 06:00 抓取隔夜國際新聞（供 08:00 選股用）
-Schedule::command('news:fetch')->dailyAt('06:00')->appendOutputTo($scheduleLog);
-Schedule::command('news:compute-indices')->dailyAt('06:15')->appendOutputTo($scheduleLog);
+scheduledCommand('news:fetch', '新聞抓取(06:00)')->dailyAt('06:00');
+scheduledCommand('news:compute-indices', '新聞指數(06:15)')->dailyAt('06:15');
 
 // 每日 08:00 / 12:00 / 18:00 抓取新聞並分析
-Schedule::command('news:fetch')->dailyAt('08:00')->appendOutputTo($scheduleLog);
-Schedule::command('news:compute-indices')->dailyAt('08:15')->appendOutputTo($scheduleLog);
-Schedule::command('news:fetch')->dailyAt('12:00')->appendOutputTo($scheduleLog);
-Schedule::command('news:compute-indices')->dailyAt('12:15')->appendOutputTo($scheduleLog);
-Schedule::command('news:fetch')->dailyAt('18:00')->appendOutputTo($scheduleLog);
-Schedule::command('news:compute-indices')->dailyAt('18:15')->appendOutputTo($scheduleLog);
+scheduledCommand('news:fetch', '新聞抓取(08:00)')->dailyAt('08:00');
+scheduledCommand('news:compute-indices', '新聞指數(08:15)')->dailyAt('08:15');
+scheduledCommand('news:fetch', '新聞抓取(12:00)')->dailyAt('12:00');
+scheduledCommand('news:compute-indices', '新聞指數(12:15)')->dailyAt('12:15');
+scheduledCommand('news:fetch', '新聞抓取(18:00)')->dailyAt('18:00');
+scheduledCommand('news:compute-indices', '新聞指數(18:15)')->dailyAt('18:15');
 
-// 每日 22:00 健康檢查（確認當日資料抓取正常）
+// 每日 22:00 健康檢查（健康檢查自己會發通知，不重複）
 Schedule::command('stock:health-check')->dailyAt('22:00')->appendOutputTo($scheduleLog);
 
 // 每週一 07:00 自動執行回測分析並套用建議（過去30天）
-Schedule::command('stock:backtest --optimize --apply')->weeklyOn(1, '07:00')->appendOutputTo($scheduleLog);
+scheduledCommand('stock:backtest --optimize --apply', '週回測優化')->weeklyOn(1, '07:00');
