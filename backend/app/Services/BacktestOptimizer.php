@@ -350,7 +350,19 @@ date=日期, symbol=股票代號, ind=產業, strat=策略, score=評分, buy/ta
 
 ## 任務
 
-同時分析「價格公式」、「選股邏輯」和「篩選門檻」，找出改善空間。
+分析回測數據，找出**最需要改善的一類參數**進行調整。
+
+### ⚠️ 核心原則：一次只調一類參數
+
+歷史教訓：同時調整價格公式 + 評分權重 + 篩選門檻會導致結果不可控。改了評分就會改變選哪些股票，連帶使價格指標失去參考意義，多次實驗證明同時調整反而退步。
+
+**你必須從以下三類中選擇一類進行調整，其他類別不動：**
+
+1. **價格公式**（suggested_buy / target_price / stop_loss）— 當買入可達率、目標可達率、停損率明顯異常時
+2. **選股評分**（scoring / strategy）— 當 win/loss 平均分數接近（區辨力不足）、某因子觸發率極端時
+3. **篩選門檻**（screen_thresholds）— 當每日候選數太多或太少時
+
+選擇依據：哪類問題最嚴重、改善空間最大，就調哪類。在 analysis 中說明為什麼選擇調這一類而不是另外兩類。
 
 ### 優化目標（按優先順序）
 1. **提高買入可達率**（buy_reach_rate 目標 >= 50%）— 買不到的策略沒意義
@@ -369,29 +381,24 @@ date=日期, symbol=股票代號, ind=產業, strat=策略, score=評分, buy/ta
 
 請用 JSON 回覆（不要加其他文字），格式如下：
 {
-  "analysis": "問題分析摘要（中文，含價格、選股、門檻三方面分析，引用具體數據）",
+  "focus": "price | scoring | thresholds（本次調整的類別）",
+  "analysis": "問題分析摘要（中文，說明三類參數各自狀態，以及為什麼選擇調整這一類）",
   "adjustments": {
-    "suggested_buy": { "要修改的參數key": 新值 },
-    "target_price": { "要修改的參數key": 新值 },
-    "stop_loss": { "要修改的參數key": 新值 },
-    "scoring": { "因子名.參數key": 新值 },
-    "strategy": { "策略名.參數key": 新值 },
-    "screen_thresholds": { "參數key": 新值 }
+    "只包含本次要調整的類別，例如：": "",
+    "suggested_buy": { "要修改的參數key": "新值" },
+    "target_price": { "要修改的參數key": "新值" },
+    "stop_loss": { "要修改的參數key": "新值" }
   },
   "reasoning": {
-    "suggested_buy": "調整原因",
-    "target_price": "調整原因",
-    "stop_loss": "調整原因",
-    "scoring": "選股評分調整原因",
-    "strategy": "策略參數調整原因",
-    "screen_thresholds": "門檻調整原因"
+    "只包含本次調整的類別": "調整原因（引用具體數據）"
   }
 }
 
 注意：
+- **adjustments 中只能包含一類參數**（價格類 / 評分類 / 門檻類），不要跨類調整
 - 只調整有明確數據支持的參數，引用具體數據說明原因
 - 每次調整幅度不要太大（每個參數最多調整 10-20%）
-- 如果某類參數已經表現良好，可以不調整（不需要在 adjustments 中列出）
+- 如果某參數已經表現良好，不需要調整
 - adjustments 的 key 使用點分隔路徑（如 "sources.atr.multiplier", "volume_surge.score", "bounce.washout_drop_pct"）
 - scoring 和 strategy 的調整也使用點分隔路徑
 - screen_thresholds 的 key 直接使用參數名（如 "min_score", "min_risk_reward"）

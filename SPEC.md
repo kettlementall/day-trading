@@ -394,7 +394,7 @@ expected_value = avg(所有 buy_reachable 為 true 的 profit)
 
 ### 5.4 AI 優化（`stock:backtest`）
 
-定義於 `BacktestOptimizer`，可透過指令或 API 觸發。同時優化**價格公式**和**選股邏輯**。
+定義於 `BacktestOptimizer`，可透過指令或 API 觸發。每次只優化**一類參數**（價格 / 評分 / 門檻）。
 
 ```bash
 # 僅查看回測指標（含選股品質）
@@ -407,11 +407,17 @@ php artisan stock:backtest --from=2026-03-01 --to=2026-04-09 --optimize
 php artisan stock:backtest --from=2026-03-01 --to=2026-04-09 --optimize --apply
 ```
 
+**核心原則：一次只調一類參數。** 同時調整價格 + 評分 + 門檻會導致結果不可控（改評分會改變選哪些股票，使價格指標失去參考意義）。AI 每次從以下三類中選擇問題最嚴重的一類調整：
+
+1. **價格公式**（suggested_buy / target_price / stop_loss）— 買入/目標可達率異常時
+2. **選股評分**（scoring / strategy）— 評分區辨力不足時
+3. **篩選門檻**（screen_thresholds）— 候選數太多或太少時
+
 **優化流程：**
 
 1. 計算指定期間的回測指標（含選股品質指標）
 2. 讀取目前所有 `FormulaSetting` 參數（含 `scoring`、`strategy`）
-3. 呼叫 Claude API 同時分析價格偏差與選股品質，建議參數調整（無 API key 時降級為規則式分析）
+3. 呼叫 Claude API 分析數據，選擇一類參數建議調整（無 API key 時降級為規則式分析）
 4. 將分析結果存入 `backtest_rounds` 表
 5. 若指定 `--apply`，自動套用建議到 `formula_settings`
 
