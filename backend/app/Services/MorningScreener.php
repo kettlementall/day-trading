@@ -10,12 +10,17 @@ use Illuminate\Support\Facades\Log;
 class MorningScreener
 {
     /**
-     * 開盤 30 分鐘後的四大確認規則
+     * 開盤 30 分鐘後的確認規則
      *
+     * 基本四規則：
      * 1. 預估量爆發：預估成交量 > 昨量 1.5 倍
      * 2. 開盤開高位階：開盤漲幅介於 2% ~ 5%
      * 3. 現價 > 第一根 5 分 K 線高點
      * 4. 外盤比 > 55%
+     *
+     * 額外驗證（影響通過判定）：
+     * 5. 跳空過大警示：開盤漲幅 > 7% → 隔日沖風險，降級為不通過
+     * 6. 支撐回測確認：突破型標的需現價站穩買入價上方
      */
     public function screen(string $tradeDate): Collection
     {
@@ -42,7 +47,7 @@ class MorningScreener
             $volumeResult = $this->checkEstimatedVolume($intraday);
             $signals[] = $volumeResult;
             if ($volumeResult['passed']) {
-                $morningScore += 30; // 最關鍵，給最高分
+                $morningScore += 30;
             }
 
             // 規則 2：開盤開高位階（2% ~ 5%）
@@ -66,10 +71,28 @@ class MorningScreener
                 $morningScore += 20;
             }
 
-            // 通過條件：至少 3 項規則通過（含預估量必須通過）
-            $passedCount = collect($signals)->where('passed', true)->count();
+            // 規則 5：跳空過大警示（開盤漲 > 7%，隔日沖風險高）
+            $gapRiskResult = $this->checkGapUpRisk($intraday);
+            $signals[] = $gapRiskResult;
+
+            // 規則 6：支撐回測確認（突破型標的需站穩買入價）
+            $supportResult = $this->checkSupportHold($intraday, $candidate);
+            $signals[] = $supportResult;
+
+            // 通過條件：基本四規則至少 3 項通過（含預估量必須通過）
+            $basicPassedCount = collect(array_slice($signals, 0, 4))->where('passed', true)->count();
             $volumePassed = $signals[0]['passed'];
-            $confirmed = $volumePassed && $passedCount >= 3;
+            $confirmed = $volumePassed && $basicPassedCount >= 3;
+
+            // 額外驗證可否決通過：跳空過大 → 強制不通過
+            if ($confirmed && !$gapRiskResult['passed']) {
+                $confirmed = false;
+            }
+
+            // 支撐回測未通過 → 降級為不確認（僅針對突破型）
+            if ($confirmed && !$supportResult['passed'] && $candidate->strategy_type === 'breakout') {
+                $confirmed = false;
+            }
 
             $candidate->update([
                 'morning_score' => $morningScore,
@@ -182,6 +205,73 @@ class MorningScreener
             'passed' => $passed,
             'value' => $ratio,
             'threshold' => 55,
+            'detail' => $detail,
+        ];
+    }
+
+    /**
+     * 規則 5：跳空過大警示
+     * 開盤漲幅 > 7% 有隔日沖風險，視為否決條件
+     * passed = true 表示「沒有跳空過大問題」（安全）
+     */
+    private function checkGapUpRisk(IntradayQuote $intraday): array
+    {
+        $percent = (float) $intraday->open_change_percent;
+        $threshold = 7.0;
+        $isRisky = $percent > $threshold;
+
+        return [
+            'rule' => '跳空風險',
+            'passed' => !$isRisky,
+            'value' => $percent,
+            'threshold' => $threshold,
+            'detail' => $isRisky
+                ? "開盤漲 {$percent}%，跳空過大有隔日沖風險"
+                : "開盤漲 {$percent}%，跳空幅度正常",
+        ];
+    }
+
+    /**
+     * 規則 6：支撐回測確認
+     * 突破型標的需要現價站穩在建議買入價上方，確認支撐有效
+     * 非突破型標的直接通過（不適用此規則）
+     * passed = true 表示「支撐確認OK」或「非突破型不需檢查」
+     */
+    private function checkSupportHold(IntradayQuote $intraday, Candidate $candidate): array
+    {
+        $currentPrice = (float) $intraday->current_price;
+        $suggestedBuy = (float) $candidate->suggested_buy;
+        $first5minLow = (float) $intraday->first_5min_low;
+        $strategyType = $candidate->strategy_type;
+
+        // 非突破型標的，此規則直接通過
+        if ($strategyType !== 'breakout') {
+            return [
+                'rule' => '支撐確認',
+                'passed' => true,
+                'value' => $currentPrice,
+                'threshold' => $suggestedBuy,
+                'detail' => '非突破型，不需支撐回測確認',
+            ];
+        }
+
+        // 突破型：現價需在建議買入價上方，且盤中低點未跌破買入價過多（容許 1%）
+        $holdMargin = 0.99; // 允許 1% 的回測空間
+        $lowHeld = $first5minLow >= $suggestedBuy * $holdMargin;
+        $priceAbove = $currentPrice >= $suggestedBuy;
+        $passed = $priceAbove && $lowHeld;
+
+        $detail = match (true) {
+            $passed => "現價 {$currentPrice} 站穩買入價 {$suggestedBuy} 上方，支撐有效",
+            !$priceAbove => "現價 {$currentPrice} 已跌破買入價 {$suggestedBuy}，支撐失守",
+            default => "盤中低點 {$first5minLow} 跌破買入價 {$suggestedBuy}，支撐不穩",
+        };
+
+        return [
+            'rule' => '支撐確認',
+            'passed' => $passed,
+            'value' => $currentPrice,
+            'threshold' => $suggestedBuy,
             'detail' => $detail,
         ];
     }

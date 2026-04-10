@@ -190,13 +190,77 @@ class StockScreener
                 }
             }
 
-            // 11. 突破前高
+            // 11. 突破前高（含真假突破判斷 + 過高回測確認）
             $cfg = $sc('break_prev_high');
             if ($cfg['enabled'] ?? true) {
                 $prev5High = max(array_slice($highs, 1, 5));
-                if ($closes[0] > $prev5High) {
-                    $score += $cfg['score'] ?? 10;
-                    $reasons[] = '突破前高';
+                $close = $closes[0];
+                $high = $highs[0];
+                $open = $opens[0];
+                $body = abs($close - $open);
+                $upperShadow = $high - max($close, $open);
+
+                if ($close > $prev5High) {
+                    // 假突破檢查：爆量 + 長上影線（上影 > 實體 × 1.5）+ 收盤接近最低
+                    $isFakeBreakout = $body > 0
+                        && ($upperShadow / $body) > ($cfg['fake_upper_shadow_ratio'] ?? 1.5)
+                        && ($close - $lows[0]) < $body * 0.5;
+
+                    if ($isFakeBreakout) {
+                        // 假突破不加分，記錄到 strategyDetail
+                        $strategyDetail['fake_breakout'] = true;
+                    } else {
+                        $score += $cfg['score'] ?? 10;
+                        $reasons[] = '突破前高';
+                    }
+                }
+
+                // 過高回測：前2~5日已突破前高，之後拉回但收盤未跌破前高 = 站穩確認
+                $retestCfg = $cfg['retest'] ?? [];
+                if ($retestCfg['enabled'] ?? true) {
+                    $retestScore = $retestCfg['score'] ?? 12;
+                    // 檢查前2~5日是否有收盤站上更早期高點
+                    if (count($closes) >= 11 && count($highs) >= 11) {
+                        $olderHigh = max(array_slice($highs, 6, 5)); // 前6~10日的高點
+                        $hadBreakout = false;
+                        $heldAbove = true;
+                        for ($d = 1; $d <= 5; $d++) {
+                            if (isset($closes[$d]) && $closes[$d] > $olderHigh) {
+                                $hadBreakout = true;
+                            }
+                        }
+                        // 突破後拉回，但最近收盤仍在前高之上
+                        if ($hadBreakout && $close >= $olderHigh * ($retestCfg['hold_pct'] ?? 0.99)) {
+                            // 確認沒有跌破前高（允許微幅回測）
+                            for ($d = 0; $d <= 2; $d++) {
+                                if (isset($lows[$d]) && $lows[$d] < $olderHigh * ($retestCfg['support_pct'] ?? 0.97)) {
+                                    $heldAbove = false;
+                                    break;
+                                }
+                            }
+                            if ($heldAbove) {
+                                $score += $retestScore;
+                                $reasons[] = '過高回測站穩';
+                                $strategyDetail['retest_confirmed'] = true;
+                                $strategyDetail['retest_base'] = $olderHigh;
+                            }
+                        }
+                    }
+                }
+
+                // 壓力位偵測：接近長期高點（近60日）但未確認突破 → 不加分且標記
+                $pressureCfg = $cfg['pressure'] ?? [];
+                if ($pressureCfg['enabled'] ?? true) {
+                    $longDays = $pressureCfg['lookback_days'] ?? 60;
+                    $nearPct = $pressureCfg['near_pct'] ?? 0.97;
+                    if (count($highs) >= $longDays) {
+                        $longHigh = max(array_slice($highs, 1, $longDays - 1));
+                        $isNearPressure = $close >= $longHigh * $nearPct && $close < $longHigh;
+                        if ($isNearPressure) {
+                            $strategyDetail['near_pressure'] = true;
+                            $strategyDetail['pressure_level'] = $longHigh;
+                        }
+                    }
                 }
             }
 
