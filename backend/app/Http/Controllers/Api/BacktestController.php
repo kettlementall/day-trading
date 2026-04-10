@@ -102,9 +102,15 @@ class BacktestController extends Controller
 
             $service = new DailyReviewService();
 
-            $result = $service->review($date, function (string $msg) use ($sendEvent) {
-                $sendEvent('log', ['message' => $msg]);
-            });
+            $result = $service->review(
+                $date,
+                function (string $msg) use ($sendEvent) {
+                    $sendEvent('log', ['message' => $msg]);
+                },
+                function (string $chunk) use ($sendEvent) {
+                    $sendEvent('chunk', ['text' => $chunk]);
+                }
+            );
 
             $sendEvent('done', $result);
         }, 200, [

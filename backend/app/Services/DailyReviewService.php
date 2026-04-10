@@ -23,7 +23,7 @@ class DailyReviewService
     /**
      * 產出單日候選標的 AI 檢討報告
      */
-    public function review(string $date, ?\Closure $logger = null): array
+    public function review(string $date, ?\Closure $logger = null, ?\Closure $onChunk = null): array
     {
         $log = $logger ?? function (string $msg) { Log::info($msg); };
 
@@ -78,8 +78,8 @@ class DailyReviewService
 
         $log("資料準備完成，呼叫 AI 分析中...");
 
-        // 6. 呼叫 Claude API
-        $report = $this->callApi($prompt);
+        // 6. 呼叫 Claude Streaming API，透過 onChunk 即時推送文字片段
+        $report = $this->callApiStreaming($prompt, $onChunk);
 
         $log("分析完成");
 
@@ -240,33 +240,77 @@ est_vol_ratio=預估量倍數, open_chg%=開盤漲幅, current=快照時現價, 
 PROMPT;
     }
 
-    private function callApi(string $prompt): string
+    private function callApiStreaming(string $prompt, ?\Closure $onChunk = null): string
     {
         if (!$this->apiKey) {
             return "**ANTHROPIC_API_KEY 未設定，無法產出 AI 報告。**\n\n請在 .env 中設定 `ANTHROPIC_API_KEY`。";
         }
 
         try {
+            $fullText = '';
+
             $response = Http::timeout(180)
                 ->withHeaders([
                     'x-api-key' => $this->apiKey,
                     'anthropic-version' => '2023-06-01',
                     'content-type' => 'application/json',
                 ])
+                ->withOptions(['stream' => true])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
                     'max_tokens' => 8192,
+                    'stream' => true,
                     'messages' => [
                         ['role' => 'user', 'content' => $prompt],
                     ],
                 ]);
 
             if (!$response->successful()) {
-                Log::error('DailyReviewService API error: ' . $response->body());
+                Log::error('DailyReviewService API error: ' . $response->status());
                 return "**AI 分析失敗**：API 回傳錯誤 ({$response->status()})";
             }
 
-            return $response->json('content.0.text', '無回應內容');
+            $body = $response->toPsrResponse()->getBody();
+            $buffer = '';
+
+            while (!$body->eof()) {
+                $chunk = $body->read(8192);
+                if ($chunk === '') continue;
+
+                $buffer .= $chunk;
+
+                // SSE 格式：以雙換行分隔事件
+                while (($pos = strpos($buffer, "\n\n")) !== false) {
+                    $event = substr($buffer, 0, $pos);
+                    $buffer = substr($buffer, $pos + 2);
+
+                    // 解析 data: 行
+                    $dataLine = '';
+                    foreach (explode("\n", $event) as $line) {
+                        if (str_starts_with($line, 'data: ')) {
+                            $dataLine = substr($line, 6);
+                        }
+                    }
+
+                    if (!$dataLine || $dataLine === '[DONE]') continue;
+
+                    $decoded = json_decode($dataLine, true);
+                    if (!$decoded) continue;
+
+                    // content_block_delta 事件包含文字片段
+                    if (($decoded['type'] ?? '') === 'content_block_delta') {
+                        $text = $decoded['delta']['text'] ?? '';
+                        if ($text !== '') {
+                            $fullText .= $text;
+                            if ($onChunk) {
+                                $onChunk($text);
+                            }
+                        }
+                    }
+                }
+            }
+
+            return $fullText ?: '無回應內容';
         } catch (\Exception $e) {
             Log::error('DailyReviewService: ' . $e->getMessage());
             return "**AI 分析失敗**：{$e->getMessage()}";

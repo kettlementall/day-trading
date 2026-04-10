@@ -111,7 +111,17 @@
             <div v-for="(log, i) in store.reviewLogs" :key="i" class="log-line">{{ log }}</div>
           </div>
 
-          <div v-if="store.reviewResult?.report" class="review-report">
+          <!-- 串流中的即時報告 -->
+          <div v-if="store.reviewing && store.reviewStreamText" class="review-report">
+            <div class="report-header">
+              <el-icon class="is-loading" style="margin-right: 6px;"><Loading /></el-icon>
+              <span>報告生成中...</span>
+            </div>
+            <div class="report-content" v-html="renderMarkdown(store.reviewStreamText)" />
+          </div>
+
+          <!-- 完成的報告 -->
+          <div v-else-if="store.reviewResult?.report" class="review-report">
             <div class="report-header">
               <span>{{ store.reviewResult.date }} — {{ store.reviewResult.candidates_count }} 檔候選標的</span>
             </div>

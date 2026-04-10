@@ -91,10 +91,13 @@ export const useCandidateStore = defineStore('candidates', () => {
     return data
   }
 
+  const reviewStreamText = ref('')
+
   function dailyReview(date) {
     reviewing.value = true
     reviewLogs.value = []
     reviewResult.value = null
+    reviewStreamText.value = ''
 
     return new Promise((resolve, reject) => {
       const url = getDailyReviewUrl(date)
@@ -105,17 +108,36 @@ export const useCandidateStore = defineStore('candidates', () => {
         reviewLogs.value.push(message)
       })
 
+      eventSource.addEventListener('chunk', (e) => {
+        const { text } = JSON.parse(e.data)
+        reviewStreamText.value += text
+      })
+
       eventSource.addEventListener('done', (e) => {
         reviewResult.value = JSON.parse(e.data)
+        reviewStreamText.value = ''
         reviewing.value = false
         eventSource.close()
         resolve(reviewResult.value)
       })
 
       eventSource.onerror = () => {
+        // 若已收到串流文字，保留為報告結果而非丟棄
+        if (reviewStreamText.value) {
+          reviewResult.value = {
+            date,
+            candidates_count: null,
+            report: reviewStreamText.value,
+          }
+          reviewStreamText.value = ''
+        }
         reviewing.value = false
         eventSource.close()
-        reject(new Error('SSE connection failed'))
+        if (!reviewResult.value) {
+          reject(new Error('SSE connection failed'))
+        } else {
+          resolve(reviewResult.value)
+        }
       }
     })
   }
@@ -155,7 +177,7 @@ export const useCandidateStore = defineStore('candidates', () => {
     candidates, currentDate, dates, stats, loading,
     morningFilter, filteredCandidates, morningSummary, lastUpdatedAt,
     backtestRounds, optimizing, validating, validationLogs, validationResult,
-    reviewing, reviewLogs, reviewResult,
+    reviewing, reviewLogs, reviewResult, reviewStreamText,
     fetchCandidates, fetchDates, fetchStats,
     fetchBacktestRounds, optimize, applyRound, optimizeValidated, dailyReview,
   }
