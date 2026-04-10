@@ -496,6 +496,30 @@ php artisan stock:backtest --validated --max-attempts=5
 
 **排程：** 每週一 07:00 自動執行帶驗證的優化循環（`stock:backtest --validated`，過去 60 天，最多 10 次嘗試）。
 
+### 5.5 單日 AI 檢討報告（`/api/backtest/daily-review`）
+
+定義於 `DailyReviewService`，透過前端 StatsView 的「單日 AI 檢討」區塊觸發。
+
+**用途：** 針對單一交易日的候選標的，分析每檔為什麼買入可達/不可達、目標可達/不可達。不做參數調整，只產出診斷報告。
+
+**資料來源：**
+
+| 資料 | 用途 |
+|------|------|
+| `candidates` + `candidate_results` | 盤前設定 vs 盤後實際結果 |
+| `intraday_quotes` | 盤中行情快照（量能、開盤位階、外盤比） |
+| `daily_quotes`（近 5 日） | K 線走勢、成交量變化 |
+| `news_indices` | 當日消息面情緒 |
+
+**報告結構：**
+
+1. **當日總覽** — 大盤氛圍、消息面影響、整體表現
+2. **逐檔分析** — 每檔的盤前設定合理性、盤中表現、達標/未達標原因、最佳進場時機
+3. **共通問題** — 系統性模式（買入價偏高/偏低、特定策略偏差）
+4. **改善建議** — 具體可改善方向（不含參數調整）
+
+**實作：** SSE 串流，前端透過 EventSource 接收 `log`（進度）和 `done`（最終報告）事件。
+
 ---
 
 ## 6. 資料表結構摘要
@@ -540,6 +564,7 @@ php artisan stock:backtest --validated --max-attempts=5
 | GET    | `/api/backtest/rounds`    | 回測優化歷史列表        |
 | POST   | `/api/backtest/optimize`  | 觸發 AI 優化分析        |
 | POST   | `/api/backtest/rounds/{id}/apply` | 套用優化建議  |
+| GET    | `/api/backtest/daily-review` | 單日 AI 檢討報告（SSE） |
 | GET    | `/api/spec`               | 系統規格文件（SPEC.md）  |
 
 ---

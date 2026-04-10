@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getCandidates, getCandidateDates, getCandidateStats, getBacktestRounds, triggerBacktestOptimize, applyBacktestRound, getOptimizeValidatedUrl } from '../api'
+import { getCandidates, getCandidateDates, getCandidateStats, getBacktestRounds, triggerBacktestOptimize, applyBacktestRound, getOptimizeValidatedUrl, getDailyReviewUrl } from '../api'
 import dayjs from 'dayjs'
 
 export const useCandidateStore = defineStore('candidates', () => {
@@ -58,6 +58,11 @@ export const useCandidateStore = defineStore('candidates', () => {
   const validationLogs = ref([])
   const validationResult = ref(null)
 
+  // 單日檢討報告
+  const reviewing = ref(false)
+  const reviewLogs = ref([])
+  const reviewResult = ref(null)
+
   async function fetchStats(days = 30) {
     const { data } = await getCandidateStats(days)
     stats.value = data
@@ -84,6 +89,35 @@ export const useCandidateStore = defineStore('candidates', () => {
     const idx = backtestRounds.value.findIndex(r => r.id === id)
     if (idx !== -1) backtestRounds.value[idx] = data
     return data
+  }
+
+  function dailyReview(date) {
+    reviewing.value = true
+    reviewLogs.value = []
+    reviewResult.value = null
+
+    return new Promise((resolve, reject) => {
+      const url = getDailyReviewUrl(date)
+      const eventSource = new EventSource(url)
+
+      eventSource.addEventListener('log', (e) => {
+        const { message } = JSON.parse(e.data)
+        reviewLogs.value.push(message)
+      })
+
+      eventSource.addEventListener('done', (e) => {
+        reviewResult.value = JSON.parse(e.data)
+        reviewing.value = false
+        eventSource.close()
+        resolve(reviewResult.value)
+      })
+
+      eventSource.onerror = () => {
+        reviewing.value = false
+        eventSource.close()
+        reject(new Error('SSE connection failed'))
+      }
+    })
   }
 
   function optimizeValidated(from, to, maxAttempts = 10) {
@@ -121,7 +155,8 @@ export const useCandidateStore = defineStore('candidates', () => {
     candidates, currentDate, dates, stats, loading,
     morningFilter, filteredCandidates, morningSummary, lastUpdatedAt,
     backtestRounds, optimizing, validating, validationLogs, validationResult,
+    reviewing, reviewLogs, reviewResult,
     fetchCandidates, fetchDates, fetchStats,
-    fetchBacktestRounds, optimize, applyRound, optimizeValidated,
+    fetchBacktestRounds, optimize, applyRound, optimizeValidated, dailyReview,
   }
 })

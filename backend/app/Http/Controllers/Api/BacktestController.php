@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\BacktestRound;
 use App\Services\BacktestOptimizer;
 use App\Services\BacktestService;
+use App\Services\DailyReviewService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -73,6 +74,37 @@ class BacktestController extends Controller
                     $sendEvent('log', ['message' => $msg]);
                 }
             );
+
+            $sendEvent('done', $result);
+        }, 200, [
+            'Content-Type' => 'text/event-stream',
+            'Cache-Control' => 'no-cache',
+            'Connection' => 'keep-alive',
+            'X-Accel-Buffering' => 'no',
+        ]);
+    }
+
+    /**
+     * 單日候選標的 AI 檢討分析（SSE 串流）
+     */
+    public function dailyReview(Request $request): StreamedResponse
+    {
+        $date = $request->input('date', now()->toDateString());
+
+        return response()->stream(function () use ($date) {
+            while (ob_get_level()) ob_end_clean();
+
+            $sendEvent = function (string $event, array $data) {
+                echo "event: {$event}\n";
+                echo "data: " . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n\n";
+                flush();
+            };
+
+            $service = new DailyReviewService();
+
+            $result = $service->review($date, function (string $msg) use ($sendEvent) {
+                $sendEvent('log', ['message' => $msg]);
+            });
 
             $sendEvent('done', $result);
         }, 200, [

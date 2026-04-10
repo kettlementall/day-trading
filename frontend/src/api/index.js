@@ -83,6 +83,11 @@ export const getOptimizeValidatedUrl = (from, to, maxAttempts = 10) => {
   return `${base}/backtest/optimize-validated?from=${from}&to=${to}&max_attempts=${maxAttempts}`
 }
 
+export const getDailyReviewUrl = (date) => {
+  const base = api.defaults.baseURL || '/api'
+  return `${base}/backtest/daily-review?date=${date}`
+}
+
 // 系統規格
 export const getSpec = () =>
   api.get('/spec')

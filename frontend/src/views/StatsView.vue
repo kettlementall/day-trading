@@ -80,6 +80,49 @@
         </div>
       </div>
 
+      <!-- 單日 AI 檢討 -->
+      <div class="stock-card" style="margin-top: 16px;">
+        <div class="ai-header">
+          <h3>單日 AI 檢討</h3>
+          <div class="ai-buttons">
+            <el-date-picker
+              v-model="reviewDate"
+              type="date"
+              format="MM/DD"
+              value-format="YYYY-MM-DD"
+              :clearable="false"
+              size="small"
+              style="width: 110px"
+              placeholder="選擇日期"
+            />
+            <el-button type="warning" size="small" :loading="store.reviewing" @click="runDailyReview">
+              產出報告
+            </el-button>
+          </div>
+        </div>
+
+        <div v-if="store.reviewing || store.reviewResult" class="validation-section">
+          <div v-if="store.reviewing" class="validation-status">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>AI 分析中...</span>
+          </div>
+
+          <div v-if="store.reviewLogs.length" class="validation-logs" ref="reviewLogBox">
+            <div v-for="(log, i) in store.reviewLogs" :key="i" class="log-line">{{ log }}</div>
+          </div>
+
+          <div v-if="store.reviewResult?.report" class="review-report">
+            <div class="report-header">
+              <span>{{ store.reviewResult.date }} — {{ store.reviewResult.candidates_count }} 檔候選標的</span>
+            </div>
+            <div class="report-content" v-html="renderMarkdown(store.reviewResult.report)" />
+          </div>
+          <div v-else-if="store.reviewResult?.error" class="review-error">
+            {{ store.reviewResult.error }}
+          </div>
+        </div>
+      </div>
+
       <!-- AI 優化 -->
       <div class="stock-card" style="margin-top: 16px;">
         <div class="ai-header">
@@ -191,6 +234,8 @@ const days = ref(30)
 const loading = ref(false)
 const stats = computed(() => store.stats)
 const logBox = ref(null)
+const reviewLogBox = ref(null)
+const reviewDate = ref(dayjs().format('YYYY-MM-DD'))
 
 async function fetchData() {
   loading.value = true
@@ -208,6 +253,27 @@ async function runOptimize() {
   const from = dayjs().subtract(days.value, 'day').format('YYYY-MM-DD')
   const to = dayjs().format('YYYY-MM-DD')
   await store.optimize(from, to)
+}
+
+async function runDailyReview() {
+  try {
+    await store.dailyReview(reviewDate.value)
+  } catch (e) {
+    console.error('Daily review failed:', e)
+  }
+}
+
+function renderMarkdown(text) {
+  if (!text) return ''
+  return text
+    .replace(/### (.*)/g, '<h4>$1</h4>')
+    .replace(/## (.*)/g, '<h3>$1</h3>')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n- /g, '\n<li>')
+    .replace(/<li>(.*?)(?=\n|$)/g, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
+    .replace(/<\/ul>\s*<ul>/g, '')
+    .replace(/\n/g, '<br>')
 }
 
 async function runValidated() {
@@ -287,6 +353,11 @@ const comparisonRows = computed(() => {
 watch(() => store.validationLogs.length, async () => {
   await nextTick()
   if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight
+})
+
+watch(() => store.reviewLogs.length, async () => {
+  await nextTick()
+  if (reviewLogBox.value) reviewLogBox.value.scrollTop = reviewLogBox.value.scrollHeight
 })
 
 const chartOption = computed(() => {
@@ -587,5 +658,65 @@ onMounted(() => fetchData())
 .cmp-item {
   color: #606266;
   font-family: monospace;
+}
+
+.review-report {
+  margin-top: 10px;
+}
+
+.report-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  background: #f5f7fa;
+  border-radius: 4px;
+}
+
+.report-content {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #303133;
+  padding: 10px;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.report-content :deep(h3) {
+  font-size: 15px;
+  margin: 16px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.report-content :deep(h4) {
+  font-size: 14px;
+  margin: 12px 0 6px;
+  color: #409eff;
+}
+
+.report-content :deep(strong) {
+  color: #e6a23c;
+}
+
+.report-content :deep(ul) {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.report-content :deep(li) {
+  margin: 2px 0;
+}
+
+.review-error {
+  margin-top: 10px;
+  padding: 10px;
+  background: #fef0f0;
+  color: #f56c6c;
+  border-radius: 6px;
+  font-size: 13px;
 }
 </style>
