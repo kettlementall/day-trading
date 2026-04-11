@@ -169,11 +169,19 @@ class AiScreenerService
 
 每檔標的請給出：
 - `intraday_strategy`：盤中策略標籤，選項：breakout_fresh（首次突破）、breakout_retest（突破回測）、gap_pullback（跳空拉回）、bounce（跌深反彈）、momentum（量能動能）
+- `suggested_buy`：建議買入價（根據 K 線型態、支撐壓力位、策略特性給出合理的進場價）
+- `target_price`：目標獲利價（根據壓力位、近期振幅、型態空間合理設定）
+- `stop_loss`：停損價（根據支撐位、ATR、型態破壞點設定）
 - `reference_support`：參考支撐位
 - `reference_resistance`：參考壓力位
 - `score_adjustment`：加減分（-20 ~ +20）
 - `reasoning`：選入/排除的一句話理由
 - `warnings`：注意事項（可為 null）
+
+價格設定原則：
+- 買入價應設在合理回測位置（突破型可設前高附近，反彈型設支撐附近）
+- 目標價不宜超過收盤價 +10%，停損不宜超過收盤價 -2.5%
+- 風報比（目標-買入）/（買入-停損）應 >= 1.5
 
 ## 回覆格式
 請直接回覆 JSON（不要加 markdown 標記），格式：
@@ -184,6 +192,9 @@ class AiScreenerService
       "score_adjustment": 8,
       "reasoning": "突破後縮量回測不破前高，型態教科書級",
       "intraday_strategy": "breakout_retest",
+      "suggested_buy": 29.5,
+      "target_price": 30.5,
+      "stop_loss": 29.0,
       "reference_support": 29.0,
       "reference_resistance": 30.5,
       "warnings": ["上方 30.5 為 60 日高點壓力"]
@@ -229,7 +240,9 @@ PROMPT;
 
             if ($selectedMap->has($symbol)) {
                 $ai = $selectedMap->get($symbol);
-                $candidate->update([
+
+                // AI 給的價格覆蓋規則式價格
+                $updates = [
                     'ai_selected' => true,
                     'ai_score_adjustment' => $ai['score_adjustment'] ?? 0,
                     'ai_reasoning' => $ai['reasoning'] ?? '',
@@ -237,7 +250,30 @@ PROMPT;
                     'reference_support' => $ai['reference_support'] ?? $candidate->stop_loss,
                     'reference_resistance' => $ai['reference_resistance'] ?? $candidate->target_price,
                     'ai_warnings' => $ai['warnings'] ?? null,
-                ]);
+                ];
+
+                if (!empty($ai['suggested_buy'])) {
+                    $updates['suggested_buy'] = $ai['suggested_buy'];
+                }
+                if (!empty($ai['target_price'])) {
+                    $updates['target_price'] = $ai['target_price'];
+                }
+                if (!empty($ai['stop_loss'])) {
+                    $updates['stop_loss'] = $ai['stop_loss'];
+                }
+
+                // 重算風報比
+                if (isset($updates['suggested_buy'], $updates['target_price'], $updates['stop_loss'])) {
+                    $buy = (float) $updates['suggested_buy'];
+                    $stop = (float) $updates['stop_loss'];
+                    if ($buy > $stop && $stop > 0) {
+                        $updates['risk_reward_ratio'] = round(
+                            ((float) $updates['target_price'] - $buy) / ($buy - $stop), 2
+                        );
+                    }
+                }
+
+                $candidate->update($updates);
             } else {
                 $rejected = $rejectedMap->get($symbol);
                 $candidate->update([
