@@ -142,6 +142,23 @@
             {{ item.strategy_type === 'bounce' ? '跌深反彈' : '突破追多' }}
           </el-tag>
           <el-tag
+            v-if="item.intraday_strategy && item.intraday_strategy !== item.strategy_type"
+            size="small"
+            type="primary"
+            round
+          >
+            {{ item.intraday_strategy }}
+          </el-tag>
+          <el-tag
+            v-if="item.ai_selected"
+            size="small"
+            type="success"
+            effect="dark"
+            round
+          >
+            AI 選入{{ item.ai_score_adjustment ? ` (${item.ai_score_adjustment > 0 ? '+' : ''}${item.ai_score_adjustment})` : '' }}
+          </el-tag>
+          <el-tag
             v-for="reason in (item.reasons || [])"
             :key="reason"
             size="small"
@@ -150,6 +167,20 @@
           >
             {{ reason }}
           </el-tag>
+        </div>
+
+        <!-- AI 選股理由 -->
+        <div v-if="item.ai_reasoning" class="card-ai-reasoning">
+          <div class="ai-reasoning-text">{{ item.ai_reasoning }}</div>
+          <div v-if="item.ai_warnings" class="ai-warnings">
+            <span v-for="(w, i) in (Array.isArray(item.ai_warnings) ? item.ai_warnings : [item.ai_warnings])" :key="i" class="ai-warning-chip">
+              {{ w }}
+            </span>
+          </div>
+          <div v-if="item.reference_support || item.reference_resistance" class="ai-ref-prices">
+            <span v-if="item.reference_support" class="ref-price">支撐 {{ item.reference_support }}</span>
+            <span v-if="item.reference_resistance" class="ref-price">壓力 {{ item.reference_resistance }}</span>
+          </div>
         </div>
 
         <!-- 策略細節 -->
@@ -400,6 +431,43 @@ function monitorStatusLabel(status) {
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 8px;
+}
+
+.card-ai-reasoning {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #f0f5ff;
+  border-radius: 6px;
+  border-left: 3px solid #409eff;
+}
+.ai-reasoning-text {
+  font-size: 12px;
+  color: #303133;
+  line-height: 1.5;
+}
+.ai-warnings {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ai-warning-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #e6a23c;
+  background: #fdf6ec;
+  border: 1px solid #f5dab1;
+}
+.ai-ref-prices {
+  margin-top: 4px;
+  display: flex;
+  gap: 12px;
+}
+.ref-price {
+  font-size: 11px;
+  color: #909399;
 }
 
 .card-strategy {
