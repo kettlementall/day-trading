@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\DailyQuote;
@@ -83,6 +84,14 @@ class DailyReviewService
         $report = $this->callApiStreaming($prompt, $onChunk);
 
         $log("分析完成");
+
+        // 從報告中萃取結構化教訓，非同步不影響回傳
+        try {
+            $this->extractLessons($date, $report);
+            $log("教訓萃取完成");
+        } catch (\Exception $e) {
+            Log::error("DailyReviewService extractLessons: " . $e->getMessage());
+        }
 
         return [
             'date' => $date,
@@ -290,6 +299,108 @@ est_vol_ratio=預估量倍數, open_chg%=開盤漲幅, current=快照時現價, 
 ### 五、改善建議
 根據今天的觀察，列出具體可改善的方向。
 PROMPT;
+    }
+
+    /**
+     * 從每日檢討報告中萃取結構化教訓，存入 ai_lessons
+     */
+    private function extractLessons(string $date, string $report): void
+    {
+        if (!$this->apiKey || strlen($report) < 100) {
+            return;
+        }
+
+        // 如果該日已有教訓，跳過（避免重複萃取）
+        if (AiLesson::where('trade_date', $date)->exists()) {
+            Log::info("DailyReviewService: {$date} 教訓已存在，跳過萃取");
+            return;
+        }
+
+        $prompt = <<<PROMPT
+以下是 {$date} 的台股當沖交易檢討報告。請從中萃取結構化教訓，供未來 AI 選股和盤中決策參考。
+
+## 檢討報告
+{$report}
+
+## 萃取規則
+- 只萃取具體、可操作的教訓（例如「突破型標的買入價不應設在前高上方超過 1%」）
+- 忽略籠統的建議（例如「要注意風險」）
+- 每條教訓 type 分類：
+  - `screening`：選股階段的教訓（哪些該選/不該選）
+  - `calibration`：開盤校準的教訓（開盤數據如何判讀）
+  - `entry`：進場時機的教訓（買入價設定、進場條件）
+  - `exit`：出場時機的教訓（停損停利、出場條件）
+  - `market`：大盤/產業面的教訓
+- category 可選：breakout, bounce, gap, momentum, sector, volume, price_setting, timing
+- 每條 content 一句話，要具體到可以直接影響決策
+
+## 回覆格式（JSON array，不要加 markdown 標記）
+[
+  {
+    "type": "entry",
+    "category": "price_setting",
+    "content": "突破回測型標的，買入價設前高回測位而非突破價上方，4/10 三檔因買入價設太高而錯過"
+  },
+  {
+    "type": "screening",
+    "category": "volume",
+    "content": "連續 3 天量縮的標的即使技術面過關也應降低優先級，4/10 兩檔量縮標的全部未達標"
+  }
+]
+PROMPT;
+
+        try {
+            $response = Http::timeout(60)
+                ->withHeaders([
+                    'x-api-key' => $this->apiKey,
+                    'anthropic-version' => '2023-06-01',
+                    'content-type' => 'application/json',
+                ])
+                ->post('https://api.anthropic.com/v1/messages', [
+                    'model' => $this->model,
+                    'max_tokens' => 2048,
+                    'messages' => [
+                        ['role' => 'user', 'content' => $prompt],
+                    ],
+                ]);
+
+            if (!$response->successful()) {
+                Log::error('DailyReviewService extractLessons API error: ' . $response->body());
+                return;
+            }
+
+            $text = trim($response->json('content.0.text', ''));
+            $text = preg_replace('/^```json?\s*/i', '', $text);
+            $text = preg_replace('/\s*```$/', '', $text);
+
+            $lessons = json_decode($text, true);
+            if (!is_array($lessons)) {
+                Log::error('DailyReviewService: 無法解析教訓 JSON');
+                return;
+            }
+
+            $expiresAt = now()->addDays(14)->toDateString();
+            $validTypes = ['screening', 'calibration', 'entry', 'exit', 'market'];
+            $count = 0;
+
+            foreach ($lessons as $lesson) {
+                if (empty($lesson['content']) || empty($lesson['type'])) continue;
+                if (!in_array($lesson['type'], $validTypes)) continue;
+
+                AiLesson::create([
+                    'trade_date' => $date,
+                    'type' => $lesson['type'],
+                    'category' => $lesson['category'] ?? null,
+                    'content' => $lesson['content'],
+                    'expires_at' => $expiresAt,
+                ]);
+                $count++;
+            }
+
+            Log::info("DailyReviewService: 從 {$date} 檢討萃取 {$count} 條教訓");
+        } catch (\Exception $e) {
+            Log::error('DailyReviewService extractLessons: ' . $e->getMessage());
+        }
     }
 
     private function callApiStreaming(string $prompt, ?\Closure $onChunk = null): string

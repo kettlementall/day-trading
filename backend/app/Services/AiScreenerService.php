@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\DailyQuote;
 use Illuminate\Support\Collection;
@@ -151,6 +152,9 @@ class AiScreenerService
         $klineTsv = $klineHeader . "\n" . implode("\n", $klineRows);
         $totalCount = $candidates->count();
 
+        // 注入近期教訓
+        $lessonsSection = AiLesson::getScreeningLessons();
+
         return <<<PROMPT
 你是台股當沖選股 AI 助手。以下是今日（{$tradeDate}）經規則式寬篩產出的 {$totalCount} 檔候選標的。
 
@@ -159,6 +163,8 @@ class AiScreenerService
 
 ## 近 5 日 K 線
 {$klineTsv}
+
+{$lessonsSection}
 
 ## 任務
 從上述候選池中選出最適合今日當沖的 10-15 檔標的。你可以：

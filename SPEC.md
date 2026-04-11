@@ -682,6 +682,30 @@ php artisan stock:backtest --validated --max-attempts=5
 
 **實作：** SSE 串流，前端透過 EventSource 接收 `log`（進度）、`chunk`（AI 串流文字片段）和 `done`（最終報告）事件。
 
+### 5.6 AI 教訓回饋迴路
+
+定義於 `DailyReviewService::extractLessons()` + `AiLesson` Model。
+
+**流程：** 每日檢討報告產出後 → 第二次 Claude 呼叫萃取結構化教訓 → 存入 `ai_lessons` 表 → 隔天 AI 選股/校準/滾動時自動注入 prompt。
+
+**教訓類型：**
+
+| type | 說明 | 注入目標 |
+|------|------|---------|
+| `screening` | 選股階段教訓 | AiScreenerService |
+| `calibration` | 開盤校準教訓 | IntradayAiAdvisor 校準 |
+| `entry` | 進場時機教訓 | AiScreenerService + IntradayAiAdvisor |
+| `exit` | 出場時機教訓 | IntradayAiAdvisor 滾動 |
+| `market` | 大盤/產業面教訓 | 全部 |
+
+**注入規則：**
+- 選股 prompt：注入 `screening` + `market` + `entry`，最多 20 條
+- 校準/滾動 prompt：注入 `calibration` + `entry` + `exit` + `market`，最多 15/10 條
+- 教訓預設 14 天過期，避免過時資訊干擾判斷
+- 同一交易日不重複萃取
+
+**category 分類：** breakout, bounce, gap, momentum, sector, volume, price_setting, timing
+
 ---
 
 ## 6. 資料表結構摘要
@@ -701,6 +725,7 @@ php artisan stock:backtest --validated --max-attempts=5
 | `screening_rules`     | 自訂篩選規則       | `conditions` (JSON), `is_active`, `sort_order`        |
 | `formula_settings`    | 公式參數設定       | `type`, `config` (JSON)                               |
 | `news_articles`       | 新聞文章           | `source`, `title`, `url`, `industry`, `sentiment_score`, `sentiment_label`, `ai_analysis`, `fetched_date`, `published_at` |
+| `ai_lessons`          | AI 教訓回饋       | `trade_date`, `type`(screening/calibration/entry/exit/market), `category`, `content`, `expires_at` |
 | `news_indices`        | 新聞指數           | `date`, `scope`, `scope_value`, `sentiment`, `heatmap`, `panic`, `international`, `article_count` |
 
 ---

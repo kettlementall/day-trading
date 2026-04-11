@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\DailyQuote;
@@ -265,6 +266,8 @@ class IntradayAiAdvisor
         }
         $klineTsv = "代號\t日期\t開\t高\t低\t收\t量\n" . implode("\n", $klineLines);
 
+        $lessonsSection = AiLesson::getIntradayLessons();
+
         return <<<PROMPT
 你是台股當沖 AI 助手。現在是 {$date} 09:05，開盤剛滿 5 分鐘。
 以下是今日 AI 選出的候選標的及其開盤數據。
@@ -274,6 +277,8 @@ class IntradayAiAdvisor
 
 ## 近 5 日 K 線
 {$klineTsv}
+
+{$lessonsSection}
 
 ## 任務
 根據開盤數據，對每檔標的做校準判斷：
@@ -340,6 +345,8 @@ PROMPT;
             );
         }
 
+        $lessonsSection = AiLesson::getIntradayLessons(10);
+
         return <<<PROMPT
 你是台股當沖 AI 助手。以下是 {$stock->symbol} {$stock->name} 的最近 30 分鐘快照。
 
@@ -348,6 +355,8 @@ PROMPT;
 
 ## 快照軌跡
 {$snapTsv}
+
+{$lessonsSection}
 
 ## 任務
 根據走勢判斷下一步動作：
