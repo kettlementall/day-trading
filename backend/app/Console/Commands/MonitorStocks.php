@@ -72,8 +72,10 @@ class MonitorStocks extends Command
         // ===== Step 3: 規則式監控（每次快照後） =====
         $this->monitorService->processSnapshot($date);
 
-        // ===== Step 4: AI 滾動判斷（每 30 分鐘） =====
-        if ($minute % 30 === 5 && $timeStr >= '09:35') { // 09:35, 10:05, 10:35, ...
+        // ===== Step 4: AI 滾動判斷（依時段動態頻率） =====
+        // 09:05-09:30 每10分 / 09:30-10:30 每15分 / 10:30-13:00 每20分 / 13:00-13:25 每10分
+        $aiInterval = $this->getAiInterval($hour, $minute);
+        if ($aiInterval > 0 && $minute % $aiInterval === 5 && $timeStr >= '09:15') {
             $this->performRollingAdvice($date);
         }
 
@@ -243,6 +245,16 @@ class MonitorStocks extends Command
             $hour === 9 || ($hour === 10 && $minute < 30) => 2,
             $hour >= 13 => 1,
             default => 3,
+        };
+    }
+
+    private function getAiInterval(int $hour, int $minute): int
+    {
+        return match (true) {
+            $hour === 9 && $minute < 30 => 10,
+            $hour === 9 || ($hour === 10 && $minute < 30) => 15,
+            $hour >= 13 => 10,
+            default => 20,
         };
     }
 

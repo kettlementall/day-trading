@@ -421,9 +421,18 @@ pending → watching → entry_signal → holding → target_hit
 | 持有 >60 分鐘且獲利 <0.5% | `closed`（時間停損） |
 | 13:25 | `closed`（強制平倉） |
 
-### AI 滾動建議（每 30 分鐘）
+### AI 滾動建議（依時段動態頻率）
 
 由 `IntradayAiAdvisor::rollingAdvice()` 對所有 active monitors 執行：
+
+| 時段 | 頻率 | 說明 |
+|------|------|------|
+| 09:05-09:30 | 每 10 分鐘 | 開盤最劇烈，需快速反應 |
+| 09:30-10:30 | 每 15 分鐘 | 早盤仍活躍 |
+| 10:30-13:00 | 每 20 分鐘 | 盤中趨緩 |
+| 13:00-13:25 | 每 10 分鐘 | 尾盤平倉決策 |
+
+一天約 20 次 AI call，Haiku 約 NT$15-25/天。
 
 - 接收近期快照 + 持倉狀態，呼叫 Claude API 給出 hold/adjust_target/adjust_stop/close 建議
 - MonitorService 根據建議調整目標/停損
