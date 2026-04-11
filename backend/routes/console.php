@@ -67,7 +67,11 @@ Schedule::command('stock:monitor-intraday')
     ->appendOutputTo($scheduleLog);
 
 // 每日 22:00 健康檢查（健康檢查自己會發通知，不重複）
+// 含：卡住 monitor 強制收尾 + 候選結果未回填重跑
 Schedule::command('stock:health-check')->dailyAt('22:00')->appendOutputTo($scheduleLog);
+
+// 每週日 03:00 清理過期資料（快照保留 30 天、AI 教訓過期刪除）
+Schedule::command('stock:cleanup')->weeklyOn(0, '03:00')->appendOutputTo($scheduleLog);
 
 // 每週一 07:00 自動執行帶驗證的回測優化（過去60天，最多10次嘗試）
 scheduledCommand('stock:backtest --validated', '週回測優化')->weeklyOn(1, '07:00');

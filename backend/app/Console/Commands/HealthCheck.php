@@ -3,10 +3,13 @@
 namespace App\Console\Commands;
 
 use App\Models\Candidate;
+use App\Models\CandidateMonitor;
 use App\Models\DailyQuote;
 use App\Models\InstitutionalTrade;
+use App\Models\MarketHoliday;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -69,7 +72,47 @@ class HealthCheck extends Command
             $checks[] = ['name' => '明日候選標的', 'status' => 'info', 'detail' => "尚未產出（{$nextTradeDate}）"];
         }
 
-        // 5. TWSE API
+        // 5. 卡住的 monitors 強制收尾
+        if (!MarketHoliday::isHoliday($date)) {
+            $stuckMonitors = CandidateMonitor::whereIn('status', [
+                    CandidateMonitor::STATUS_WATCHING,
+                    CandidateMonitor::STATUS_ENTRY_SIGNAL,
+                    CandidateMonitor::STATUS_HOLDING,
+                ])
+                ->whereHas('candidate', fn($q) => $q->where('trade_date', $date))
+                ->get();
+
+            if ($stuckMonitors->isNotEmpty()) {
+                foreach ($stuckMonitors as $m) {
+                    $oldStatus = $m->status;
+                    $stateLog = $m->state_log ?? [];
+                    $stateLog[] = [
+                        'from' => $oldStatus,
+                        'to' => CandidateMonitor::STATUS_CLOSED,
+                        'reason' => '健康檢查強制收尾（排程漏跑補償）',
+                        'at' => now()->toDateTimeString(),
+                    ];
+                    $m->update([
+                        'status' => CandidateMonitor::STATUS_CLOSED,
+                        'exit_time' => now(),
+                        'skip_reason' => '健康檢查強制收尾',
+                        'state_log' => $stateLog,
+                    ]);
+                }
+                $checks[] = ['name' => '卡住的監控', 'status' => 'warn',
+                    'detail' => "已強制關閉 {$stuckMonitors->count()} 筆卡住的 monitor"];
+            }
+        }
+
+        // 5b. 候選結果未回填 → 重跑
+        if (!MarketHoliday::isHoliday($date) && $todayCandidateCount > 0 && $resultCount === 0 && $quoteCount > 0) {
+            Artisan::call('stock:update-results', ['date' => $date]);
+            $retryCount = Candidate::where('trade_date', $date)->whereHas('result')->count();
+            $checks[] = ['name' => '結果補回填', 'status' => $retryCount > 0 ? 'ok' : 'warn',
+                'detail' => "重跑 update-results，回填 {$retryCount} 筆"];
+        }
+
+        // 6. TWSE API
         try {
             $response = Http::timeout(10)
                 ->get('https://www.twse.com.tw/exchangeReport/MI_INDEX', [
