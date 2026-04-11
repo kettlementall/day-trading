@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\IntradaySnapshot;
+use App\Models\MarketHoliday;
 use App\Services\BacktestService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,11 +24,18 @@ class CandidateController extends Controller
 
         $lastUpdatedAt = Candidate::where('trade_date', $date)->max('updated_at');
 
+        $holiday = MarketHoliday::where('date', $date)->first();
+        $isHoliday = MarketHoliday::isHoliday($date);
+
         return response()->json([
             'date' => $date,
             'count' => $candidates->count(),
             'data' => $candidates,
             'last_updated_at' => $lastUpdatedAt,
+            'is_holiday' => $isHoliday,
+            'holiday_name' => $isHoliday
+                ? ($holiday?->name ?? (\Carbon\Carbon::parse($date)->isWeekend() ? '週末' : null))
+                : null,
         ]);
     }
 

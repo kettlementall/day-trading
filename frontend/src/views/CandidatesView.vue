@@ -98,6 +98,10 @@
       <el-skeleton :rows="5" animated />
     </div>
 
+    <div v-else-if="store.isHoliday" class="empty-wrap">
+      <el-empty :description="'今日休市' + (store.holidayName ? '（' + store.holidayName + '）' : '')" :image-size="120" />
+    </div>
+
     <div v-else-if="store.candidates.length === 0" class="empty-wrap">
       <el-empty description="今日尚無候選標的" />
     </div>
