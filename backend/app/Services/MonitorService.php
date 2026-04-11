@@ -208,6 +208,13 @@ class MonitorService
         $trajectory = $this->classifyTrajectory($snapshots);
         if ($trajectory === 'weakness') {
             Log::info("MonitorService: {$stock->symbol} 走弱到價，不進場");
+            $this->telegram->send(sprintf(
+                "[走弱] %s %s 走弱到價 %.2f，不進場 | 外盤 %.0f%%",
+                $stock->symbol,
+                $stock->name,
+                $price,
+                (float) $latest->external_ratio
+            ));
             return;
         }
 
