@@ -13,6 +13,7 @@ export const useCandidateStore = defineStore('candidates', () => {
   const lastUpdatedAt = ref('')
   const isHoliday = ref(false)
   const holidayName = ref('')
+  const usIndices = ref([])
 
   // 依盤前確認狀態篩選
   const filteredCandidates = computed(() => {
@@ -82,6 +83,7 @@ export const useCandidateStore = defineStore('candidates', () => {
       lastUpdatedAt.value = data.last_updated_at || ''
       isHoliday.value = data.is_holiday || false
       holidayName.value = data.holiday_name || ''
+      usIndices.value = data.us_indices || []
     } finally {
       loading.value = false
     }
@@ -156,7 +158,7 @@ export const useCandidateStore = defineStore('candidates', () => {
   return {
     candidates, currentDate, dates, stats, loading,
     morningFilter, filteredCandidates, morningSummary, lastUpdatedAt,
-    isHoliday, holidayName,
+    isHoliday, holidayName, usIndices,
     monitors, monitorLoading, activeMonitors, completedMonitors,
     reviewing, reviewLogs, reviewResult, reviewStreamText,
     fetchCandidates, fetchDates, fetchStats,

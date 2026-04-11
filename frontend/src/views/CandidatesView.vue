@@ -17,6 +17,20 @@
       </div>
     </div>
 
+    <!-- 美股指數 -->
+    <div v-if="store.usIndices.length" class="us-indices-bar">
+      <span
+        v-for="idx in store.usIndices"
+        :key="idx.symbol"
+        class="us-index-item"
+      >
+        <span class="us-index-name">{{ idx.name }}</span>
+        <span :class="idx.change_percent >= 0 ? 'price-up' : 'price-down'">
+          {{ idx.change_percent >= 0 ? '+' : '' }}{{ idx.change_percent }}%
+        </span>
+      </span>
+    </div>
+
     <!-- 盤前確認摘要 & 篩選 -->
     <div v-if="store.morningSummary.screened > 0" class="morning-summary">
       <div class="summary-stats">
@@ -380,6 +394,27 @@ function monitorStatusLabel(status) {
   font-size: 11px;
   color: #909399;
   white-space: nowrap;
+}
+
+.us-indices-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.us-index-item {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.us-index-name {
+  color: #909399;
 }
 
 .morning-summary {

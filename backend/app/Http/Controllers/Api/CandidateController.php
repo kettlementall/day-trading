@@ -7,6 +7,7 @@ use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\IntradaySnapshot;
 use App\Models\MarketHoliday;
+use App\Models\UsMarketIndex;
 use App\Services\BacktestService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -28,6 +29,13 @@ class CandidateController extends Controller
         $holiday = MarketHoliday::where('date', $date)->first();
         $isHoliday = MarketHoliday::isHoliday($date);
 
+        $usIndices = UsMarketIndex::where('date', $date)->get()->map(fn($i) => [
+            'symbol' => $i->symbol,
+            'name' => $i->name,
+            'close' => (float) $i->close,
+            'change_percent' => (float) $i->change_percent,
+        ]);
+
         return response()->json([
             'date' => $date,
             'count' => $candidates->count(),
@@ -37,6 +45,7 @@ class CandidateController extends Controller
             'holiday_name' => $isHoliday
                 ? ($holiday?->name ?? (\Carbon\Carbon::parse($date)->isWeekend() ? '週末' : null))
                 : null,
+            'us_indices' => $usIndices,
         ]);
     }
 
