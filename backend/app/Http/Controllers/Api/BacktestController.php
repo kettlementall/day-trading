@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\BacktestRound;
+use App\Models\DailyReview;
 use App\Services\BacktestOptimizer;
 use App\Services\BacktestService;
 use App\Services\DailyReviewService;
@@ -82,6 +83,39 @@ class BacktestController extends Controller
             'Connection' => 'keep-alive',
             'X-Accel-Buffering' => 'no',
         ]);
+    }
+
+    /**
+     * 取得已存的檢討報告
+     */
+    public function dailyReviewShow(Request $request): JsonResponse
+    {
+        $date = $request->input('date', now()->subDay()->toDateString());
+
+        $review = DailyReview::where('trade_date', $date)->first();
+
+        if (!$review) {
+            return response()->json(['exists' => false]);
+        }
+
+        return response()->json([
+            'exists' => true,
+            'date' => $review->trade_date->format('Y-m-d'),
+            'candidates_count' => $review->candidates_count,
+            'report' => $review->report,
+        ]);
+    }
+
+    /**
+     * 取得所有有報告的日期列表
+     */
+    public function dailyReviewDates(): JsonResponse
+    {
+        $dates = DailyReview::orderByDesc('trade_date')
+            ->pluck('trade_date')
+            ->map(fn($d) => $d->format('Y-m-d'));
+
+        return response()->json($dates);
     }
 
     /**

@@ -134,14 +134,37 @@
               size="small"
               style="width: 110px"
               placeholder="選擇日期"
+              @change="loadReview"
             />
-            <el-button type="warning" size="small" :loading="store.reviewing" @click="runDailyReview">
+            <el-button
+              v-if="!store.reviewResult?.report || store.reviewing"
+              type="warning"
+              size="small"
+              :loading="store.reviewing"
+              @click="runDailyReview"
+            >
               產出報告
+            </el-button>
+            <el-button
+              v-else
+              type="info"
+              size="small"
+              plain
+              @click="runDailyReview"
+            >
+              重新產出
             </el-button>
           </div>
         </div>
 
-        <div v-if="store.reviewing || store.reviewResult" class="validation-section">
+        <div v-if="reviewLoading" class="validation-section">
+          <div class="validation-status">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>載入報告中...</span>
+          </div>
+        </div>
+
+        <div v-else-if="store.reviewing || store.reviewResult" class="validation-section">
           <div v-if="store.reviewing" class="validation-status">
             <el-icon class="is-loading"><Loading /></el-icon>
             <span>AI 分析中...</span>
@@ -195,7 +218,8 @@ const days = ref(30)
 const loading = ref(false)
 const stats = computed(() => store.stats)
 const reviewLogBox = ref(null)
-const reviewDate = ref(dayjs().format('YYYY-MM-DD'))
+const reviewDate = ref(dayjs().subtract(1, 'day').format('YYYY-MM-DD'))
+const reviewLoading = ref(false)
 
 async function fetchData() {
   loading.value = true
@@ -203,6 +227,15 @@ async function fetchData() {
     await store.fetchStats(days.value)
   } finally {
     loading.value = false
+  }
+}
+
+async function loadReview() {
+  reviewLoading.value = true
+  try {
+    await store.fetchDailyReview(reviewDate.value)
+  } finally {
+    reviewLoading.value = false
   }
 }
 
@@ -275,7 +308,10 @@ const chartOption = computed(() => {
   }
 })
 
-onMounted(() => fetchData())
+onMounted(() => {
+  fetchData()
+  loadReview()
+})
 </script>
 
 <style scoped>

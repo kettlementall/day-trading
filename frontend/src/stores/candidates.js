@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getCandidates, getCandidateDates, getCandidateStats, getDailyReviewUrl, getMonitorStatus } from '../api'
+import { getCandidates, getCandidateDates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getMonitorStatus } from '../api'
 import dayjs from 'dayjs'
 
 export const useCandidateStore = defineStore('candidates', () => {
@@ -105,6 +105,25 @@ export const useCandidateStore = defineStore('candidates', () => {
   }
 
   const reviewStreamText = ref('')
+  const reviewDates = ref([])
+
+  async function fetchReviewDates() {
+    const { data } = await getDailyReviewDates()
+    reviewDates.value = data
+  }
+
+  async function fetchDailyReview(date) {
+    const { data } = await getDailyReviewShow(date)
+    if (data.exists) {
+      reviewResult.value = {
+        date: data.date,
+        candidates_count: data.candidates_count,
+        report: data.report,
+      }
+    } else {
+      reviewResult.value = null
+    }
+  }
 
   function dailyReview(date) {
     reviewing.value = true
@@ -160,9 +179,9 @@ export const useCandidateStore = defineStore('candidates', () => {
     morningFilter, filteredCandidates, morningSummary, lastUpdatedAt,
     isHoliday, holidayName, usIndices,
     monitors, monitorLoading, activeMonitors, completedMonitors,
-    reviewing, reviewLogs, reviewResult, reviewStreamText,
+    reviewing, reviewLogs, reviewResult, reviewStreamText, reviewDates,
     fetchCandidates, fetchDates, fetchStats,
     fetchMonitors, startMonitorPolling, stopMonitorPolling,
-    dailyReview,
+    fetchReviewDates, fetchDailyReview, dailyReview,
   }
 })

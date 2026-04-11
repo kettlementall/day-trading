@@ -46,6 +46,8 @@ Route::post('/backtest/optimize', [BacktestController::class, 'optimize']);
 Route::get('/backtest/optimize-validated', [BacktestController::class, 'optimizeValidated']);
 Route::post('/backtest/rounds/{round}/apply', [BacktestController::class, 'apply']);
 Route::get('/backtest/daily-review', [BacktestController::class, 'dailyReview']);
+Route::get('/backtest/daily-review-show', [BacktestController::class, 'dailyReviewShow']);
+Route::get('/backtest/daily-review-dates', [BacktestController::class, 'dailyReviewDates']);
 
 // 系統規格
 Route::get('/spec', function () {

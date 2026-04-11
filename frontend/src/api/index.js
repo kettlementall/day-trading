@@ -83,6 +83,12 @@ export const getDailyReviewUrl = (date) => {
   return `${base}/backtest/daily-review?date=${date}`
 }
 
+export const getDailyReviewShow = (date) =>
+  api.get('/backtest/daily-review-show', { params: { date } })
+
+export const getDailyReviewDates = () =>
+  api.get('/backtest/daily-review-dates')
+
 // 系統規格
 export const getSpec = () =>
   api.get('/spec')

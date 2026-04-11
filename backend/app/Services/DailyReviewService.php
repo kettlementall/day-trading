@@ -6,6 +6,7 @@ use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\DailyQuote;
+use App\Models\DailyReview;
 use App\Models\IntradayQuote;
 use App\Models\NewsIndex;
 use Illuminate\Support\Facades\Http;
@@ -85,7 +86,13 @@ class DailyReviewService
 
         $log("分析完成");
 
-        // 從報告中萃取結構化教訓，非同步不影響回傳
+        // 存入 DB（同日覆蓋）
+        DailyReview::updateOrCreate(
+            ['trade_date' => $date],
+            ['candidates_count' => $candidates->count(), 'report' => $report]
+        );
+
+        // 從報告中萃取結構化教訓
         try {
             $this->extractLessons($date, $report);
             $log("教訓萃取完成");

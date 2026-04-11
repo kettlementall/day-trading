@@ -28,6 +28,7 @@
 | 18:00 | `news:fetch`                | 盤後新聞抓取                   |
 | 18:15 | `news:compute-indices`      | 計算新聞指數                   |
 | 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 結果未回填重跑） |
+| 15:30 | `stock:daily-review`        | 自動產出前日 AI 檢討報告 + 萃取教訓（依賴 15:00 結果回填） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除） |
 
 > `stock:backtest --validated` 已停用自動排程（AI 覆蓋價格後，調整規則式公式參數意義不大）。指令保留可手動執行回測指標檢視。
@@ -677,9 +678,11 @@ php artisan stock:backtest --validated --max-attempts=5
 
 **排程：** 已停用自動排程（AI 覆蓋價格後，調整規則式公式參數意義不大）。指令保留可手動執行。
 
-### 5.5 單日 AI 檢討報告（`/api/backtest/daily-review`）
+### 5.5 單日 AI 檢討報告
 
-定義於 `DailyReviewService`，透過前端 StatsView 的「單日 AI 檢討」區塊觸發。
+定義於 `DailyReviewService`，每日 15:30 由 `stock:daily-review` 排程自動執行，也可透過前端 StatsView 手動觸發。
+
+**報告持久化：** 報告存入 `daily_reviews` 資料表（`trade_date` unique），同日重跑會覆蓋。前端切換日期時自動載入已存報告，不需重跑。
 
 **用途：** 針對單一交易日的候選標的，分析每檔為什麼買入可達/不可達、目標可達/不可達。不做參數調整，只產出診斷報告。
 
@@ -748,6 +751,7 @@ php artisan stock:backtest --validated --max-attempts=5
 | `formula_settings`    | 公式參數設定       | `type`, `config` (JSON)                               |
 | `news_articles`       | 新聞文章           | `source`, `title`, `url`, `industry`, `sentiment_score`, `sentiment_label`, `ai_analysis`, `fetched_date`, `published_at` |
 | `ai_lessons`          | AI 教訓回饋       | `trade_date`, `type`(screening/calibration/entry/exit/market), `category`, `content`, `expires_at` |
+| `daily_reviews`       | AI 檢討報告       | `trade_date`(unique), `candidates_count`, `report`(longText) |
 | `market_holidays`     | 休市日             | `date`(unique), `name`（假日名稱） |
 | `us_market_indices`   | 美股指數           | `date`, `symbol`(^GSPC/^SOX/^DJI/^IXIC/DX-Y.NYB), `name`, `close`, `prev_close`, `change_percent` |
 | `news_indices`        | 新聞指數           | `date`, `scope`, `scope_value`, `sentiment`, `heatmap`, `panic`, `international`, `article_count` |
@@ -780,7 +784,9 @@ php artisan stock:backtest --validated --max-attempts=5
 | GET    | `/api/backtest/rounds`    | 回測優化歷史列表        |
 | POST   | `/api/backtest/optimize`  | 觸發 AI 優化分析        |
 | POST   | `/api/backtest/rounds/{id}/apply` | 套用優化建議  |
-| GET    | `/api/backtest/daily-review` | 單日 AI 檢討報告（SSE） |
+| GET    | `/api/backtest/daily-review` | 單日 AI 檢討報告（SSE 串流產出） |
+| GET    | `/api/backtest/daily-review-show` | 讀取已存的檢討報告 |
+| GET    | `/api/backtest/daily-review-dates` | 有報告的日期列表 |
 | GET    | `/api/spec`               | 系統規格文件（SPEC.md）  |
 
 ---
@@ -856,7 +862,7 @@ AI 監控指標（有 monitor 資料時顯示）：
 
 可達率趨勢圖（折線圖）+ 策略分類分析（bounce vs breakout）。
 
-**單日 AI 檢討**：選擇日期後產出 AI 覆盤報告（SSE 串流），分析每檔標的的決策品質，並自動萃取教訓寫入 `ai_lessons`。
+**單日 AI 檢討**：切換日期時自動載入已存報告（來自排程或先前手動觸發）。若無報告，點「產出報告」即時生成（SSE 串流）。已有報告時按鈕變為「重新產出」。報告完成後自動萃取教訓寫入 `ai_lessons`。
 
 > 前端已移除 AI 公式優化面板（排程已停用，見 §5.4）。後端 API 保留可手動觸發。
 
