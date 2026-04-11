@@ -29,7 +29,8 @@
 | 18:15 | `news:compute-indices`      | 計算新聞指數                   |
 | 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 結果未回填重跑） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除） |
-| 週一 07:00 | `stock:backtest --validated` | 帶驗證的自動回測優化（過去60天，最多10次嘗試）  |
+
+> `stock:backtest --validated` 已停用自動排程（AI 覆蓋價格後，調整規則式公式參數意義不大）。指令保留可手動執行回測指標檢視。
 
 ### 資料依賴流程
 

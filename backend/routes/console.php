@@ -74,5 +74,6 @@ Schedule::command('stock:health-check')->dailyAt('22:00')->appendOutputTo($sched
 // 每週日 03:00 清理過期資料（快照保留 30 天、AI 教訓過期刪除）
 Schedule::command('stock:cleanup')->weeklyOn(0, '03:00')->appendOutputTo($scheduleLog);
 
-// 每週一 07:00 自動執行帶驗證的回測優化（過去60天，最多10次嘗試）
-scheduledCommand('stock:backtest --validated', '週回測優化')->weeklyOn(1, '07:00');
+// 回測優化已停用（AI 覆蓋價格後，調整規則式公式參數意義不大）
+// 指令 stock:backtest --validated 保留可手動執行
+// scheduledCommand('stock:backtest --validated', '週回測優化')->weeklyOn(1, '07:00');
