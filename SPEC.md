@@ -675,7 +675,7 @@ php artisan stock:backtest --validated --max-attempts=5
 | 每日候選數 < 5                           | 放寬 `high_volatility.min_amplitude`                 |
 | 每日候選數 > 15                          | 收緊 `volume_surge.ratio`                            |
 
-**排程：** 每週一 07:00 自動執行帶驗證的優化循環（`stock:backtest --validated`，過去 60 天，最多 10 次嘗試）。
+**排程：** 已停用自動排程（AI 覆蓋價格後，調整規則式公式參數意義不大）。指令保留可手動執行。
 
 ### 5.5 單日 AI 檢討報告（`/api/backtest/daily-review`）
 
@@ -810,9 +810,15 @@ php artisan stock:backtest --validated --max-attempts=5
 | `/spec`   | `SpecView`          | 系統規格書            |
 | `/stock/:id` | `StockDetailView`| 個股詳情（K線）      |
 
-### CandidatesView 候選標的卡片
+### CandidatesView 候選標的
 
-每張候選標的卡片顯示以下 AI 資訊：
+頁面頂部顯示：
+
+- **美股指數列**：S&P 500、費半、道瓊、那斯達克、美元指數的昨夜漲跌幅（紅漲綠跌），資料來自 `us_market_indices`
+- **休市提示**：週末或國定假日顯示「今日休市（假日名稱）」，取代「今日尚無候選標的」
+- **盤前確認摘要**：候選數 / 盤前確認通過數 / 篩選 radio
+
+每張候選標的卡片顯示：
 
 - **AI 選股 badge**：顯示 AI 選入/未選入狀態 + 加減分（如 `AI +8`）
 - **策略標籤**：intraday_strategy（breakout_fresh / breakout_retest / gap_pullback / bounce / momentum）
@@ -820,6 +826,7 @@ php artisan stock:backtest --validated --max-attempts=5
 - **AI 價格理由**：`ai_price_reasoning`，解釋買入/目標/停損價的設定依據
 - **AI 警告**：`ai_warnings` 以 chip 標籤顯示
 - **參考支撐/壓力位**：`reference_support` / `reference_resistance`
+- **AI 排除樣式**：未被 AI 選入的標的（`ai_selected=false`）以半透明 + 紅色左邊框 + 「AI 排除」標籤顯示，排在列表後方
 
 ### 盤中監控面板
 
@@ -833,12 +840,25 @@ php artisan stock:backtest --validated --max-attempts=5
 
 ### StatsView 績效統計
 
-新增 AI 監控相關指標卡片：
+核心指標卡片：候選標的數、已驗證、買入可達率、目標可達率、雙達率、期望值。
 
+AI 監控指標（有 monitor 資料時顯示）：
+
+- `ai_approval_rate`：AI 通過率
+- `valid_entry_rate`：有效進場率
+- `avg_mfe` / `avg_mae`：平均 MFE / MAE
 - `profit_if_valid_entry`：有效進場的平均報酬
 - `avg_holding_minutes`：平均持有時間
 - `ai_override_accuracy`：AI 覆蓋準確率
 - `effective_rr`：實際風報比
+
+輔助指標：停損觸及率、平均買入間距、平均目標間距、平均風報比。
+
+可達率趨勢圖（折線圖）+ 策略分類分析（bounce vs breakout）。
+
+**單日 AI 檢討**：選擇日期後產出 AI 覆盤報告（SSE 串流），分析每檔標的的決策品質，並自動萃取教訓寫入 `ai_lessons`。
+
+> 前端已移除 AI 公式優化面板（排程已停用，見 §5.4）。後端 API 保留可手動觸發。
 
 ---
 
