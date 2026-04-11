@@ -5,8 +5,10 @@ namespace App\Console\Commands;
 use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\DailyQuote;
+use App\Models\DailyReview;
 use App\Models\InstitutionalTrade;
 use App\Models\MarketHoliday;
+use App\Models\UsMarketIndex;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Artisan;
@@ -22,39 +24,50 @@ class HealthCheck extends Command
     {
         $date = $this->argument('date') ?? now()->format('Y-m-d');
         $checks = [];
+        $isHoliday = MarketHoliday::isHoliday($date);
 
-        // 1. 每日行情
-        $quoteCount = DailyQuote::where('date', $date)->count();
-        if ($quoteCount === 0) {
-            $checks[] = ['name' => '每日行情', 'status' => 'error', 'detail' => "0 筆（預期 > 800）"];
-        } elseif ($quoteCount < 800) {
-            $checks[] = ['name' => '每日行情', 'status' => 'warn', 'detail' => "{$quoteCount} 筆（預期 > 800）"];
-        } else {
-            $checks[] = ['name' => '每日行情', 'status' => 'ok', 'detail' => "{$quoteCount} 筆"];
+        if ($isHoliday) {
+            $checks[] = ['name' => '休市日', 'status' => 'info', 'detail' => '今日休市，市場資料檢查跳過'];
         }
 
-        // 2. 三大法人
-        $instCount = InstitutionalTrade::where('date', $date)->count();
-        if ($instCount === 0) {
-            $checks[] = ['name' => '三大法人', 'status' => 'error', 'detail' => "0 筆（預期 > 800）"];
-        } elseif ($instCount < 800) {
-            $checks[] = ['name' => '三大法人', 'status' => 'warn', 'detail' => "{$instCount} 筆（預期 > 800）"];
-        } else {
-            $checks[] = ['name' => '三大法人', 'status' => 'ok', 'detail' => "{$instCount} 筆"];
+        // 1. 每日行情（休市日跳過）
+        if (!$isHoliday) {
+            $quoteCount = DailyQuote::where('date', $date)->count();
+            if ($quoteCount === 0) {
+                $checks[] = ['name' => '每日行情', 'status' => 'error', 'detail' => "0 筆（預期 > 800）"];
+            } elseif ($quoteCount < 800) {
+                $checks[] = ['name' => '每日行情', 'status' => 'warn', 'detail' => "{$quoteCount} 筆（預期 > 800）"];
+            } else {
+                $checks[] = ['name' => '每日行情', 'status' => 'ok', 'detail' => "{$quoteCount} 筆"];
+            }
         }
 
-        // 3. 價格合理性
-        $badPrices = DailyQuote::where('date', $date)
-            ->where(function ($q) {
-                $q->where('close', '<=', 0)
-                    ->orWhere('open', '<=', 0)
-                    ->orWhereColumn('high', '<', 'low');
-            })
-            ->count();
-        if ($badPrices > 0) {
-            $checks[] = ['name' => '價格合理性', 'status' => 'error', 'detail' => "{$badPrices} 筆異常（收盤<=0 或 高<低）"];
-        } else {
-            $checks[] = ['name' => '價格合理性', 'status' => 'ok', 'detail' => '通過'];
+        // 2. 三大法人（休市日跳過）
+        if (!$isHoliday) {
+            $instCount = InstitutionalTrade::where('date', $date)->count();
+            if ($instCount === 0) {
+                $checks[] = ['name' => '三大法人', 'status' => 'error', 'detail' => "0 筆（預期 > 800）"];
+            } elseif ($instCount < 800) {
+                $checks[] = ['name' => '三大法人', 'status' => 'warn', 'detail' => "{$instCount} 筆（預期 > 800）"];
+            } else {
+                $checks[] = ['name' => '三大法人', 'status' => 'ok', 'detail' => "{$instCount} 筆"];
+            }
+        }
+
+        // 3. 價格合理性（休市日跳過）
+        if (!$isHoliday) {
+            $badPrices = DailyQuote::where('date', $date)
+                ->where(function ($q) {
+                    $q->where('close', '<=', 0)
+                        ->orWhere('open', '<=', 0)
+                        ->orWhereColumn('high', '<', 'low');
+                })
+                ->count();
+            if ($badPrices > 0) {
+                $checks[] = ['name' => '價格合理性', 'status' => 'error', 'detail' => "{$badPrices} 筆異常（收盤<=0 或 高<低）"];
+            } else {
+                $checks[] = ['name' => '價格合理性', 'status' => 'ok', 'detail' => '通過'];
+            }
         }
 
         // 4. 候選標的
@@ -73,7 +86,7 @@ class HealthCheck extends Command
         }
 
         // 5. 卡住的 monitors 強制收尾
-        if (!MarketHoliday::isHoliday($date)) {
+        if (!$isHoliday) {
             $stuckMonitors = CandidateMonitor::whereIn('status', [
                     CandidateMonitor::STATUS_WATCHING,
                     CandidateMonitor::STATUS_ENTRY_SIGNAL,
@@ -105,11 +118,33 @@ class HealthCheck extends Command
         }
 
         // 5b. 候選結果未回填 → 重跑
-        if (!MarketHoliday::isHoliday($date) && $todayCandidateCount > 0 && $resultCount === 0 && $quoteCount > 0) {
+        if (!$isHoliday && $todayCandidateCount > 0 && $resultCount === 0 && $quoteCount > 0) {
             Artisan::call('stock:update-results', ['date' => $date]);
             $retryCount = Candidate::where('trade_date', $date)->whereHas('result')->count();
             $checks[] = ['name' => '結果補回填', 'status' => $retryCount > 0 ? 'ok' : 'warn',
                 'detail' => "重跑 update-results，回填 {$retryCount} 筆"];
+        }
+
+        // 5c. AI 檢討報告未產出 → 補跑（檢查前一交易日）
+        if (!$isHoliday) {
+            $hasReview = DailyReview::where('trade_date', $date)->exists();
+            if (!$hasReview && $todayCandidateCount > 0 && $resultCount > 0) {
+                Artisan::call('stock:daily-review', ['date' => $date]);
+                $hasReview = DailyReview::where('trade_date', $date)->exists();
+                $checks[] = ['name' => 'AI 檢討報告', 'status' => $hasReview ? 'ok' : 'warn',
+                    'detail' => $hasReview ? '補跑成功' : '補跑失敗'];
+            } elseif ($hasReview) {
+                $checks[] = ['name' => 'AI 檢討報告', 'status' => 'ok', 'detail' => '已產出'];
+            }
+        }
+
+        // 5d. 美股指數檢查
+        $usIndexCount = UsMarketIndex::where('date', $date)->count();
+        if ($usIndexCount === 0) {
+            // 美股也有休市日，用 warn 而非 error
+            $checks[] = ['name' => '美股指數', 'status' => 'warn', 'detail' => '今日無資料（可能美股休市）'];
+        } else {
+            $checks[] = ['name' => '美股指數', 'status' => 'ok', 'detail' => "{$usIndexCount} 筆"];
         }
 
         // 6. TWSE API
