@@ -6,6 +6,7 @@ use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\DailyQuote;
 use App\Models\IntradaySnapshot;
+use App\Models\MarketHoliday;
 use App\Models\Stock;
 use App\Services\IntradayAiAdvisor;
 use App\Services\MonitorService;
@@ -29,6 +30,12 @@ class MonitorStocks extends Command
     public function handle(): int
     {
         $date = $this->argument('date') ?? now()->format('Y-m-d');
+
+        if (MarketHoliday::isHoliday($date)) {
+            $this->line("今日（{$date}）休市，跳過監控");
+            return self::SUCCESS;
+        }
+
         $now = now();
         $hour = (int) $now->format('H');
         $minute = (int) $now->format('i');

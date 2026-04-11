@@ -44,6 +44,12 @@
                                               13:25 強制平倉 → 15:00 盤後結果回填
 ```
 
+### 休市日檢查
+
+`stock:ai-screen` 和 `stock:monitor-intraday` 開頭檢查 `MarketHoliday::isHoliday()`，週末或國定假日自動跳過。
+
+休市日資料由 `stock:import-holidays {year}` 指令匯入（每年更新一次），定義在 `ImportMarketHolidays.php` 內。
+
 ### 排程日誌
 
 所有排程指令的 stdout 輸出皆追加寫入 `storage/logs/schedule.log`，可用於確認各指令是否有實際執行。
@@ -739,6 +745,7 @@ php artisan stock:backtest --validated --max-attempts=5
 | `formula_settings`    | 公式參數設定       | `type`, `config` (JSON)                               |
 | `news_articles`       | 新聞文章           | `source`, `title`, `url`, `industry`, `sentiment_score`, `sentiment_label`, `ai_analysis`, `fetched_date`, `published_at` |
 | `ai_lessons`          | AI 教訓回饋       | `trade_date`, `type`(screening/calibration/entry/exit/market), `category`, `content`, `expires_at` |
+| `market_holidays`     | 休市日             | `date`(unique), `name`（假日名稱） |
 | `news_indices`        | 新聞指數           | `date`, `scope`, `scope_value`, `sentiment`, `heatmap`, `panic`, `international`, `article_count` |
 
 ---

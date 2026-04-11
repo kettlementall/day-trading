@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Candidate;
+use App\Models\MarketHoliday;
 use App\Services\AiScreenerService;
 use App\Services\StockScreener;
 use App\Services\TelegramService;
@@ -16,6 +17,11 @@ class AiScreenCandidates extends Command
     public function handle(StockScreener $screener, AiScreenerService $aiScreener, TelegramService $telegram): int
     {
         $date = $this->argument('date') ?? now()->format('Y-m-d');
+
+        if (MarketHoliday::isHoliday($date)) {
+            $this->info("今日（{$date}）休市，跳過選股");
+            return self::SUCCESS;
+        }
 
         // Step 1: 規則式寬篩（門檻降至 45）
         $this->info("Step 1: 規則式寬篩（min_score=45），交易日: {$date}");
