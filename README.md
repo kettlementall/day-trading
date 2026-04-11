@@ -1,33 +1,42 @@
 # 台股當沖選股助手
 
-每日自動篩選可操作的當沖標的，包含建議買入價、目標獲利價、停損價。
+AI 驅動的台股當沖全流程系統：選股 → 開盤校準 → 盤中監控 → 動態出場 → 每日覆盤學習。
 
-## 技術架構
+## 系統架構
 
 - **後端**: Laravel 11 + PHP 8.3
 - **前端**: Vue 3 + Vite + Element Plus + ECharts（手機優先 RWD）
 - **資料庫**: MySQL 8 + Redis
+- **AI**: Claude API（Haiku）— 選股審核、開盤校準、盤中滾動建議、每日覆盤
+- **通知**: Telegram Bot
 - **部署**: Docker Compose
+
+## 核心流程
+
+```
+06:00  抓取美股指數 + 隔夜新聞
+08:00  規則式寬篩（30-50 檔）→ AI 審核選出 10-15 檔 + 策略標籤 + 價格覆蓋
+09:00  盤中快照開始（動態頻率 1-3 分鐘）
+09:05  AI 開盤校準（通過/否決 + 調整目標停損）
+09:05+ 規則式監控 + AI 滾動建議（10-20 分鐘）
+13:25  強制平倉
+15:00  盤後結果回填
+15:30  AI 每日檢討 → 萃取教訓 → 注入隔天 AI prompt
+```
 
 ## 快速啟動
 
 ```bash
-cd day-trading
-
-# 複製環境設定
 cp backend/.env.example backend/.env
+# 設定 ANTHROPIC_API_KEY 和 TELEGRAM_BOT_TOKEN
 
-# 啟動所有服務
 docker compose up -d
-
-# 安裝 PHP 依賴
 docker compose exec php composer install
-
-# 產生 APP KEY
 docker compose exec php php artisan key:generate
-
-# 執行資料庫遷移 + 預設資料
 docker compose exec php php artisan migrate --seed
+
+# 匯入休市日（每年執行一次）
+docker compose exec php php artisan stock:import-holidays 2026
 ```
 
 ## 存取
@@ -35,25 +44,40 @@ docker compose exec php php artisan migrate --seed
 - 前端: http://localhost:5173
 - 後端 API: http://localhost:8000/api
 
-## 每日操作指令
+## 前端頁面
+
+| 路由 | 說明 |
+|------|------|
+| `/` | 候選標的（美股指數、盤中監控、AI 標籤） |
+| `/history` | 歷史紀錄 |
+| `/stats` | 績效統計 + 單日 AI 檢討報告 |
+| `/news` | 消息面儀表板 |
+| `/settings` | 篩選規則 + 公式設定 |
+| `/spec` | 系統規格書 |
+| `/stock/:id` | 個股 K 線詳情 |
+
+## 手動指令
 
 ```bash
-# 抓取當日行情（收盤後執行）
+# AI 選股（通常由排程自動執行）
+docker compose exec php php artisan stock:ai-screen
+
+# 抓取當日行情
 docker compose exec php php artisan stock:fetch-daily
 
-# 抓取三大法人
-docker compose exec php php artisan stock:fetch-institutional
+# 盤中監控（排程每分鐘觸發）
+docker compose exec php php artisan stock:monitor-intraday
 
-# 抓取融資融券
-docker compose exec php php artisan stock:fetch-margin
+# 產出指定日期的 AI 檢討報告
+docker compose exec php php artisan stock:daily-review 2026-04-10
 
-# 執行選股（產出隔日候選清單）
-docker compose exec php php artisan stock:screen-candidates
+# 健康檢查（卡住 monitor 收尾 + 結果補跑）
+docker compose exec php php artisan stock:health-check
 
-# 更新盤後結果
-docker compose exec php php artisan stock:update-results
+# 回測指標查看
+docker compose exec php php artisan stock:backtest --from=2026-03-01 --to=2026-04-10
 ```
 
-以上指令已設定 Laravel Scheduler 自動排程，Docker 啟動後會自動執行。
+所有排程已設定 Laravel Scheduler，Docker 啟動後自動執行。
 
-完整排程、選股規則、價格公式、消息面修正等系統規格請參考 **[SPEC.md](SPEC.md)**。
+完整排程、選股規則、價格公式、AI 監控狀態機、消息面修正等系統規格請參考 **[SPEC.md](SPEC.md)**。
