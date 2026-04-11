@@ -39,7 +39,7 @@
                                                        ↓
                          09:00 開始盤中快照 → 09:05 AI 開盤校準
                                                        │
-                         09:05+ 規則式持續監控 + AI 每 30 分鐘滾動判斷
+                         09:05+ 規則式持續監控 + AI 動態頻率滾動判斷（10-20 分鐘）
                                                        │
                                               13:25 強制平倉 → 15:00 盤後結果回填
 ```
@@ -277,7 +277,9 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 
 1. **規則式寬篩**（StockScreener, min_score=45）→ 產出 30-50 檔候選池
 2. **AI 審核選股**（AiScreenerService）→ 從候選池中選出 10-15 檔
-3. AI 為每檔標的給出：策略標籤（intraday_strategy）、參考支撐/壓力位、加減分、選股理由
+3. AI 為每檔標的給出：策略標籤（intraday_strategy）、參考支撐/壓力位、加減分、選股理由、價格理由
+4. **AI 價格覆蓋**：AI 可覆蓋規則式的 `suggested_buy`、`target_price`、`stop_loss`，並自動重算 `risk_reward_ratio`
+5. AI 須提供 `price_reasoning`（一句話解釋三個價格設定依據），存入 `ai_price_reasoning` 欄位
 
 ### 策略標籤
 
@@ -440,7 +442,18 @@ pending → watching → entry_signal → holding → target_hit
 
 ### Telegram 通知
 
-所有狀態轉換（進場、出場、校準結果、AI 建議）皆發送 Telegram 通知。
+所有狀態轉換皆發送 Telegram 通知，包括：
+
+| 事件 | 通知內容 |
+|------|---------|
+| AI 校準通過/否決 | 標的代號、名稱、AI 備註 |
+| 進場訊號 | 標的、進場價、策略、目標/停損 |
+| 走弱到價 | 標的到達買入價但走勢偏弱，不進場（含外盤比） |
+| 達標出場 | 標的、出場價、獲利% |
+| 觸停損出場 | 標的、出場價、虧損% |
+| 移動停利 | 標的、出場價、鎖利% |
+| AI 滾動建議 | 標的、建議動作、調整內容 |
+| 13:25 強制平倉 | 標的、平倉價 |
 
 ---
 
@@ -717,7 +730,7 @@ php artisan stock:backtest --validated --max-attempts=5
 | `institutional_trades`| 三大法人           | `stock_id`, `date`, `foreign_net`, `trust_net`, `dealer_net`, `total_net` |
 | `margin_trades`       | 融資融券           | `stock_id`, `date`, `margin_change`                   |
 | `intraday_quotes`     | 盤中即時行情       | `stock_id`, `date`, `current_price`, `estimated_volume_ratio`, `open_change_percent`, `first_5min_high`, `first_5min_low`, `external_ratio` |
-| `candidates`          | 候選標的           | `stock_id`, `trade_date`, `suggested_buy`, `target_price`, `stop_loss`, `risk_reward_ratio`, `score`, `strategy_type`, `strategy_detail`, `reasons`, `morning_*`, `ai_selected`, `ai_score_adjustment`, `ai_reasoning`, `intraday_strategy`, `reference_support`, `reference_resistance`, `ai_warnings` |
+| `candidates`          | 候選標的           | `stock_id`, `trade_date`, `suggested_buy`, `target_price`, `stop_loss`, `risk_reward_ratio`, `score`, `strategy_type`, `strategy_detail`, `reasons`, `morning_*`, `ai_selected`, `ai_score_adjustment`, `ai_reasoning`, `ai_price_reasoning`, `intraday_strategy`, `reference_support`, `reference_resistance`, `ai_warnings` |
 | `candidate_results`   | 盤後結果           | `candidate_id`, `actual_open/high/low/close`, `hit_target`, `hit_stop_loss`, `max_profit_percent`, `max_loss_percent`, `buy_reachable`, `target_reachable`, `buy_gap_percent`, `target_gap_percent`, `entry_time`, `exit_time`, `entry_price_actual`, `exit_price_actual`, `entry_type`, `mfe_percent`, `mae_percent`, `valid_entry`, `monitor_status` |
 | `intraday_snapshots`  | 盤中時序快照       | `stock_id`, `trade_date`, `snapshot_time`, `open`, `high`, `low`, `current_price`, `prev_close`, `accumulated_volume`, `estimated_volume_ratio`, `open_change_percent`, `buy_volume`, `sell_volume`, `external_ratio`, `best_ask`, `best_bid`, `change_percent`, `amplitude_percent` |
 | `candidate_monitors`  | AI 監控狀態機      | `candidate_id`(unique), `status`, `entry_price`, `entry_time`, `entry_type`, `exit_price`, `exit_time`, `current_target`, `current_stop`, `ai_calibration`(JSON), `ai_advice_log`(JSON), `state_log`(JSON), `last_ai_advice_at`, `skip_reason` |
@@ -785,6 +798,36 @@ php artisan stock:backtest --validated --max-attempts=5
 | `/settings`| `SettingsView`     | 篩選設定             |
 | `/spec`   | `SpecView`          | 系統規格書            |
 | `/stock/:id` | `StockDetailView`| 個股詳情（K線）      |
+
+### CandidatesView 候選標的卡片
+
+每張候選標的卡片顯示以下 AI 資訊：
+
+- **AI 選股 badge**：顯示 AI 選入/未選入狀態 + 加減分（如 `AI +8`）
+- **策略標籤**：intraday_strategy（breakout_fresh / breakout_retest / gap_pullback / bounce / momentum）
+- **AI 選股理由**：`ai_reasoning` 文字
+- **AI 價格理由**：`ai_price_reasoning`，解釋買入/目標/停損價的設定依據
+- **AI 警告**：`ai_warnings` 以 chip 標籤顯示
+- **參考支撐/壓力位**：`reference_support` / `reference_resistance`
+
+### 盤中監控面板
+
+盤中自動 polling（30 秒），顯示：
+
+- Monitor 狀態 badge（pending / watching / holding / target_hit 等）
+- 現價、損益%
+- AI 校準備註
+- 目標/停損即時值（含 AI 調整標記，如 `AI ↑ 30.5`）
+- AI 滾動建議摘要 + 調整理由
+
+### StatsView 績效統計
+
+新增 AI 監控相關指標卡片：
+
+- `profit_if_valid_entry`：有效進場的平均報酬
+- `avg_holding_minutes`：平均持有時間
+- `ai_override_accuracy`：AI 覆蓋準確率
+- `effective_rr`：實際風報比
 
 ---
 
