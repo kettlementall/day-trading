@@ -14,7 +14,10 @@ Route::get('/candidates', [CandidateController::class, 'index']);
 Route::get('/candidates/dates', [CandidateController::class, 'dates']);
 Route::get('/candidates/stats', [CandidateController::class, 'stats']);
 Route::get('/candidates/morning', [CandidateController::class, 'morning']);
+Route::get('/candidates/monitors', [CandidateController::class, 'monitors']);
 Route::get('/candidates/{candidate}', [CandidateController::class, 'show']);
+Route::get('/candidates/{candidate}/snapshots', [CandidateController::class, 'snapshots']);
+Route::get('/candidates/{candidate}/monitor', [CandidateController::class, 'monitor']);
 
 // 股票
 Route::get('/stocks', [StockController::class, 'index']);

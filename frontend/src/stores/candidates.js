@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getCandidates, getCandidateDates, getCandidateStats, getBacktestRounds, triggerBacktestOptimize, applyBacktestRound, getOptimizeValidatedUrl, getDailyReviewUrl } from '../api'
+import { getCandidates, getCandidateDates, getCandidateStats, getBacktestRounds, triggerBacktestOptimize, applyBacktestRound, getOptimizeValidatedUrl, getDailyReviewUrl, getMonitorStatus } from '../api'
 import dayjs from 'dayjs'
 
 export const useCandidateStore = defineStore('candidates', () => {
@@ -34,6 +34,42 @@ export const useCandidateStore = defineStore('candidates', () => {
       confirmed: confirmed.length,
     }
   })
+
+  // 盤中監控
+  const monitors = ref([])
+  const monitorLoading = ref(false)
+  let monitorPollingTimer = null
+
+  const activeMonitors = computed(() =>
+    monitors.value.filter(m => ['watching', 'entry_signal', 'holding'].includes(m.status))
+  )
+
+  const completedMonitors = computed(() =>
+    monitors.value.filter(m => ['target_hit', 'stop_hit', 'trailing_stop', 'closed', 'skipped'].includes(m.status))
+  )
+
+  async function fetchMonitors(date) {
+    monitorLoading.value = true
+    try {
+      const { data } = await getMonitorStatus(date || currentDate.value)
+      monitors.value = data.data
+    } finally {
+      monitorLoading.value = false
+    }
+  }
+
+  function startMonitorPolling(date) {
+    stopMonitorPolling()
+    fetchMonitors(date)
+    monitorPollingTimer = setInterval(() => fetchMonitors(date), 30000)
+  }
+
+  function stopMonitorPolling() {
+    if (monitorPollingTimer) {
+      clearInterval(monitorPollingTimer)
+      monitorPollingTimer = null
+    }
+  }
 
   async function fetchCandidates(date) {
     loading.value = true
@@ -176,9 +212,11 @@ export const useCandidateStore = defineStore('candidates', () => {
   return {
     candidates, currentDate, dates, stats, loading,
     morningFilter, filteredCandidates, morningSummary, lastUpdatedAt,
+    monitors, monitorLoading, activeMonitors, completedMonitors,
     backtestRounds, optimizing, validating, validationLogs, validationResult,
     reviewing, reviewLogs, reviewResult, reviewStreamText,
     fetchCandidates, fetchDates, fetchStats,
+    fetchMonitors, startMonitorPolling, stopMonitorPolling,
     fetchBacktestRounds, optimize, applyRound, optimizeValidated, dailyReview,
   }
 })

@@ -18,7 +18,7 @@ class StockScreener
     /**
      * 執行選股篩選，產出隔日候選清單
      */
-    public function screen(string $tradeDate): Collection
+    public function screen(string $tradeDate, ?int $minScoreOverride = null): Collection
     {
         $stocks = Stock::where('is_day_trading', true)->get();
         $rules = ScreeningRule::where('is_active', true)->orderBy('sort_order')->get();
@@ -64,6 +64,18 @@ class StockScreener
             $minVolume = $screenConfig['min_volume'] ?? 500;
             $minPrice = $screenConfig['min_price'] ?? 10;
             if ($volumes[0] / 1000 < $minVolume || $closes[0] < $minPrice) continue;
+
+            // 當沖硬排除：5 日均振幅 < 2.5% → 波動太小不適合當沖
+            $minAmplitude = $screenConfig['min_amplitude'] ?? 2.5;
+            $recent5Amplitudes = array_slice($amplitudes, 0, 5);
+            $avgAmplitude5 = count($recent5Amplitudes) > 0 ? array_sum($recent5Amplitudes) / count($recent5Amplitudes) : 0;
+            if ($avgAmplitude5 < $minAmplitude) continue;
+
+            // 當沖硬排除：5 日均成交量 < 2000 張 → 流動性不足
+            $minDayTradingVolume = $screenConfig['min_day_trading_volume'] ?? 2000;
+            $recent5Volumes = array_slice($volumes, 0, 5);
+            $avgVolume5 = count($recent5Volumes) > 0 ? array_sum($recent5Volumes) / count($recent5Volumes) / 1000 : 0;
+            if ($avgVolume5 < $minDayTradingVolume) continue;
 
             // 計算技術指標
             $ma5 = TechnicalIndicator::sma($closes, 5);
@@ -372,6 +384,19 @@ class StockScreener
                 $strategyDetail['news_panic'] = $newsFactor['panic'];
             }
 
+            // 長上影線降分：上影 > 實體 ×1.5 且收盤在下方 30%
+            $upperShadowPenalty = $scoringConfig['upper_shadow_penalty'] ?? -10;
+            $body = abs($closes[0] - $opens[0]);
+            $upperShadow = $highs[0] - max($closes[0], $opens[0]);
+            $range = $highs[0] - $lows[0];
+            if ($body > 0 && $upperShadow > $body * 1.5 && $range > 0) {
+                $closePosition = ($closes[0] - $lows[0]) / $range;
+                if ($closePosition < 0.3) {
+                    $score += $upperShadowPenalty;
+                    $reasons[] = '前日長上影線（賣壓訊號）';
+                }
+            }
+
             // 套用自訂規則
             foreach ($rules as $rule) {
                 if ($this->matchRule($rule, $latest, $inst->first(), $margin->first())) {
@@ -380,7 +405,7 @@ class StockScreener
             }
 
             // 最低門檻
-            $minScore = $screenConfig['min_score'] ?? 30;
+            $minScore = $minScoreOverride ?? ($screenConfig['min_score'] ?? 30);
             if ($score < $minScore || empty($reasons)) continue;
 
             // 當日漲跌停價（台股 ±10%）

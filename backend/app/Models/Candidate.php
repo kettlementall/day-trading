@@ -13,6 +13,8 @@ class Candidate extends Model
         'stop_loss', 'risk_reward_ratio', 'score', 'strategy_type', 'strategy_detail',
         'reasons', 'indicators',
         'morning_score', 'morning_signals', 'morning_confirmed',
+        'ai_selected', 'ai_score_adjustment', 'ai_reasoning',
+        'intraday_strategy', 'reference_support', 'reference_resistance', 'ai_warnings',
     ];
 
     protected $casts = [
@@ -28,6 +30,12 @@ class Candidate extends Model
         'morning_score' => 'decimal:2',
         'morning_signals' => 'array',
         'morning_confirmed' => 'boolean',
+        'ai_selected' => 'boolean',
+        'ai_reasoning' => 'string',
+        'intraday_strategy' => 'string',
+        'reference_support' => 'decimal:2',
+        'reference_resistance' => 'decimal:2',
+        'ai_warnings' => 'array',
     ];
 
     public function stock(): BelongsTo
@@ -38,5 +46,10 @@ class Candidate extends Model
     public function result(): HasOne
     {
         return $this->hasOne(CandidateResult::class);
+    }
+
+    public function monitor(): HasOne
+    {
+        return $this->hasOne(CandidateMonitor::class);
     }
 }

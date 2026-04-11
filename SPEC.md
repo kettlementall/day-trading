@@ -12,12 +12,12 @@
 |-------|-----------------------------|-------------------------------|
 | 06:00 | `news:fetch`                | 抓取隔夜國際新聞               |
 | 06:15 | `news:compute-indices`      | 計算新聞指數（供選股用）        |
-| 08:00 | `stock:screen-candidates`   | 執行選股篩選，產出當日候選清單（含消息面修正，預設 date = 今天） |
+| 08:00 | `stock:ai-screen`           | AI 選股（規則式寬篩 min_score=45 + AI 審核選出 10-15 檔 + 策略標籤） |
 | 08:00 | `news:fetch`                | 開盤前新聞抓取                 |
 | 08:15 | `news:compute-indices`      | 計算新聞指數                   |
 | 09:05 | `stock:fetch-intraday`      | 盤中即時行情（5分K）           |
 | 09:30 | `stock:fetch-intraday`      | 盤中即時行情（30分鐘後狀態）   |
-| 09:35 | `stock:screen-morning`      | 盤前確認篩選                   |
+| 09:00-13:30 | `stock:monitor-intraday` | 盤中即時監控（每分鐘觸發，內部依時段動態控頻） |
 | 12:00 | `news:fetch`                | 午間新聞抓取                   |
 | 12:15 | `news:compute-indices`      | 計算新聞指數                   |
 | 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情             |
@@ -34,12 +34,14 @@
 ```
 14:30 行情 ──┐
 16:00 法人 ──┤
-16:30 融資 ──┼── 06:00 隔夜新聞 → 06:15 算指數 → 08:00 產生候選標的
+16:30 融資 ──┼── 06:00 隔夜新聞 → 06:15 算指數 → 08:00 AI 選股（寬篩 + AI 審核）
 18:00 新聞 ──┘                                         │
                                                        ↓
-                                    09:05/09:30 盤中行情 → 09:35 盤前確認
-                                                                │
-                                                       15:00 盤後結果回填
+                         09:00 開始盤中快照 → 09:05 AI 開盤校準
+                                                       │
+                         09:05+ 規則式持續監控 + AI 每 30 分鐘滾動判斷
+                                                       │
+                                              13:25 強制平倉 → 15:00 盤後結果回填
 ```
 
 ### 排程日誌
@@ -84,6 +86,15 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 | 風報比            | >= 1.5   |
 | 最多選取          | 前 20 名  |
 
+### 2.1a 硬排除條件
+
+在評分之前先行排除，不進入評分流程：
+
+| 條件 | 閾值 | 設定鍵 | 說明 |
+|------|------|--------|------|
+| 5日均振幅過低 | < 2.5% | `min_amplitude` | 振幅太小無當沖價值 |
+| 5日均量過低 | < 2000 張 | `min_day_trading_volume` | 量能不足難以進出 |
+
 ### 2.2 評分項目
 
 | #  | 項目           | 預設分數 | 條件                                   | 設定鍵              |
@@ -110,6 +121,7 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 | 18 | 自營大買       | 5       | 自營淨買 > 當日成交量 × 3%             | `dealer_big_buy`    |
 | 19 | 萬張量能       | 5       | 成交量 >= 10,000 張                    | `high_volume`       |
 | 20 | 消息面情緒     | ±10~15  | 依消息面指數調整（見 §2.5）             | `news_sentiment`    |
+| 21 | 長上影線懲罰   | -10     | 上影線 > 實體 ×1.5 且收盤在下方 30%     | （內建規則）         |
 
 ### 2.3 策略分類
 
@@ -257,9 +269,38 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 
 ---
 
-## 3. 盤前確認規則
+## 3. AI 選股審核
 
-定義於 `backend/app/Services/MorningScreener.php`。每日 09:35 執行，對當日候選標的做開盤後驗證。
+定義於 `backend/app/Services/AiScreenerService.php`。每日 08:00 由 `stock:ai-screen` 指令執行。
+
+### 流程
+
+1. **規則式寬篩**（StockScreener, min_score=45）→ 產出 30-50 檔候選池
+2. **AI 審核選股**（AiScreenerService）→ 從候選池中選出 10-15 檔
+3. AI 為每檔標的給出：策略標籤（intraday_strategy）、參考支撐/壓力位、加減分、選股理由
+
+### 策略標籤
+
+| 標籤 | 說明 |
+|------|------|
+| breakout_fresh | 首次突破 |
+| breakout_retest | 突破回測 |
+| gap_pullback | 跳空拉回 |
+| bounce | 跌深反彈 |
+| momentum | 量能動能 |
+
+### Fallback
+
+API 失敗時自動降級為規則式：取 score 前 15 名，依 strategy_type 給預設策略。
+
+---
+
+## 3.5. 盤前確認規則（已由 AI 開盤校準取代）
+
+> **注意**：09:35 的 `stock:screen-morning` 排程已停用，由 09:05 的 AI 開盤校準取代。
+> MorningScreener 類別和指令保留可手動執行，其 4 條規則作為 AI 校準的 fallback 邏輯。
+
+定義於 `backend/app/Services/MorningScreener.php`。
 
 ### 確認規則
 
@@ -298,6 +339,99 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 | 外盤比     | >= 65% 極旺；45%~55% 均衡；< 45% 賣壓偏重       |
 | 跳空風險   | 漲幅 > 7% 的標的，隔日沖賣壓極大，即使量能符合也不宜追 |
 | 支撐確認   | 突破型標的的核心：過高後需回測確認支撐有效才進場   |
+
+---
+
+## 3.6 盤中 AI 監控系統
+
+定義於 `backend/app/Services/MonitorService.php`、`IntradayAiAdvisor.php`，由 `stock:monitor-intraday` 指令驅動。
+
+### 快照資料層
+
+`backend/app/Services/TwseRealtimeClient.php` 負責 TWSE/TPEX MIS API 即時報價，20 股一批、500ms 間隔。
+
+`stock:monitor-intraday` 每分鐘由排程觸發，內部依時段動態控頻：
+
+| 時段 | 頻率 | 說明 |
+|------|------|------|
+| 09:00-09:30 | 每 1 分鐘 | 開盤初期高頻 |
+| 09:30-10:30 | 每 2 分鐘 | 早盤 |
+| 10:30-13:00 | 每 3 分鐘 | 盤中低頻 |
+| 13:00-13:30 | 每 1 分鐘 | 尾盤高頻 |
+
+快照寫入 `intraday_snapshots` 表（時序資料，always insert）。
+
+### 狀態機
+
+每檔 AI 選中的候選標的對應一筆 `CandidateMonitor`，狀態轉換如下：
+
+```
+pending → watching → entry_signal → holding → target_hit
+                                            → stop_hit
+                                            → trailing_stop
+                                            → closed (時間停損/強制平倉)
+         → skipped (AI 校準否決)
+```
+
+| 狀態 | 說明 |
+|------|------|
+| `pending` | 初始狀態，等待 AI 校準 |
+| `watching` | AI 通過，觀察等待進場訊號 |
+| `entry_signal` | 偵測到進場條件（價格到位 + 量能） |
+| `holding` | 持有中，監控出場條件 |
+| `target_hit` | 達標出場 |
+| `stop_hit` | 觸停損出場 |
+| `trailing_stop` | 移動停利觸發 |
+| `closed` | 時間停損或 13:25 強制平倉 |
+| `skipped` | AI 校準否決，不參與 |
+
+### AI 開盤校準（09:05）
+
+由 `IntradayAiAdvisor::openingCalibration()` 執行，取代原 MorningScreener。
+
+- 接收所有候選標的 + 開盤快照，呼叫 Claude API 判斷哪些標的適合當天交易
+- 為通過者設定 `watching` + 調整目標/停損；否決者設為 `skipped`
+- 結果回寫 `morning_score` / `morning_confirmed` 保持前端相容
+
+**Fallback**：API 失敗時使用 MorningScreener 四條規則（量能 ≥1.5 倍、開盤漲 2-5%、站上 5 分 K 高點、外盤比 >55%；跳空 >7% 否決）。
+
+### 進場判定
+
+由 `MonitorService::evaluateWatching()` 依策略標籤判斷：
+
+| 策略 | 進場條件 |
+|------|----------|
+| breakout_fresh / momentum | 現價 > 參考壓力位 |
+| breakout_retest / gap_pullback | 拉回至參考支撐位附近後反彈 |
+| bounce | 觸及參考支撐位 + 出現反彈跡象 |
+
+共同條件：量能充足（預估量比 ≥ 設定值）、外盤比合理、非弱勢走勢（連續 3+ 根下跌量縮判定為 weakness）。
+
+### 出場判定
+
+由 `MonitorService::evaluateHolding()` 執行：
+
+| 條件 | 動作 |
+|------|------|
+| 現價 ≥ 目標價 | `target_hit` |
+| 現價 ≤ 停損價 | `stop_hit` |
+| 持有期最高價回落 50% | `trailing_stop`（移動停利） |
+| 獲利 >2% 時提高停損 | 動態停損（不低於進場價） |
+| 獲利 >4% 時進一步收緊停損 | 動態停損（至少鎖 2% 利潤） |
+| 持有 >60 分鐘且獲利 <0.5% | `closed`（時間停損） |
+| 13:25 | `closed`（強制平倉） |
+
+### AI 滾動建議（每 30 分鐘）
+
+由 `IntradayAiAdvisor::rollingAdvice()` 對所有 active monitors 執行：
+
+- 接收近期快照 + 持倉狀態，呼叫 Claude API 給出 hold/adjust_target/adjust_stop/close 建議
+- MonitorService 根據建議調整目標/停損
+- Fallback：回傳 `{action: 'hold'}`
+
+### Telegram 通知
+
+所有狀態轉換（進場、出場、校準結果、AI 建議）皆發送 Telegram 通知。
 
 ---
 
@@ -388,6 +522,22 @@ else:
 
 expected_value = avg(所有 buy_reachable 為 true 的 profit)
 ```
+
+#### 監控系統指標（有 monitor 資料時額外計算）
+
+| 指標 | 欄位 | 計算方式 |
+|------|------|----------|
+| AI 通過率 | `ai_approval_rate` | AI 選中（`ai_selected`）數 / 候選總數 × 100 |
+| 有效進場率 | `valid_entry_rate` | `valid_entry = true` 數 / 已驗證數 × 100 |
+| 平均 MFE | `avg_mfe` | 持有期間最大有利偏移（%）平均 |
+| 平均 MAE | `avg_mae` | 持有期間最大不利偏移（%）平均 |
+| 弱勢轉換率 | `weak_to_price_rate` | 弱勢走勢到達停損的比率 |
+| 有效進場期望值 | `profit_if_valid_entry` | 只算有效進場的平均損益（%） |
+| 平均持有時間 | `avg_holding_minutes` | 進場到出場的平均分鐘數 |
+| AI 介入準確率 | `ai_override_accuracy` | AI 調整後結果為達標或停利的比率（%） |
+| 改良版風報比 | `effective_rr` | `(target_hit_rate × avg_profit_per_hit) / (stop_hit_rate × avg_loss_per_hit)` |
+
+這些指標僅在系統產生 monitor 資料後才會出現（向後相容）。
 
 #### 策略分類分析
 
@@ -514,11 +664,14 @@ php artisan stock:backtest --validated --max-attempts=5
 **報告結構：**
 
 1. **當日總覽** — 大盤氛圍、消息面影響、整體表現
-2. **逐檔分析** — 每檔的盤前設定合理性、盤中表現、達標/未達標原因、最佳進場時機
-3. **共通問題** — 系統性模式（買入價偏高/偏低、特定策略偏差）
-4. **改善建議** — 具體可改善方向（不含參數調整）
+2. **逐檔分析** — 每檔的盤前設定合理性、盤中表現、達標/未達標原因、最佳進場時機、AI 監控決策是否合理
+3. **共通問題** — 系統性模式（買入價偏高/偏低、特定策略偏差、AI 決策品質）
+4. **AI 決策檢討** — MFE vs 實際出場利潤比較、AI 否決標的事後表現、滾動建議品質
+5. **改善建議** — 具體可改善方向（不含參數調整）
 
-**實作：** SSE 串流，前端透過 EventSource 接收 `log`（進度）和 `done`（最終報告）事件。
+**額外資料來源：** `candidate_monitors`（AI 監控軌跡：狀態、進出場、MFE/MAE、校準備註、AI 建議摘要）
+
+**實作：** SSE 串流，前端透過 EventSource 接收 `log`（進度）、`chunk`（AI 串流文字片段）和 `done`（最終報告）事件。
 
 ---
 
@@ -531,8 +684,10 @@ php artisan stock:backtest --validated --max-attempts=5
 | `institutional_trades`| 三大法人           | `stock_id`, `date`, `foreign_net`, `trust_net`, `dealer_net`, `total_net` |
 | `margin_trades`       | 融資融券           | `stock_id`, `date`, `margin_change`                   |
 | `intraday_quotes`     | 盤中即時行情       | `stock_id`, `date`, `current_price`, `estimated_volume_ratio`, `open_change_percent`, `first_5min_high`, `first_5min_low`, `external_ratio` |
-| `candidates`          | 候選標的           | `stock_id`, `trade_date`, `suggested_buy`, `target_price`, `stop_loss`, `risk_reward_ratio`, `score`, `strategy_type`, `strategy_detail`, `reasons`, `morning_*` |
-| `candidate_results`   | 盤後結果           | `candidate_id`, `actual_open/high/low/close`, `hit_target`, `hit_stop_loss`, `max_profit_percent`, `max_loss_percent`, `buy_reachable`, `target_reachable`, `buy_gap_percent`, `target_gap_percent` |
+| `candidates`          | 候選標的           | `stock_id`, `trade_date`, `suggested_buy`, `target_price`, `stop_loss`, `risk_reward_ratio`, `score`, `strategy_type`, `strategy_detail`, `reasons`, `morning_*`, `ai_selected`, `ai_score_adjustment`, `ai_reasoning`, `intraday_strategy`, `reference_support`, `reference_resistance`, `ai_warnings` |
+| `candidate_results`   | 盤後結果           | `candidate_id`, `actual_open/high/low/close`, `hit_target`, `hit_stop_loss`, `max_profit_percent`, `max_loss_percent`, `buy_reachable`, `target_reachable`, `buy_gap_percent`, `target_gap_percent`, `entry_time`, `exit_time`, `entry_price_actual`, `exit_price_actual`, `entry_type`, `mfe_percent`, `mae_percent`, `valid_entry`, `monitor_status` |
+| `intraday_snapshots`  | 盤中時序快照       | `stock_id`, `trade_date`, `snapshot_time`, `open`, `high`, `low`, `current_price`, `prev_close`, `accumulated_volume`, `estimated_volume_ratio`, `open_change_percent`, `buy_volume`, `sell_volume`, `external_ratio`, `best_ask`, `best_bid`, `change_percent`, `amplitude_percent` |
+| `candidate_monitors`  | AI 監控狀態機      | `candidate_id`(unique), `status`, `entry_price`, `entry_time`, `entry_type`, `exit_price`, `exit_time`, `current_target`, `current_stop`, `ai_calibration`(JSON), `ai_advice_log`(JSON), `state_log`(JSON), `last_ai_advice_at`, `skip_reason` |
 | `backtest_rounds`     | 回測優化紀錄       | `analyzed_from`, `analyzed_to`, `sample_count`, `metrics_before` (JSON), `metrics_after` (JSON), `suggestions` (JSON), `applied`, `applied_at` |
 | `screening_rules`     | 自訂篩選規則       | `conditions` (JSON), `is_active`, `sort_order`        |
 | `formula_settings`    | 公式參數設定       | `type`, `config` (JSON)                               |
@@ -549,7 +704,10 @@ php artisan stock:backtest --validated --max-attempts=5
 | GET    | `/api/candidates/dates`   | 有資料的日期列表        |
 | GET    | `/api/candidates/stats`   | 回測統計指標            |
 | GET    | `/api/candidates/morning` | 盤前確認結果            |
+| GET    | `/api/candidates/monitors`| 盤中監控狀態（含現價、損益%） |
 | GET    | `/api/candidates/{id}`    | 單一候選標的詳情        |
+| GET    | `/api/candidates/{id}/snapshots` | 候選標的盤中快照  |
+| GET    | `/api/candidates/{id}/monitor`   | 單檔監控詳情（含 state_log、ai_advice_log） |
 | GET    | `/api/stocks`             | 股票列表               |
 | GET    | `/api/stocks/{id}`        | 股票詳情               |
 | GET    | `/api/stocks/{id}/kline`  | K線資料                |
@@ -596,4 +754,4 @@ php artisan stock:backtest --validated --max-attempts=5
 
 ---
 
-*最後更新：2026-04-10*
+*最後更新：2026-04-11*

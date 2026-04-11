@@ -21,6 +21,15 @@ export const getCandidate = (id) =>
 export const getMorningSignals = (date) =>
   api.get('/candidates/morning', { params: { date } })
 
+export const getCandidateSnapshots = (candidateId) =>
+  api.get(`/candidates/${candidateId}/snapshots`)
+
+export const getMonitorStatus = (date) =>
+  api.get('/candidates/monitors', { params: { date } })
+
+export const getCandidateMonitor = (candidateId) =>
+  api.get(`/candidates/${candidateId}/monitor`)
+
 // 股票
 export const getStocks = (params) =>
   api.get('/stocks', { params })

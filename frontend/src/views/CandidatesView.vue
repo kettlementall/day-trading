@@ -31,6 +31,63 @@
       </el-radio-group>
     </div>
 
+    <!-- 盤中即時監控面板 -->
+    <div v-if="store.monitors.length > 0" class="monitor-panel">
+      <div class="monitor-header">
+        <h3 class="monitor-title">盤中監控</h3>
+        <span class="monitor-count">
+          活躍 <strong>{{ store.activeMonitors.length }}</strong> /
+          完成 <strong>{{ store.completedMonitors.length }}</strong>
+        </span>
+      </div>
+      <div class="monitor-list">
+        <div
+          v-for="m in store.monitors"
+          :key="m.id"
+          class="monitor-item"
+          :class="'monitor-' + m.status"
+        >
+          <div class="monitor-item-top">
+            <div class="monitor-stock">
+              <span class="stock-symbol">{{ m.symbol }}</span>
+              <span class="stock-name">{{ m.name }}</span>
+            </div>
+            <el-tag size="small" :type="monitorStatusType(m.status)" round>
+              {{ monitorStatusLabel(m.status) }}
+            </el-tag>
+          </div>
+          <div class="monitor-item-body">
+            <div v-if="m.current_price" class="monitor-price">
+              <span class="label">現價</span>
+              <span class="value">{{ m.current_price }}</span>
+            </div>
+            <div v-if="m.profit_pct !== null" class="monitor-price">
+              <span class="label">損益</span>
+              <span class="value" :class="m.profit_pct >= 0 ? 'price-up' : 'price-down'">
+                {{ m.profit_pct >= 0 ? '+' : '' }}{{ m.profit_pct }}%
+              </span>
+            </div>
+            <div v-if="m.entry_price" class="monitor-price">
+              <span class="label">進場</span>
+              <span class="value">{{ m.entry_price }}</span>
+            </div>
+            <div v-if="m.current_target" class="monitor-price">
+              <span class="label">目標</span>
+              <span class="value price-up">{{ m.current_target }}</span>
+            </div>
+            <div v-if="m.current_stop" class="monitor-price">
+              <span class="label">停損</span>
+              <span class="value price-down">{{ m.current_stop }}</span>
+            </div>
+          </div>
+          <div v-if="m.skip_reason" class="monitor-reason">{{ m.skip_reason }}</div>
+          <div v-if="m.last_ai_advice" class="monitor-ai">
+            AI: {{ m.last_ai_advice.notes }}
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="store.loading" class="loading-wrap">
       <el-skeleton :rows="5" animated />
     </div>
@@ -188,15 +245,31 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useCandidateStore } from '../stores/candidates'
 
 const store = useCandidateStore()
 const router = useRouter()
 
+function isMarketHours() {
+  const now = new Date()
+  const h = now.getHours()
+  const m = now.getMinutes()
+  return (h === 9 || h === 10 || h === 11 || h === 12 || (h === 13 && m <= 30))
+}
+
 onMounted(() => {
   store.fetchCandidates()
+  if (isMarketHours()) {
+    store.startMonitorPolling(store.currentDate)
+  } else {
+    store.fetchMonitors(store.currentDate)
+  }
+})
+
+onUnmounted(() => {
+  store.stopMonitorPolling()
 })
 
 function goDetail(item) {
@@ -214,6 +287,24 @@ function scoreType(score) {
   if (score >= 80) return 'danger'
   if (score >= 60) return 'warning'
   return 'info'
+}
+
+function monitorStatusType(status) {
+  const map = {
+    pending: 'info', watching: '', entry_signal: 'warning',
+    holding: 'success', target_hit: 'success', stop_hit: 'danger',
+    trailing_stop: 'warning', closed: 'info', skipped: 'info',
+  }
+  return map[status] || 'info'
+}
+
+function monitorStatusLabel(status) {
+  const map = {
+    pending: '等待校準', watching: '觀望中', entry_signal: '進場訊號',
+    holding: '持有中', target_hit: '達標', stop_hit: '停損',
+    trailing_stop: '停利', closed: '收盤平倉', skipped: '已跳過',
+  }
+  return map[status] || status
 }
 </script>
 
@@ -402,6 +493,88 @@ function scoreType(score) {
 
 .signal-fail .signal-icon {
   color: #f56c6c;
+}
+
+.monitor-panel {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  background: #ecf5ff;
+  border-radius: 8px;
+  border: 1px solid #d9ecff;
+}
+
+.monitor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.monitor-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.monitor-count {
+  font-size: 12px;
+  color: #606266;
+}
+
+.monitor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.monitor-item {
+  background: #fff;
+  border-radius: 6px;
+  padding: 10px 12px;
+  border-left: 3px solid #dcdfe6;
+}
+
+.monitor-item.monitor-watching { border-left-color: #409eff; }
+.monitor-item.monitor-entry_signal { border-left-color: #e6a23c; }
+.monitor-item.monitor-holding { border-left-color: #67c23a; }
+.monitor-item.monitor-target_hit { border-left-color: #67c23a; }
+.monitor-item.monitor-stop_hit { border-left-color: #f56c6c; }
+.monitor-item.monitor-trailing_stop { border-left-color: #e6a23c; }
+
+.monitor-item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.monitor-item-body {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.monitor-price .label {
+  font-size: 11px;
+  color: #909399;
+  display: block;
+}
+
+.monitor-price .value {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.monitor-reason {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.monitor-ai {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #409eff;
 }
 
 .loading-wrap, .empty-wrap {

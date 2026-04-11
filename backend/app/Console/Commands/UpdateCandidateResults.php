@@ -3,8 +3,10 @@
 namespace App\Console\Commands;
 
 use App\Models\Candidate;
+use App\Models\CandidateMonitor;
 use App\Models\CandidateResult;
 use App\Models\DailyQuote;
+use App\Models\IntradaySnapshot;
 use Illuminate\Console\Command;
 
 class UpdateCandidateResults extends Command
@@ -63,6 +65,9 @@ class UpdateCandidateResults extends Command
                 ? round(($high - $targetPrice) / $targetPrice * 100, 2)
                 : 0;
 
+            // Monitor 相關欄位
+            $monitorData = $this->getMonitorData($candidate, $date);
+
             CandidateResult::create([
                 'candidate_id' => $candidate->id,
                 'actual_open' => $open,
@@ -77,6 +82,7 @@ class UpdateCandidateResults extends Command
                 'target_reachable' => $targetReachable,
                 'buy_gap_percent' => $buyGap,
                 'target_gap_percent' => $targetGap,
+                ...$monitorData,
             ]);
 
             $count++;
@@ -84,5 +90,54 @@ class UpdateCandidateResults extends Command
 
         $this->info("已更新 {$count} 筆候選標的結果");
         return self::SUCCESS;
+    }
+
+    /**
+     * 從 CandidateMonitor + IntradaySnapshot 取得監控相關數據
+     */
+    private function getMonitorData(Candidate $candidate, string $date): array
+    {
+        $monitor = CandidateMonitor::where('candidate_id', $candidate->id)->first();
+
+        if (!$monitor) {
+            return [];
+        }
+
+        $data = [
+            'entry_time' => $monitor->entry_time,
+            'exit_time' => $monitor->exit_time,
+            'entry_price_actual' => $monitor->entry_price,
+            'exit_price_actual' => $monitor->exit_price,
+            'entry_type' => $monitor->entry_type,
+            'monitor_status' => $monitor->status,
+            'valid_entry' => in_array($monitor->status, [
+                CandidateMonitor::STATUS_HOLDING,
+                CandidateMonitor::STATUS_TARGET_HIT,
+                CandidateMonitor::STATUS_STOP_HIT,
+                CandidateMonitor::STATUS_TRAILING_STOP,
+                CandidateMonitor::STATUS_CLOSED,
+            ]),
+        ];
+
+        // 計算 MFE/MAE（從進場到出場期間的快照）
+        if ($monitor->entry_price && $monitor->entry_time) {
+            $entryPrice = (float) $monitor->entry_price;
+            $exitTime = $monitor->exit_time ?? now();
+
+            $snapshots = IntradaySnapshot::where('stock_id', $candidate->stock_id)
+                ->where('trade_date', $date)
+                ->whereBetween('snapshot_time', [$monitor->entry_time, $exitTime])
+                ->get();
+
+            if ($snapshots->isNotEmpty() && $entryPrice > 0) {
+                $maxHigh = $snapshots->max(fn($s) => (float) $s->high);
+                $minLow = $snapshots->min(fn($s) => (float) $s->low);
+
+                $data['mfe_percent'] = round(($maxHigh - $entryPrice) / $entryPrice * 100, 2);
+                $data['mae_percent'] = round(($entryPrice - $minLow) / $entryPrice * 100, 2);
+            }
+        }
+
+        return $data;
     }
 }

@@ -24,7 +24,7 @@ class BacktestService
             $query->where('strategy_type', $strategyType);
         }
 
-        $candidates = $query->with('result')->get();
+        $candidates = $query->with(['result', 'monitor'])->get();
         $total = Candidate::whereBetween('trade_date', [$from, $to])
             ->when($strategyType, fn ($q) => $q->where('strategy_type', $strategyType))
             ->count();
@@ -104,7 +104,7 @@ class BacktestService
 
         $expectedValue = count($profits) > 0 ? round(array_sum($profits) / count($profits), 2) : 0;
 
-        return [
+        $metrics = [
             'total_candidates' => $totalCandidates,
             'evaluated' => $evaluated,
             'buy_reach_rate' => round($buyReachable / $evaluated * 100, 1),
@@ -116,6 +116,94 @@ class BacktestService
             'avg_target_gap' => round($candidates->avg(fn ($c) => (float) $c->result->target_gap_percent), 2),
             'avg_risk_reward' => round($candidates->avg(fn ($c) => (float) $c->risk_reward_ratio), 2),
         ];
+
+        // 監控系統指標（有 monitor 資料時才計算）
+        $withMonitor = $candidates->filter(fn($c) => $c->result->monitor_status !== null);
+        if ($withMonitor->isNotEmpty()) {
+            $validEntries = $withMonitor->filter(fn($c) => $c->result->valid_entry);
+            $aiSelected = $candidates->filter(fn($c) => $c->ai_selected);
+            $withMfe = $withMonitor->filter(fn($c) => (float) $c->result->mfe_percent > 0 || (float) $c->result->mae_percent > 0);
+
+            $metrics['valid_entry_rate'] = round($validEntries->count() / $withMonitor->count() * 100, 1);
+            $metrics['ai_approval_rate'] = $candidates->count() > 0
+                ? round($aiSelected->count() / $candidates->count() * 100, 1)
+                : 0;
+            $metrics['avg_mfe'] = $withMfe->isNotEmpty()
+                ? round($withMfe->avg(fn($c) => (float) $c->result->mfe_percent), 2)
+                : 0;
+            $metrics['avg_mae'] = $withMfe->isNotEmpty()
+                ? round($withMfe->avg(fn($c) => (float) $c->result->mae_percent), 2)
+                : 0;
+
+            // 走弱到價避開率
+            $skippedWeak = $withMonitor->filter(fn($c) => $c->result->monitor_status === 'skipped');
+            $metrics['weak_to_price_rate'] = $withMonitor->count() > 0
+                ? round($skippedWeak->count() / $withMonitor->count() * 100, 1)
+                : 0;
+
+            // 只算有效進場的期望值
+            if ($validEntries->isNotEmpty()) {
+                $validProfits = [];
+                foreach ($validEntries as $c) {
+                    $r = $c->result;
+                    $entry = (float) $r->entry_price_actual;
+                    $exit = (float) $r->exit_price_actual;
+                    if ($entry > 0 && $exit > 0) {
+                        $validProfits[] = ($exit - $entry) / $entry * 100;
+                    }
+                }
+                $metrics['profit_if_valid_entry'] = count($validProfits) > 0
+                    ? round(array_sum($validProfits) / count($validProfits), 2)
+                    : 0;
+            }
+
+            // 平均持有時間（分鐘）
+            $withHolding = $validEntries->filter(fn($c) => $c->result->entry_time && $c->result->exit_time);
+            if ($withHolding->isNotEmpty()) {
+                $metrics['avg_holding_minutes'] = round($withHolding->avg(function ($c) {
+                    return $c->result->entry_time->diffInMinutes($c->result->exit_time);
+                }), 0);
+            }
+
+            // AI 介入準確率：AI 調整目標/停損後結果是否改善
+            $aiOverrides = $withMonitor->filter(function ($c) {
+                $monitor = $c->monitor;
+                return $monitor && !empty($monitor->ai_advice_log)
+                    && collect($monitor->ai_advice_log)->contains(fn($a) => ($a['action'] ?? '') !== 'hold');
+            });
+            if ($aiOverrides->isNotEmpty()) {
+                $correctOverrides = $aiOverrides->filter(function ($c) {
+                    $r = $c->result;
+                    return in_array($r->monitor_status, ['target_hit', 'trailing_stop']);
+                });
+                $metrics['ai_override_accuracy'] = round($correctOverrides->count() / $aiOverrides->count() * 100, 1);
+            }
+
+            // 改良版風報比 effective_rr
+            $targetHits = $validEntries->filter(fn($c) => $c->result->monitor_status === 'target_hit');
+            $stopHits = $validEntries->filter(fn($c) => $c->result->monitor_status === 'stop_hit');
+            if ($targetHits->isNotEmpty() && $stopHits->isNotEmpty()) {
+                $targetHitRate = $targetHits->count() / $validEntries->count();
+                $stopHitRate = $stopHits->count() / $validEntries->count();
+                $avgProfitPerHit = $targetHits->avg(function ($c) {
+                    $entry = (float) $c->result->entry_price_actual;
+                    $exit = (float) $c->result->exit_price_actual;
+                    return $entry > 0 ? ($exit - $entry) / $entry * 100 : 0;
+                });
+                $avgLossPerHit = $stopHits->avg(function ($c) {
+                    $entry = (float) $c->result->entry_price_actual;
+                    $exit = (float) $c->result->exit_price_actual;
+                    return $entry > 0 ? ($entry - $exit) / $entry * 100 : 0;
+                });
+                if ($stopHitRate > 0 && $avgLossPerHit > 0) {
+                    $metrics['effective_rr'] = round(
+                        ($targetHitRate * $avgProfitPerHit) / ($stopHitRate * $avgLossPerHit), 2
+                    );
+                }
+            }
+        }
+
+        return $metrics;
     }
 
     /**

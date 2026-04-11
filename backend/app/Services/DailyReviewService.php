@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Candidate;
+use App\Models\CandidateMonitor;
 use App\Models\DailyQuote;
 use App\Models\IntradayQuote;
 use App\Models\NewsIndex;
@@ -178,6 +179,48 @@ class DailyReviewService
         }
         $klineTsv = implode("\n", $klineLines);
 
+        // 監控系統軌跡
+        $monitorSection = '';
+        $monitors = CandidateMonitor::with('candidate.stock')
+            ->whereHas('candidate', fn($q) => $q->where('trade_date', $date))
+            ->get();
+
+        if ($monitors->isNotEmpty()) {
+            $monitorLines = ["symbol\tstatus\tentry_price\tentry_time\texit_price\texit_time\ttarget\tstop\tMFE%\tMAE%\tcalibration\tai_notes"];
+            foreach ($monitors as $m) {
+                $c = $m->candidate;
+                $r = $c->result;
+                $calNotes = '';
+                if ($m->ai_calibration) {
+                    $calNotes = $m->ai_calibration['notes'] ?? ($m->ai_calibration['reason'] ?? '');
+                }
+                $lastAdvice = $m->ai_advice_log ? collect($m->ai_advice_log)->pluck('notes')->implode(' → ') : '';
+
+                $monitorLines[] = implode("\t", [
+                    $c->stock->symbol,
+                    $m->status,
+                    $m->entry_price ?? '-',
+                    $m->entry_time?->format('H:i') ?? '-',
+                    $m->exit_price ?? '-',
+                    $m->exit_time?->format('H:i') ?? '-',
+                    $m->current_target ?? '-',
+                    $m->current_stop ?? '-',
+                    $r?->mfe_percent ?? '-',
+                    $r?->mae_percent ?? '-',
+                    mb_substr($calNotes, 0, 50),
+                    mb_substr($lastAdvice, 0, 80),
+                ]);
+            }
+            $monitorTsv = implode("\n", $monitorLines);
+            $monitorSection = <<<MONITOR
+## AI 監控系統軌跡
+{$monitorTsv}
+
+### 欄位說明
+status=最終狀態(target_hit/stop_hit/trailing_stop/closed/skipped/watching), entry/exit=進出場價與時間, MFE%=持有期間最大有利偏移, MAE%=最大不利偏移, calibration=AI開盤校準備註, ai_notes=AI滾動建議摘要
+MONITOR;
+        }
+
         // 消息面
         $newsSection = '（無消息面資料）';
         if ($newsOverall) {
@@ -215,6 +258,8 @@ est_vol_ratio=預估量倍數, open_chg%=開盤漲幅, current=快照時現價, 
 ## 消息面
 {$newsSection}
 
+{$monitorSection}
+
 ## 輸出格式
 
 請用繁體中文輸出，用 Markdown 格式，包含以下段落：
@@ -228,15 +273,22 @@ est_vol_ratio=預估量倍數, open_chg%=開盤漲幅, current=快照時現價, 
 - 盤中表現如何（開盤位置、量能、走勢）
 - 為什麼達標/未達標
 - 如果重來，最佳進場時機在哪裡
+- AI 監控決策是否合理（校準、進場、出場時機）
 
 ### 三、共通問題
 找出系統性的模式問題，例如：
 - 買入價是否系統性設太低/太高
 - 特定策略類型（突破/反彈）是否有明顯偏差
 - 評分高但虧損的標的有什麼共通點
+- AI 決策品質：校準是否準確、進出場時機是否恰當
 
-### 四、改善建議
-根據今天的觀察，列出具體可改善的方向（不需要改參數，只要指出問題）。
+### 四、AI 決策檢討
+- MFE vs 實際出場：有多少利潤留在桌上？
+- AI 否決的標的事後表現如何（是否正確否決）
+- AI 滾動建議的品質（調整目標/停損是否合理）
+
+### 五、改善建議
+根據今天的觀察，列出具體可改善的方向。
 PROMPT;
     }
 

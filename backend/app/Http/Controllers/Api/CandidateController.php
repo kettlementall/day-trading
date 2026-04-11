@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Candidate;
+use App\Models\CandidateMonitor;
+use App\Models\IntradaySnapshot;
 use App\Services\BacktestService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -69,6 +71,98 @@ class CandidateController extends Controller
             'confirmed' => $confirmed,
             'data' => $candidates,
         ]);
+    }
+
+    /**
+     * 取得候選標的的盤中快照
+     */
+    public function snapshots(Candidate $candidate): JsonResponse
+    {
+        $snapshots = IntradaySnapshot::where('stock_id', $candidate->stock_id)
+            ->where('trade_date', $candidate->trade_date)
+            ->orderBy('snapshot_time')
+            ->get();
+
+        return response()->json([
+            'candidate_id' => $candidate->id,
+            'stock_id' => $candidate->stock_id,
+            'trade_date' => $candidate->trade_date->format('Y-m-d'),
+            'count' => $snapshots->count(),
+            'data' => $snapshots,
+        ]);
+    }
+
+    /**
+     * 取得當日所有 monitor 狀態
+     */
+    public function monitors(Request $request): JsonResponse
+    {
+        $date = $request->get('date', now()->toDateString());
+
+        $monitors = CandidateMonitor::with(['candidate.stock'])
+            ->whereHas('candidate', fn($q) => $q->where('trade_date', $date))
+            ->get()
+            ->map(function ($monitor) {
+                $candidate = $monitor->candidate;
+                $stock = $candidate->stock;
+
+                // 取最新快照
+                $latestSnapshot = IntradaySnapshot::where('stock_id', $stock->id)
+                    ->where('trade_date', $candidate->trade_date)
+                    ->orderByDesc('snapshot_time')
+                    ->first();
+
+                $currentPrice = $latestSnapshot ? (float) $latestSnapshot->current_price : null;
+                $profitPct = null;
+                if ($currentPrice && $monitor->entry_price && (float) $monitor->entry_price > 0) {
+                    $profitPct = round(($currentPrice - (float) $monitor->entry_price) / (float) $monitor->entry_price * 100, 2);
+                }
+
+                return [
+                    'id' => $monitor->id,
+                    'candidate_id' => $candidate->id,
+                    'symbol' => $stock->symbol,
+                    'name' => $stock->name,
+                    'status' => $monitor->status,
+                    'strategy' => $candidate->intraday_strategy,
+                    'entry_price' => $monitor->entry_price,
+                    'entry_time' => $monitor->entry_time?->format('H:i'),
+                    'exit_price' => $monitor->exit_price,
+                    'exit_time' => $monitor->exit_time?->format('H:i'),
+                    'current_target' => $monitor->current_target,
+                    'current_stop' => $monitor->current_stop,
+                    'current_price' => $currentPrice,
+                    'profit_pct' => $profitPct,
+                    'skip_reason' => $monitor->skip_reason,
+                    'last_ai_advice' => $monitor->ai_advice_log
+                        ? collect($monitor->ai_advice_log)->last()
+                        : null,
+                    'updated_at' => $monitor->updated_at,
+                ];
+            });
+
+        return response()->json([
+            'date' => $date,
+            'count' => $monitors->count(),
+            'active' => $monitors->whereIn('status', CandidateMonitor::ACTIVE_STATUSES)->count(),
+            'data' => $monitors->values(),
+        ]);
+    }
+
+    /**
+     * 取得單檔 monitor 詳細（含完整 state_log + ai_advice_log）
+     */
+    public function monitor(Candidate $candidate): JsonResponse
+    {
+        $monitor = $candidate->monitor;
+
+        if (!$monitor) {
+            return response()->json(['error' => '此候選標的尚無監控紀錄'], 404);
+        }
+
+        $monitor->load('candidate.stock');
+
+        return response()->json($monitor);
     }
 
     public function stats(Request $request): JsonResponse

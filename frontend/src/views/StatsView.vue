@@ -45,6 +45,46 @@
         </div>
       </div>
 
+      <!-- AI 監控指標（有資料時才顯示） -->
+      <div v-if="stats.ai_approval_rate !== undefined" class="stats-grid" style="margin-top: 12px;">
+        <div class="stat-card">
+          <div class="stat-value">{{ stats.ai_approval_rate }}%</div>
+          <div class="stat-label">AI 通過率</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">{{ stats.valid_entry_rate }}%</div>
+          <div class="stat-label">有效進場率</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value highlight-up">{{ stats.avg_mfe }}%</div>
+          <div class="stat-label">平均 MFE</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value highlight-down">{{ stats.avg_mae }}%</div>
+          <div class="stat-label">平均 MAE</div>
+        </div>
+        <div v-if="stats.profit_if_valid_entry !== undefined" class="stat-card">
+          <div class="stat-value" :class="stats.profit_if_valid_entry > 0 ? 'highlight-up' : 'highlight-down'">
+            {{ stats.profit_if_valid_entry }}%
+          </div>
+          <div class="stat-label">有效進場期望值</div>
+        </div>
+        <div v-if="stats.avg_holding_minutes !== undefined" class="stat-card">
+          <div class="stat-value">{{ stats.avg_holding_minutes }}min</div>
+          <div class="stat-label">平均持有時間</div>
+        </div>
+        <div v-if="stats.ai_override_accuracy !== undefined" class="stat-card">
+          <div class="stat-value">{{ stats.ai_override_accuracy }}%</div>
+          <div class="stat-label">AI 介入準確率</div>
+        </div>
+        <div v-if="stats.effective_rr !== undefined" class="stat-card">
+          <div class="stat-value" :class="stats.effective_rr >= 1.5 ? 'highlight-up' : 'highlight-down'">
+            {{ stats.effective_rr }}
+          </div>
+          <div class="stat-label">改良版風報比</div>
+        </div>
+      </div>
+
       <!-- 輔助指標 -->
       <div class="sub-stats">
         <span>停損觸及率 <b>{{ stats.hit_stop_loss_rate }}%</b></span>
