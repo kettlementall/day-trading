@@ -111,6 +111,7 @@
         v-for="item in store.filteredCandidates"
         :key="item.id"
         class="stock-card"
+        :class="{ 'ai-rejected': item.ai_selected === false && item.ai_reasoning }"
         @click="goDetail(item)"
       >
         <div class="card-top">
@@ -167,6 +168,15 @@
             round
           >
             AI 選入{{ item.ai_score_adjustment ? ` (${item.ai_score_adjustment > 0 ? '+' : ''}${item.ai_score_adjustment})` : '' }}
+          </el-tag>
+          <el-tag
+            v-else-if="item.ai_selected === false && item.ai_reasoning"
+            size="small"
+            type="danger"
+            effect="dark"
+            round
+          >
+            AI 排除
           </el-tag>
           <el-tag
             v-for="reason in (item.reasons || [])"
@@ -446,6 +456,14 @@ function monitorStatusLabel(status) {
   margin-top: 8px;
 }
 
+.ai-rejected {
+  opacity: 0.55;
+  border-left: 3px solid #f56c6c !important;
+}
+.ai-rejected .card-ai-reasoning {
+  background: #fef0f0;
+  border-left-color: #f56c6c;
+}
 .card-ai-reasoning {
   margin-top: 8px;
   padding: 8px 10px;

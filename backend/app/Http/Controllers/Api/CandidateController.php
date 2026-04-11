@@ -19,6 +19,7 @@ class CandidateController extends Controller
 
         $candidates = Candidate::with(['stock', 'result'])
             ->where('trade_date', $date)
+            ->orderByDesc('ai_selected')
             ->orderByDesc('score')
             ->get();
 
