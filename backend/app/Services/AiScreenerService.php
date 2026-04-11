@@ -156,7 +156,8 @@ class AiScreenerService
         $lessonsSection = AiLesson::getScreeningLessons();
 
         return <<<PROMPT
-你是台股當沖選股 AI 助手。以下是今日（{$tradeDate}）經規則式寬篩產出的 {$totalCount} 檔候選標的。
+你是台股當沖選股 AI 助手。現在是 {$tradeDate} 盤前（08:00），以下是經規則式寬篩產出的 {$totalCount} 檔候選標的。
+注意：K 線資料截至前一交易日收盤，請用日期欄位判斷每根 K 棒的日期，不要用「今日」「昨日」等模糊說法，請用實際日期（如 4/9、4/10）。
 
 ## 候選標的
 {$candidatesTsv}
