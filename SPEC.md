@@ -503,14 +503,14 @@ pending → watching → entry_signal → holding → target_hit
 | `actual_high`       | 當日 `daily_quotes.high`                                   |
 | `actual_low`        | 當日 `daily_quotes.low`                                    |
 | `actual_close`      | 當日 `daily_quotes.close`                                  |
-| `hit_target`        | 當日最高價 ≥ 候選標的的 `target_price` → `true`             |
-| `hit_stop_loss`     | 當日最低價 ≤ 候選標的的 `stop_loss` → `true`                |
+| `hit_target`        | 有 monitor → monitor 狀態為 `target_hit`；無 monitor → 當日最高價 ≥ `target_price` |
+| `hit_stop_loss`     | 有 monitor → monitor 狀態為 `stop_hit`；無 monitor → 當日最低價 ≤ `stop_loss` |
 | `max_profit_percent`| `(high - suggested_buy) / suggested_buy × 100`             |
 | `max_loss_percent`  | `(suggested_buy - low) / suggested_buy × 100`              |
-| `buy_reachable`     | 當日最低價 ≤ 建議買入價 → `true`                            |
-| `target_reachable`  | 當日最高價 ≥ 目標價 → `true`                                |
+| `buy_reachable`     | 有 monitor → monitor 有實際進場；無 monitor → 當日最低價 ≤ 建議買入價 |
+| `target_reachable`  | 有 monitor → 同 `hit_target`；無 monitor → 當日最高價 ≥ 目標價 |
 | `buy_gap_percent`   | `(suggested_buy - low) / suggested_buy × 100`（正值=買得到）|
-| `target_gap_percent`| `(high - target_price) / target_price × 100`（正值=超過目標）|
+| `target_gap_percent`| `(high - effective_target) / effective_target × 100`（effective_target = monitor 最終目標 or 原始目標）|
 
 **注意事項：**
 - 需要當日 `daily_quotes` 資料才能計算（依賴 14:30 的 `stock:fetch-daily`）

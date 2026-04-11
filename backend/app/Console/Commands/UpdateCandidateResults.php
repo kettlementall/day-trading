@@ -45,8 +45,34 @@ class UpdateCandidateResults extends Command
             $targetPrice = (float) $candidate->target_price;
             $stopLoss = (float) $candidate->stop_loss;
 
-            $hitTarget = $high >= $targetPrice;
-            $hitStopLoss = $low <= $stopLoss;
+            // Monitor 相關欄位
+            $monitor = CandidateMonitor::where('candidate_id', $candidate->id)->first();
+            $monitorData = $this->getMonitorData($candidate, $date, $monitor);
+
+            // 若有 monitor 結果，以 monitor 狀態為準（因盤中 AI 可能調整目標/停損）
+            if ($monitor && $monitor->status !== CandidateMonitor::STATUS_PENDING) {
+                $hitTarget = $monitor->status === CandidateMonitor::STATUS_TARGET_HIT;
+                $hitStopLoss = $monitor->status === CandidateMonitor::STATUS_STOP_HIT;
+                // 用 monitor 最終目標/停損計算
+                $effectiveTarget = (float) ($monitor->current_target ?? $targetPrice);
+                $effectiveStop = (float) ($monitor->current_stop ?? $stopLoss);
+                $buyReachable = in_array($monitor->status, [
+                    CandidateMonitor::STATUS_HOLDING,
+                    CandidateMonitor::STATUS_TARGET_HIT,
+                    CandidateMonitor::STATUS_STOP_HIT,
+                    CandidateMonitor::STATUS_TRAILING_STOP,
+                    CandidateMonitor::STATUS_CLOSED,
+                ]);
+                $targetReachable = $hitTarget;
+            } else {
+                // 無 monitor 時用原始價格比對日 K
+                $hitTarget = $high >= $targetPrice;
+                $hitStopLoss = $low <= $stopLoss;
+                $effectiveTarget = $targetPrice;
+                $effectiveStop = $stopLoss;
+                $buyReachable = $low <= $suggestedBuy;
+                $targetReachable = $high >= $targetPrice;
+            }
 
             $maxProfit = $suggestedBuy > 0
                 ? round(($high - $suggestedBuy) / $suggestedBuy * 100, 2)
@@ -55,18 +81,12 @@ class UpdateCandidateResults extends Command
                 ? round(($suggestedBuy - $low) / $suggestedBuy * 100, 2)
                 : 0;
 
-            // 回測指標
-            $buyReachable = $low <= $suggestedBuy;
-            $targetReachable = $high >= $targetPrice;
             $buyGap = $suggestedBuy > 0
                 ? round(($suggestedBuy - $low) / $suggestedBuy * 100, 2)
                 : 0;
-            $targetGap = $targetPrice > 0
-                ? round(($high - $targetPrice) / $targetPrice * 100, 2)
+            $targetGap = $effectiveTarget > 0
+                ? round(($high - $effectiveTarget) / $effectiveTarget * 100, 2)
                 : 0;
-
-            // Monitor 相關欄位
-            $monitorData = $this->getMonitorData($candidate, $date);
 
             CandidateResult::create([
                 'candidate_id' => $candidate->id,
@@ -95,10 +115,8 @@ class UpdateCandidateResults extends Command
     /**
      * 從 CandidateMonitor + IntradaySnapshot 取得監控相關數據
      */
-    private function getMonitorData(Candidate $candidate, string $date): array
+    private function getMonitorData(Candidate $candidate, string $date, ?CandidateMonitor $monitor = null): array
     {
-        $monitor = CandidateMonitor::where('candidate_id', $candidate->id)->first();
-
         if (!$monitor) {
             return [];
         }
