@@ -23,12 +23,12 @@
 | 12:15 | `news:compute-indices`      | 計算新聞指數                   |
 | 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情             |
 | 15:00 | `stock:update-results`      | 更新前日候選標的的盤後結果     |
+| 15:30 | `stock:daily-review`        | 自動產出前日 AI 檢討報告 + 萃取教訓（依賴 15:00 結果回填） |
 | 16:00 | `stock:fetch-institutional` | 抓取三大法人買賣超             |
 | 16:30 | `stock:fetch-margin`        | 抓取融資融券                   |
 | 18:00 | `news:fetch`                | 盤後新聞抓取                   |
 | 18:15 | `news:compute-indices`      | 計算新聞指數                   |
 | 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 結果未回填重跑） |
-| 15:30 | `stock:daily-review`        | 自動產出前日 AI 檢討報告 + 萃取教訓（依賴 15:00 結果回填） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除） |
 
 > `stock:backtest --validated` 已停用自動排程（AI 覆蓋價格後，調整規則式公式參數意義不大）。指令保留可手動執行回測指標檢視。
