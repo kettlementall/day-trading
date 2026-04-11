@@ -173,95 +173,6 @@
         </div>
       </div>
 
-      <!-- AI 優化 -->
-      <div class="stock-card" style="margin-top: 16px;">
-        <div class="ai-header">
-          <h3>AI 公式優化</h3>
-          <div class="ai-buttons">
-            <el-button size="small" :loading="store.optimizing" @click="runOptimize">
-              單次分析
-            </el-button>
-            <el-button type="primary" size="small" :loading="store.validating" @click="runValidated">
-              自動優化
-            </el-button>
-          </div>
-        </div>
-
-        <!-- 驗證優化進度 -->
-        <div v-if="store.validating || store.validationResult" class="validation-section">
-          <div v-if="store.validating" class="validation-status">
-            <el-icon class="is-loading"><Loading /></el-icon>
-            <span>優化循環執行中...</span>
-          </div>
-
-          <!-- 執行日誌 -->
-          <div v-if="store.validationLogs.length" class="validation-logs" ref="logBox">
-            <div v-for="(log, i) in store.validationLogs" :key="i" class="log-line">{{ log }}</div>
-          </div>
-
-          <!-- 最終結果 -->
-          <div v-if="store.validationResult" class="validation-result">
-            <div :class="['result-badge', store.validationResult.improved ? 'improved' : 'unchanged']">
-              {{ store.validationResult.improved ? '已改善' : '維持原樣' }}
-              <span class="attempt-count">（{{ store.validationResult.attempts }} 次嘗試）</span>
-            </div>
-            <table class="comparison-table">
-              <thead>
-                <tr><th>指標</th><th>優化前</th><th>優化後</th><th></th></tr>
-              </thead>
-              <tbody>
-                <tr v-for="item in comparisonRows" :key="item.key">
-                  <td>{{ item.label }}</td>
-                  <td>{{ item.before }}</td>
-                  <td>{{ item.after }}</td>
-                  <td :class="item.cls">{{ item.arrow }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- 歷史紀錄 -->
-        <div v-if="store.backtestRounds.length" class="rounds-list">
-          <h4 style="margin: 12px 0 8px;">優化紀錄</h4>
-          <div v-for="round in store.backtestRounds" :key="round.id"
-               :class="['round-item', { 'round-rolled-back': round.metrics_after && !round.applied }]">
-            <div class="round-header">
-              <span class="round-date">{{ formatDate(round.analyzed_from) }} ~ {{ formatDate(round.analyzed_to) }}</span>
-              <span class="round-count">{{ round.sample_count }} 筆</span>
-              <el-tag v-if="round.metrics_after && round.applied" type="success" size="small">驗證通過</el-tag>
-              <el-tag v-else-if="round.metrics_after && !round.applied" type="danger" size="small">已回滾</el-tag>
-              <el-tag v-else-if="round.applied" type="success" size="small">已套用</el-tag>
-              <el-tag v-else type="info" size="small">未套用</el-tag>
-              <el-tag v-if="round.suggestions?.focus" size="small">{{ focusLabel(round.suggestions.focus) }}</el-tag>
-            </div>
-
-            <!-- before/after 完整對比 -->
-            <div v-if="round.metrics_after" class="round-comparison-full">
-              <table class="comparison-table">
-                <thead><tr><th></th><th>調整前</th><th>調整後</th><th></th></tr></thead>
-                <tbody>
-                  <tr v-for="item in roundComparison(round)" :key="item.key">
-                    <td>{{ item.label }}</td>
-                    <td>{{ item.before }}</td>
-                    <td>{{ item.after }}</td>
-                    <td :class="item.cls">{{ item.arrow }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div class="round-analysis">{{ round.suggestions?.analysis }}</div>
-            <div v-if="round.suggestions?.adjustments" class="round-adjustments">
-              <div v-for="(changes, type) in round.suggestions.adjustments" :key="type">
-                <span class="adj-type">[{{ type }}]</span>
-                <span v-for="(val, key) in changes" :key="key" class="adj-item">{{ key }}: {{ val }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <el-empty v-else-if="!store.validating && !store.validationResult" description="尚無優化紀錄" :image-size="60" />
-      </div>
     </template>
   </div>
 </template>
@@ -283,26 +194,16 @@ const store = useCandidateStore()
 const days = ref(30)
 const loading = ref(false)
 const stats = computed(() => store.stats)
-const logBox = ref(null)
 const reviewLogBox = ref(null)
 const reviewDate = ref(dayjs().format('YYYY-MM-DD'))
 
 async function fetchData() {
   loading.value = true
   try {
-    await Promise.all([
-      store.fetchStats(days.value),
-      store.fetchBacktestRounds(),
-    ])
+    await store.fetchStats(days.value)
   } finally {
     loading.value = false
   }
-}
-
-async function runOptimize() {
-  const from = dayjs().subtract(days.value, 'day').format('YYYY-MM-DD')
-  const to = dayjs().format('YYYY-MM-DD')
-  await store.optimize(from, to)
 }
 
 async function runDailyReview() {
@@ -326,84 +227,6 @@ function renderMarkdown(text) {
     .replace(/\n/g, '<br>')
 }
 
-async function runValidated() {
-  const from = dayjs().subtract(60, 'day').format('YYYY-MM-DD')
-  const to = dayjs().format('YYYY-MM-DD')
-  try {
-    await store.optimizeValidated(from, to)
-    await store.fetchStats(days.value)
-  } catch (e) {
-    console.error('Validated optimization failed:', e)
-  }
-}
-
-function focusLabel(focus) {
-  const map = { price: '價格', scoring: '評分', thresholds: '門檻' }
-  return map[focus] || focus
-}
-
-function formatDate(d) {
-  if (!d) return ''
-  return d.slice(0, 10)
-}
-
-function roundComparison(round) {
-  const b = round.metrics_before || {}
-  const a = round.metrics_after || {}
-  const keys = [
-    { key: 'buy_reach_rate', label: '買入可達', suffix: '%', higherBetter: true },
-    { key: 'target_reach_rate', label: '目標可達', suffix: '%', higherBetter: true },
-    { key: 'dual_reach_rate', label: '雙達率', suffix: '%', higherBetter: true },
-    { key: 'expected_value', label: '期望值', suffix: '%', higherBetter: true },
-    { key: 'hit_stop_loss_rate', label: '停損率', suffix: '%', higherBetter: false },
-  ]
-  return keys.map(({ key, label, suffix, higherBetter }) => {
-    const bv = b[key] ?? 0
-    const av = a[key] ?? 0
-    const better = higherBetter ? av > bv : av < bv
-    const same = Math.abs(av - bv) < 0.01
-    return {
-      key, label,
-      before: bv.toFixed(1) + suffix,
-      after: av.toFixed(1) + suffix,
-      arrow: same ? '=' : (better ? '↑' : '↓'),
-      cls: same ? '' : (better ? 'highlight-up' : 'highlight-down'),
-    }
-  })
-}
-
-const comparisonRows = computed(() => {
-  const r = store.validationResult
-  if (!r) return []
-  const keys = [
-    { key: 'buy_reach_rate', label: '買入可達率', suffix: '%', higherBetter: true },
-    { key: 'target_reach_rate', label: '目標可達率', suffix: '%', higherBetter: true },
-    { key: 'dual_reach_rate', label: '雙達率', suffix: '%', higherBetter: true },
-    { key: 'expected_value', label: '期望值', suffix: '%', higherBetter: true },
-    { key: 'hit_stop_loss_rate', label: '停損率', suffix: '%', higherBetter: false },
-    { key: 'avg_risk_reward', label: '風報比', suffix: '', higherBetter: true },
-  ]
-  return keys.map(({ key, label, suffix, higherBetter }) => {
-    const b = r.baseline?.[key] ?? 0
-    const a = r.final?.[key] ?? 0
-    const better = higherBetter ? a > b : a < b
-    const same = Math.abs(a - b) < 0.01
-    return {
-      key,
-      label,
-      before: (key === 'avg_risk_reward' ? b.toFixed(2) : b.toFixed(1)) + suffix,
-      after: (key === 'avg_risk_reward' ? a.toFixed(2) : a.toFixed(1)) + suffix,
-      arrow: same ? '=' : (better ? '↑' : '↓'),
-      cls: same ? '' : (better ? 'highlight-up' : 'highlight-down'),
-    }
-  })
-})
-
-// 自動滾動日誌到底部
-watch(() => store.validationLogs.length, async () => {
-  await nextTick()
-  if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight
-})
 
 watch(() => store.reviewLogs.length, async () => {
   await nextTick()
@@ -589,125 +412,6 @@ onMounted(() => fetchData())
 .log-line {
   white-space: pre-wrap;
   word-break: break-all;
-}
-
-.validation-result {
-  margin-bottom: 8px;
-}
-
-.result-badge {
-  display: inline-block;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 4px;
-  margin-bottom: 8px;
-}
-
-.result-badge.improved {
-  background: #f0f9eb;
-  color: #67c23a;
-}
-
-.result-badge.unchanged {
-  background: #fdf6ec;
-  color: #e6a23c;
-}
-
-.attempt-count {
-  font-weight: 400;
-  font-size: 12px;
-}
-
-.comparison-table {
-  width: 100%;
-  font-size: 12px;
-  border-collapse: collapse;
-}
-
-.comparison-table th {
-  text-align: left;
-  color: #909399;
-  font-weight: 500;
-  padding: 4px 8px;
-  border-bottom: 1px solid #ebeef5;
-}
-
-.comparison-table td {
-  padding: 4px 8px;
-  border-bottom: 1px solid #f4f4f5;
-}
-
-.rounds-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.round-item {
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  padding: 10px;
-}
-
-.round-rolled-back {
-  opacity: 0.65;
-  border-color: #fde2e2;
-}
-
-.round-comparison-full {
-  margin: 6px 0;
-}
-
-.round-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-
-.round-date {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.round-count {
-  font-size: 11px;
-  color: #909399;
-}
-
-.round-analysis {
-  font-size: 12px;
-  color: #606266;
-  margin-bottom: 4px;
-}
-
-.round-adjustments {
-  font-size: 11px;
-  color: #909399;
-  font-family: monospace;
-}
-
-.adj-type {
-  font-weight: 600;
-  margin-right: 4px;
-}
-
-.adj-item {
-  margin-right: 8px;
-}
-
-.round-comparison {
-  display: flex;
-  gap: 12px;
-  margin-top: 4px;
-  font-size: 11px;
-}
-
-.cmp-item {
-  color: #606266;
-  font-family: monospace;
 }
 
 .review-report {

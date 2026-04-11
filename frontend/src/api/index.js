@@ -78,20 +78,6 @@ export const getNewsFetchStatus = (date) =>
   api.get('/news/fetch-status', { params: { date } })
 
 // 回測系統
-export const getBacktestRounds = () =>
-  api.get('/backtest/rounds')
-
-export const triggerBacktestOptimize = (from, to) =>
-  api.post('/backtest/optimize', { from, to }, { timeout: 120000 })
-
-export const applyBacktestRound = (id) =>
-  api.post(`/backtest/rounds/${id}/apply`)
-
-export const getOptimizeValidatedUrl = (from, to, maxAttempts = 10) => {
-  const base = api.defaults.baseURL || '/api'
-  return `${base}/backtest/optimize-validated?from=${from}&to=${to}&max_attempts=${maxAttempts}`
-}
-
 export const getDailyReviewUrl = (date) => {
   const base = api.defaults.baseURL || '/api'
   return `${base}/backtest/daily-review?date=${date}`
