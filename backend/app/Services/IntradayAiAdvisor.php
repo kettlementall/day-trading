@@ -7,6 +7,7 @@ use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\DailyQuote;
 use App\Models\IntradaySnapshot;
+use App\Models\UsMarketIndex;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -267,10 +268,13 @@ class IntradayAiAdvisor
         $klineTsv = "代號\t日期\t開\t高\t低\t收\t量\n" . implode("\n", $klineLines);
 
         $lessonsSection = AiLesson::getIntradayLessons();
+        $usMarketSection = UsMarketIndex::getSummary($date);
 
         return <<<PROMPT
 你是台股當沖 AI 助手。現在是 {$date} 09:05，開盤剛滿 5 分鐘。
 以下是 {$date} AI 選出的候選標的及其開盤數據。K 線資料截至前一交易日，請用實際日期描述。
+
+{$usMarketSection}
 
 ## 候選標的 + 開盤數據
 {$tsv}

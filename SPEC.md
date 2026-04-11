@@ -10,6 +10,7 @@
 
 | 時間  | 指令                        | 說明                           |
 |-------|-----------------------------|-------------------------------|
+| 06:00 | `stock:fetch-us-indices`    | 抓取美股指數（S&P 500、費半、道瓊、那斯達克、美元指數） |
 | 06:00 | `news:fetch`                | 抓取隔夜國際新聞               |
 | 06:15 | `news:compute-indices`      | 計算新聞指數（供選股用）        |
 | 08:00 | `stock:ai-screen`           | AI 選股（規則式寬篩 min_score=45 + AI 審核選出 10-15 檔 + 策略標籤） |
@@ -747,6 +748,7 @@ php artisan stock:backtest --validated --max-attempts=5
 | `news_articles`       | 新聞文章           | `source`, `title`, `url`, `industry`, `sentiment_score`, `sentiment_label`, `ai_analysis`, `fetched_date`, `published_at` |
 | `ai_lessons`          | AI 教訓回饋       | `trade_date`, `type`(screening/calibration/entry/exit/market), `category`, `content`, `expires_at` |
 | `market_holidays`     | 休市日             | `date`(unique), `name`（假日名稱） |
+| `us_market_indices`   | 美股指數           | `date`, `symbol`(^GSPC/^SOX/^DJI/^IXIC/DX-Y.NYB), `name`, `close`, `prev_close`, `change_percent` |
 | `news_indices`        | 新聞指數           | `date`, `scope`, `scope_value`, `sentiment`, `heatmap`, `panic`, `international`, `article_count` |
 
 ---

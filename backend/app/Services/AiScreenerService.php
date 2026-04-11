@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\DailyQuote;
+use App\Models\UsMarketIndex;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -155,9 +156,14 @@ class AiScreenerService
         // 注入近期教訓
         $lessonsSection = AiLesson::getScreeningLessons();
 
+        // 注入美股指數
+        $usMarketSection = UsMarketIndex::getSummary($tradeDate);
+
         return <<<PROMPT
 你是台股當沖選股 AI 助手。現在是 {$tradeDate} 盤前（08:00），以下是經規則式寬篩產出的 {$totalCount} 檔候選標的。
 注意：K 線資料截至前一交易日收盤，請用日期欄位判斷每根 K 棒的日期，不要用「今日」「昨日」等模糊說法，請用實際日期（如 4/9、4/10）。
+
+{$usMarketSection}
 
 ## 候選標的
 {$candidatesTsv}

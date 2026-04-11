@@ -46,7 +46,8 @@ scheduledCommand('stock:fetch-intraday', '盤中行情(09:30)')->dailyAt('09:30'
 // 每日 15:00 更新前日候選標的的實際結果
 scheduledCommand('stock:update-results', '候選結果回填')->dailyAt('15:00');
 
-// 每日 06:00 抓取隔夜國際新聞（供 08:00 選股用）
+// 每日 06:00 抓取隔夜國際新聞 + 美股指數（供 08:00 選股用）
+scheduledCommand('stock:fetch-us-indices', '美股指數抓取')->dailyAt('06:00');
 scheduledCommand('news:fetch', '新聞抓取(06:00)')->dailyAt('06:00');
 scheduledCommand('news:compute-indices', '新聞指數(06:15)')->dailyAt('06:15');
 
