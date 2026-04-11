@@ -13,7 +13,7 @@ class Candidate extends Model
         'stop_loss', 'risk_reward_ratio', 'score', 'strategy_type', 'strategy_detail',
         'reasons', 'indicators',
         'morning_score', 'morning_signals', 'morning_confirmed',
-        'ai_selected', 'ai_score_adjustment', 'ai_reasoning',
+        'ai_selected', 'ai_score_adjustment', 'ai_reasoning', 'ai_price_reasoning',
         'intraday_strategy', 'reference_support', 'reference_resistance', 'ai_warnings',
     ];
 

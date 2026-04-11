@@ -82,7 +82,13 @@
           </div>
           <div v-if="m.skip_reason" class="monitor-reason">{{ m.skip_reason }}</div>
           <div v-if="m.last_ai_advice" class="monitor-ai">
-            AI: {{ m.last_ai_advice.notes }}
+            <span class="monitor-ai-label">AI:</span> {{ m.last_ai_advice.notes }}
+            <span v-if="m.last_ai_advice.adjustments?.target" class="monitor-ai-adj price-up">
+              目標→{{ m.last_ai_advice.adjustments.target }}
+            </span>
+            <span v-if="m.last_ai_advice.adjustments?.stop" class="monitor-ai-adj price-down">
+              停損→{{ m.last_ai_advice.adjustments.stop }}
+            </span>
           </div>
         </div>
       </div>
@@ -172,6 +178,9 @@
         <!-- AI 選股理由 -->
         <div v-if="item.ai_reasoning" class="card-ai-reasoning">
           <div class="ai-reasoning-text">{{ item.ai_reasoning }}</div>
+          <div v-if="item.ai_price_reasoning" class="ai-price-reasoning">
+            {{ item.ai_price_reasoning }}
+          </div>
           <div v-if="item.ai_warnings" class="ai-warnings">
             <span v-for="(w, i) in (Array.isArray(item.ai_warnings) ? item.ai_warnings : [item.ai_warnings])" :key="i" class="ai-warning-chip">
               {{ w }}
@@ -445,6 +454,12 @@ function monitorStatusLabel(status) {
   color: #303133;
   line-height: 1.5;
 }
+.ai-price-reasoning {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #606266;
+  font-style: italic;
+}
 .ai-warnings {
   margin-top: 4px;
   display: flex;
@@ -643,6 +658,14 @@ function monitorStatusLabel(status) {
   margin-top: 4px;
   font-size: 12px;
   color: #409eff;
+}
+.monitor-ai-label {
+  font-weight: 600;
+}
+.monitor-ai-adj {
+  margin-left: 6px;
+  font-weight: 600;
+  font-size: 11px;
 }
 
 .loading-wrap, .empty-wrap {

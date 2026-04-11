@@ -172,6 +172,7 @@ class AiScreenerService
 - `suggested_buy`：建議買入價（根據 K 線型態、支撐壓力位、策略特性給出合理的進場價）
 - `target_price`：目標獲利價（根據壓力位、近期振幅、型態空間合理設定）
 - `stop_loss`：停損價（根據支撐位、ATR、型態破壞點設定）
+- `price_reasoning`：一句話解釋三個價格的設定依據（例如：「買入設前高29.0回測位，目標為4/8高點30.5，停損設MA10下方28.5」）
 - `reference_support`：參考支撐位
 - `reference_resistance`：參考壓力位
 - `score_adjustment`：加減分（-20 ~ +20）
@@ -195,6 +196,7 @@ class AiScreenerService
       "suggested_buy": 29.5,
       "target_price": 30.5,
       "stop_loss": 29.0,
+      "price_reasoning": "買入設前高29.5回測位，目標為4/8高點30.5，停損設MA10下方29.0",
       "reference_support": 29.0,
       "reference_resistance": 30.5,
       "warnings": ["上方 30.5 為 60 日高點壓力"]
@@ -250,6 +252,7 @@ PROMPT;
                     'reference_support' => $ai['reference_support'] ?? $candidate->stop_loss,
                     'reference_resistance' => $ai['reference_resistance'] ?? $candidate->target_price,
                     'ai_warnings' => $ai['warnings'] ?? null,
+                    'ai_price_reasoning' => $ai['price_reasoning'] ?? null,
                 ];
 
                 if (!empty($ai['suggested_buy'])) {
