@@ -65,14 +65,14 @@ class StockScreener
             $minPrice = $screenConfig['min_price'] ?? 10;
             if ($volumes[0] / 1000 < $minVolume || $closes[0] < $minPrice) continue;
 
-            // 當沖硬排除：5 日均振幅 < 2.5% → 波動太小不適合當沖
-            $minAmplitude = $screenConfig['min_amplitude'] ?? 2.5;
+            // 當沖硬排除：5 日均振幅 < 1.8% → 波動太小不適合當沖
+            $minAmplitude = $screenConfig['min_amplitude'] ?? 1.8;
             $recent5Amplitudes = array_slice($amplitudes, 0, 5);
             $avgAmplitude5 = count($recent5Amplitudes) > 0 ? array_sum($recent5Amplitudes) / count($recent5Amplitudes) : 0;
             if ($avgAmplitude5 < $minAmplitude) continue;
 
-            // 當沖硬排除：5 日均成交量 < 2000 張 → 流動性不足
-            $minDayTradingVolume = $screenConfig['min_day_trading_volume'] ?? 2000;
+            // 當沖硬排除：5 日均成交量 < 800 張 → 流動性不足
+            $minDayTradingVolume = $screenConfig['min_day_trading_volume'] ?? 800;
             $recent5Volumes = array_slice($volumes, 0, 5);
             $avgVolume5 = count($recent5Volumes) > 0 ? array_sum($recent5Volumes) / count($recent5Volumes) / 1000 : 0;
             if ($avgVolume5 < $minDayTradingVolume) continue;

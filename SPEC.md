@@ -98,8 +98,8 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 
 | 條件 | 閾值 | 設定鍵 | 說明 |
 |------|------|--------|------|
-| 5日均振幅過低 | < 2.5% | `min_amplitude` | 振幅太小無當沖價值 |
-| 5日均量過低 | < 2000 張 | `min_day_trading_volume` | 量能不足難以進出 |
+| 5日均振幅過低 | < 1.8% | `min_amplitude` | 振幅太小無當沖價值 |
+| 5日均量過低 | < 800 張 | `min_day_trading_volume` | 量能不足難以進出 |
 
 ### 2.2 評分項目
 
