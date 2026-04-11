@@ -23,9 +23,10 @@ class NewsIndustryMap
 
     /**
      * RSS 來源設定
+     * 精簡為高品質來源，避免大量無關新聞
      */
     public const RSS_FEEDS = [
-        // 台灣中文
+        // 台灣中文（主要來源）
         [
             'name' => 'cnyes_tw',
             'url' => 'https://news.cnyes.com/news/cat/tw_stock/rss',
@@ -39,34 +40,16 @@ class NewsIndustryMap
             'category' => 'international',
         ],
         [
-            'name' => 'cnyes_fund',
-            'url' => 'https://news.cnyes.com/news/cat/fund/rss',
-            'source' => 'cnyes',
-            'category' => 'macro',
-        ],
-        [
             'name' => 'yahoo_tw',
             'url' => 'https://tw.stock.yahoo.com/rss?category=tw-market',
             'source' => 'yahoo',
             'category' => 'tw_stock',
         ],
-        [
-            'name' => 'yahoo_intl',
-            'url' => 'https://tw.stock.yahoo.com/rss?category=intl-market',
-            'source' => 'yahoo',
-            'category' => 'international',
-        ],
-        // 國際英文
+        // 國際英文（只留 Reuters + CNBC）
         [
             'name' => 'reuters_markets',
             'url' => 'https://news.google.com/rss/search?q=site:reuters.com+markets&hl=en&gl=US&ceid=US:en',
             'source' => 'reuters',
-            'category' => 'international',
-        ],
-        [
-            'name' => 'bloomberg_markets',
-            'url' => 'https://news.google.com/rss/search?q=site:bloomberg.com+markets+stocks&hl=en&gl=US&ceid=US:en',
-            'source' => 'bloomberg',
             'category' => 'international',
         ],
         [
@@ -75,18 +58,42 @@ class NewsIndustryMap
             'source' => 'cnbc',
             'category' => 'international',
         ],
-        [
-            'name' => 'wsj_markets',
-            'url' => 'https://feeds.a.dj.com/rss/RSSMarketsMain.xml',
-            'source' => 'wsj',
-            'category' => 'international',
-        ],
-        [
-            'name' => 'marketwatch',
-            'url' => 'https://feeds.content.dowjones.io/public/rss/mw_topstories',
-            'source' => 'marketwatch',
-            'category' => 'international',
-        ],
+    ];
+
+    /**
+     * 相關性關鍵字 — 標題必須包含至少一個才會收錄
+     * 分中文和英文兩組
+     */
+    public const RELEVANCE_KEYWORDS_ZH = [
+        // 台股相關
+        '台股', '台指', '加權', '上市', '上櫃', '外資', '法人', '融資', '融券',
+        '漲停', '跌停', '成交量', '權值', '盤勢', '開盤', '收盤', '盤中',
+        // 個股/產業
+        '台積電', '聯發科', '鴻海', '半導體', '晶圓', 'AI', '伺服器', '電動車',
+        'PCB', '面板', '金控', '銀行', '航運', '生技', '新藥',
+        // 總經/政策
+        '升息', '降息', '利率', 'CPI', 'GDP', '通膨', '非農', '央行', '聯準會',
+        '關稅', '貿易戰', '制裁', '台海', '地緣',
+        // 國際股市
+        '美股', '道瓊', '那斯達克', '費城半導體', 'S&P', '日股', '陸股',
+        '期貨', '選擇權', 'ETF',
+    ];
+
+    public const RELEVANCE_KEYWORDS_EN = [
+        // Markets
+        'stock market', 'stocks', 'S&P 500', 'Nasdaq', 'Dow', 'Wall Street',
+        'rally', 'sell-off', 'correction', 'bear market', 'bull market',
+        // Macro
+        'Fed', 'Federal Reserve', 'rate cut', 'rate hike', 'interest rate',
+        'inflation', 'CPI', 'GDP', 'jobs report', 'nonfarm', 'recession',
+        'Treasury', 'bond yield',
+        // Tech/Semi
+        'TSMC', 'Nvidia', 'semiconductor', 'chip', 'AI stocks', 'tech stocks',
+        'AMD', 'Intel', 'Broadcom', 'ASML',
+        // Geopolitics affecting markets
+        'tariff', 'trade war', 'sanction', 'Taiwan', 'China',
+        // Asia
+        'Asia stocks', 'Asian markets', 'Taiwan stock', 'Nikkei', 'Hang Seng',
     ];
 
     /**
@@ -111,5 +118,34 @@ class NewsIndustryMap
         }
 
         return $bestCount > 0 ? $bestMatch : null;
+    }
+
+    /**
+     * 判斷標題是否與台股交易相關
+     */
+    public static function isRelevant(string $title, string $category): bool
+    {
+        // 台股類一律保留
+        if ($category === 'tw_stock') {
+            return true;
+        }
+
+        $titleLower = mb_strtolower($title);
+
+        // 中文關鍵字
+        foreach (self::RELEVANCE_KEYWORDS_ZH as $kw) {
+            if (mb_stripos($titleLower, mb_strtolower($kw)) !== false) {
+                return true;
+            }
+        }
+
+        // 英文關鍵字
+        foreach (self::RELEVANCE_KEYWORDS_EN as $kw) {
+            if (mb_stripos($titleLower, mb_strtolower($kw)) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

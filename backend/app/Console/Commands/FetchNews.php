@@ -81,6 +81,11 @@ class FetchNews extends Command
                     }
                 }
 
+                // 相關性過濾
+                if (!NewsIndustryMap::isRelevant($title, $feed['category'])) {
+                    continue;
+                }
+
                 $fullText = $title . ' ' . $desc;
                 $industry = NewsIndustryMap::classify($fullText);
 
@@ -96,7 +101,7 @@ class FetchNews extends Command
                 );
                 $count++;
 
-                if ($count >= 50) break; // 每個來源最多50篇
+                if ($count >= 30) break; // 每個來源最多30篇
             }
 
             return $count;
@@ -113,18 +118,12 @@ class FetchNews extends Command
     private function fetchGoogleNews(string $date): int
     {
         $searchTerms = [
-            // 中文
-            '台股' => ['category' => 'tw_stock', 'hl' => 'zh-TW', 'gl' => 'TW', 'ceid' => 'TW:zh-Hant'],
-            '美股+台灣' => ['category' => 'international', 'hl' => 'zh-TW', 'gl' => 'TW', 'ceid' => 'TW:zh-Hant'],
-            '半導體+台灣' => ['category' => 'industry', 'hl' => 'zh-TW', 'gl' => 'TW', 'ceid' => 'TW:zh-Hant'],
-            'AI+科技+台灣' => ['category' => 'industry', 'hl' => 'zh-TW', 'gl' => 'TW', 'ceid' => 'TW:zh-Hant'],
-            '金融+台灣+股市' => ['category' => 'industry', 'hl' => 'zh-TW', 'gl' => 'TW', 'ceid' => 'TW:zh-Hant'],
-            // 英文國際
-            'US stock market today' => ['category' => 'international', 'hl' => 'en', 'gl' => 'US', 'ceid' => 'US:en'],
-            'semiconductor TSMC Nvidia' => ['category' => 'international', 'hl' => 'en', 'gl' => 'US', 'ceid' => 'US:en'],
-            'Federal Reserve interest rate' => ['category' => 'international', 'hl' => 'en', 'gl' => 'US', 'ceid' => 'US:en'],
-            'Asia stock market Taiwan' => ['category' => 'international', 'hl' => 'en', 'gl' => 'US', 'ceid' => 'US:en'],
-            'AI technology stocks' => ['category' => 'international', 'hl' => 'en', 'gl' => 'US', 'ceid' => 'US:en'],
+            // 中文：聚焦台股盤勢與重要產業
+            '台股+盤勢' => ['category' => 'tw_stock', 'hl' => 'zh-TW', 'gl' => 'TW', 'ceid' => 'TW:zh-Hant'],
+            '半導體+台積電' => ['category' => 'tw_stock', 'hl' => 'zh-TW', 'gl' => 'TW', 'ceid' => 'TW:zh-Hant'],
+            // 英文：只抓影響台股的國際大事
+            'TSMC Nvidia semiconductor' => ['category' => 'international', 'hl' => 'en', 'gl' => 'US', 'ceid' => 'US:en'],
+            'Federal Reserve rate decision' => ['category' => 'international', 'hl' => 'en', 'gl' => 'US', 'ceid' => 'US:en'],
         ];
 
         $total = 0;
@@ -159,6 +158,10 @@ class FetchNews extends Command
                         try { $publishedAt = Carbon::parse($pubDate); } catch (\Exception $e) {}
                     }
 
+                    if (!NewsIndustryMap::isRelevant($title, $category)) {
+                        continue;
+                    }
+
                     $fullText = $title . ' ' . $desc;
                     $industry = NewsIndustryMap::classify($fullText);
 
@@ -173,7 +176,7 @@ class FetchNews extends Command
                         ]
                     );
                     $count++;
-                    if ($count >= 20) break;
+                    if ($count >= 10) break;
                 }
 
                 $total += $count;
