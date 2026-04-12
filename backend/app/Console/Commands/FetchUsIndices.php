@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Log;
 class FetchUsIndices extends Command
 {
     protected $signature = 'stock:fetch-us-indices {date?}';
-    protected $description = '抓取美股主要指數收盤數據（S&P 500、費半、道瓊、那斯達克、美元指數）';
+    protected $description = '抓取台指期夜盤 + 美股主要指數收盤數據';
 
     private const INDICES = [
         '^GSPC'    => 'S&P 500',
@@ -70,7 +70,49 @@ class FetchUsIndices extends Command
             }
         }
 
-        $this->info("完成，共抓取 {$count} 筆美股指數");
+        // 台指期（近月）from 期交所
+        try {
+            $response = Http::timeout(10)
+                ->post('https://mis.taifex.com.tw/futures/api/getQuoteList', [
+                    'CID' => '',
+                    'SymID' => 'TX',
+                    'MarketType' => 0,
+                    'PageNo' => 1,
+                    'PageSize' => 10,
+                ]);
+
+            if ($response->successful()) {
+                $quotes = $response->json('RtData.QuoteList', []);
+                // 取近月合約（第二筆，第一筆是現貨）
+                $futures = $quotes[1] ?? null;
+                if ($futures && $futures['CLastPrice']) {
+                    $close = (float) $futures['CLastPrice'];
+                    $prevClose = (float) $futures['CRefPrice'];
+                    $changePct = $prevClose > 0
+                        ? round(($close - $prevClose) / $prevClose * 100, 2)
+                        : 0;
+
+                    UsMarketIndex::updateOrCreate(
+                        ['date' => $date, 'symbol' => 'TX'],
+                        [
+                            'name' => '台指期',
+                            'close' => $close,
+                            'prev_close' => $prevClose,
+                            'change_percent' => $changePct,
+                        ]
+                    );
+
+                    $sign = $changePct >= 0 ? '+' : '';
+                    $this->info("  台指期: {$close} ({$sign}{$changePct}%)");
+                    $count++;
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error("FetchUsIndices TX: " . $e->getMessage());
+            $this->error("  台指期: " . $e->getMessage());
+        }
+
+        $this->info("完成，共抓取 {$count} 筆指數");
         return self::SUCCESS;
     }
 }

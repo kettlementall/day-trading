@@ -18,7 +18,7 @@ class UsMarketIndex extends Model
     ];
 
     /**
-     * 取得指定日期的美股摘要（供 AI prompt 注入）
+     * 取得指定日期的市場摘要（供 AI prompt 注入）
      */
     public static function getSummary(string $date): string
     {
@@ -28,11 +28,25 @@ class UsMarketIndex extends Model
             return '';
         }
 
-        $lines = $indices->map(function ($i) {
+        $tx = $indices->firstWhere('symbol', 'TX');
+        $others = $indices->where('symbol', '!=', 'TX');
+
+        $lines = [];
+
+        if ($tx) {
+            $sign = $tx->change_percent >= 0 ? '+' : '';
+            $lines[] = "**台指期夜盤 {$sign}{$tx->change_percent}%**（重要參考：直接反映隔夜國際情勢對台股開盤影響，AI 選股與校準應優先參考此指標）";
+        }
+
+        $otherLines = $others->map(function ($i) {
             $sign = $i->change_percent >= 0 ? '+' : '';
             return "{$i->name} {$sign}{$i->change_percent}%";
         });
 
-        return "## 昨夜美股收盤\n" . $lines->implode(' | ');
+        if ($otherLines->isNotEmpty()) {
+            $lines[] = $otherLines->implode(' | ');
+        }
+
+        return "## 昨夜市場收盤\n" . implode("\n", $lines);
     }
 }

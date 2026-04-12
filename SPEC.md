@@ -10,7 +10,7 @@
 
 | 時間  | 指令                        | 說明                           |
 |-------|-----------------------------|-------------------------------|
-| 06:00 | `stock:fetch-us-indices`    | 抓取美股指數（S&P 500、費半、道瓊、那斯達克、美元指數） |
+| 06:00 | `stock:fetch-us-indices`    | 抓取美股指數 + 台指期夜盤（S&P 500、費半、道瓊、那斯達克、美元指數、台指期） |
 | 06:00 | `news:fetch`                | 抓取隔夜國際新聞               |
 | 06:15 | `news:compute-indices`      | 計算新聞指數（供選股用）        |
 | 08:00 | `stock:ai-screen`           | AI 選股（規則式寬篩 min_score=45 + AI 審核選出 10-15 檔 + 策略標籤） |
@@ -763,7 +763,7 @@ php artisan stock:backtest --validated --max-attempts=5
 | `ai_lessons`          | AI 教訓回饋       | `trade_date`, `type`(screening/calibration/entry/exit/market), `category`, `content`, `expires_at` |
 | `daily_reviews`       | AI 檢討報告       | `trade_date`(unique), `candidates_count`, `report`(longText) |
 | `market_holidays`     | 休市日             | `date`(unique), `name`（假日名稱） |
-| `us_market_indices`   | 美股指數           | `date`, `symbol`(^GSPC/^SOX/^DJI/^IXIC/DX-Y.NYB), `name`, `close`, `prev_close`, `change_percent` |
+| `us_market_indices`   | 美股指數 + 台指期   | `date`, `symbol`(^GSPC/^SOX/^DJI/^IXIC/DX-Y.NYB/TX), `name`, `close`, `prev_close`, `change_percent` |
 | `news_indices`        | 新聞指數           | `date`, `scope`, `scope_value`, `sentiment`, `heatmap`, `panic`, `international`, `article_count` |
 
 ---
@@ -830,7 +830,7 @@ php artisan stock:backtest --validated --max-attempts=5
 
 頁面頂部顯示：
 
-- **美股指數列**：S&P 500、費半、道瓊、那斯達克、美元指數的昨夜漲跌幅（紅漲綠跌），資料來自 `us_market_indices`
+- **市場指數列**：台指期夜盤（加粗突顯）、S&P 500、費半、道瓊、那斯達克、美元指數的昨夜漲跌幅（紅漲綠跌），資料來自 `us_market_indices`。台指期夜盤在 AI prompt 中有較高權重，直接反映隔夜國際情勢對台股開盤影響
 - **休市提示**：週末或國定假日顯示「今日休市（假日名稱）」，取代「今日尚無候選標的」
 - **盤前確認摘要**：候選數 / 盤前確認通過數 / 篩選 radio
 

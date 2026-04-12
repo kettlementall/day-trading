@@ -17,12 +17,13 @@
       </div>
     </div>
 
-    <!-- 美股指數 -->
+    <!-- 市場指數 -->
     <div v-if="store.usIndices.length" class="us-indices-bar">
       <span
         v-for="idx in store.usIndices"
         :key="idx.symbol"
         class="us-index-item"
+        :class="{ 'us-index-highlight': idx.symbol === 'TX' }"
       >
         <span class="us-index-name">{{ idx.name }}</span>
         <span :class="idx.change_percent >= 0 ? 'price-up' : 'price-down'">
@@ -415,6 +416,14 @@ function monitorStatusLabel(status) {
 
 .us-index-name {
   color: #909399;
+}
+
+.us-index-highlight {
+  font-weight: 600;
+}
+
+.us-index-highlight .us-index-name {
+  color: #303133;
 }
 
 .morning-summary {
