@@ -22,7 +22,7 @@ class AiScreenerService
     public function __construct()
     {
         $this->apiKey = config('services.anthropic.api_key', '');
-        $this->model = config('services.anthropic.model', 'claude-haiku-4-5-20251001');
+        $this->model = config('services.anthropic.screening_model', 'claude-sonnet-4-6');
     }
 
     /**
@@ -46,7 +46,7 @@ class AiScreenerService
         $prompt = $this->buildPrompt($tradeDate, $candidates);
 
         try {
-            $response = Http::timeout(60)
+            $response = Http::timeout(120)
                 ->withHeaders([
                     'x-api-key' => $this->apiKey,
                     'anthropic-version' => '2023-06-01',
@@ -54,7 +54,7 @@ class AiScreenerService
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
-                    'max_tokens' => 4096,
+                    'max_tokens' => 8192,
                     'messages' => [
                         ['role' => 'user', 'content' => $prompt],
                     ],
@@ -69,7 +69,11 @@ class AiScreenerService
             $aiResult = $this->parseResponse($text);
 
             if (empty($aiResult)) {
-                Log::error('AiScreenerService: 無法解析 AI 回應');
+                Log::error('AiScreenerService: 無法解析 AI 回應', [
+                    'response_length' => mb_strlen($text),
+                    'response_preview' => mb_substr($text, 0, 500),
+                    'stop_reason' => $response->json('stop_reason'),
+                ]);
                 return $this->fallbackScreen($candidates);
             }
 
