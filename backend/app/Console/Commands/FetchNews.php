@@ -49,7 +49,7 @@ class FetchNews extends Command
         try {
             $response = Http::timeout(15)
                 ->get("https://api.cnyes.com/media/api/v1/newslist/category/{$category}", [
-                    'limit' => 30,
+                    'limit' => 100,
                 ]);
 
             if (!$response->successful()) {
