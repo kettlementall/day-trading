@@ -5,6 +5,10 @@ namespace App\Services;
 use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\DailyQuote;
+use App\Models\InstitutionalTrade;
+use App\Models\MarginTrade;
+use App\Models\NewsArticle;
+use App\Models\NewsIndex;
 use App\Models\UsMarketIndex;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
@@ -149,8 +153,96 @@ class AiScreenerService
             }
         }
 
+        // 1. 籌碼面：近 5 日三大法人買賣超
+        $chipHeader = "代號\t日期\t外資淨買(張)\t投信淨買(張)\t自營淨買(張)\t合計淨買(張)";
+        $chipRows = [];
+
+        foreach ($candidates as $c) {
+            $trades = InstitutionalTrade::where('stock_id', $c->stock_id)
+                ->where('date', '<=', $tradeDate)
+                ->orderByDesc('date')
+                ->limit(5)
+                ->get()
+                ->reverse();
+
+            foreach ($trades as $t) {
+                $chipRows[] = implode("\t", [
+                    $c->stock->symbol,
+                    $t->date->format('m/d'),
+                    $t->foreign_net,
+                    $t->trust_net,
+                    $t->dealer_net,
+                    $t->total_net,
+                ]);
+            }
+        }
+
+        // 2. 融資融券：近 5 日變化
+        $marginHeader = "代號\t日期\t融資增減(張)\t融資餘額(張)\t融券增減(張)\t融券餘額(張)";
+        $marginRows = [];
+
+        foreach ($candidates as $c) {
+            $margins = MarginTrade::where('stock_id', $c->stock_id)
+                ->where('date', '<=', $tradeDate)
+                ->orderByDesc('date')
+                ->limit(5)
+                ->get()
+                ->reverse();
+
+            foreach ($margins as $m) {
+                $marginRows[] = implode("\t", [
+                    $c->stock->symbol,
+                    $m->date->format('m/d'),
+                    $m->margin_change,
+                    $m->margin_balance,
+                    $m->short_change,
+                    $m->short_balance,
+                ]);
+            }
+        }
+
+        // 3. 當日新聞標題（最近兩日，與候選產業相關）
+        $newsLines = [];
+        $news = NewsArticle::where('fetched_date', '>=', now()->subDays(2)->toDateString())
+            ->whereNotNull('industry')
+            ->orderByDesc('published_at')
+            ->limit(30)
+            ->get();
+
+        foreach ($news as $n) {
+            $label = $n->industry ?? '其他';
+            $newsLines[] = "- [{$label}] {$n->title}";
+        }
+
+        // 4. 產業消息面指數
+        $newsIndexLines = [];
+        $latestNewsDate = NewsIndex::where('scope', 'overall')
+            ->where('date', '<=', $tradeDate)
+            ->orderByDesc('date')
+            ->value('date');
+
+        if ($latestNewsDate) {
+            $overall = NewsIndex::where('scope', 'overall')->where('date', $latestNewsDate)->first();
+            if ($overall) {
+                $newsIndexLines[] = "整體情緒: {$overall->sentiment} | 熱度: {$overall->heatmap} | 恐慌: {$overall->panic} | 國際: {$overall->international} (文章數: {$overall->article_count})";
+            }
+
+            $industries = NewsIndex::where('scope', 'industry')
+                ->where('date', $latestNewsDate)
+                ->orderByDesc('sentiment')
+                ->get();
+
+            foreach ($industries as $idx) {
+                $newsIndexLines[] = "{$idx->scope_value}: 情緒 {$idx->sentiment} | 熱度 {$idx->heatmap} (文章數: {$idx->article_count})";
+            }
+        }
+
         $candidatesTsv = $header . "\n" . implode("\n", $rows);
         $klineTsv = $klineHeader . "\n" . implode("\n", $klineRows);
+        $chipTsv = $chipHeader . "\n" . implode("\n", $chipRows);
+        $marginTsv = $marginHeader . "\n" . implode("\n", $marginRows);
+        $newsSection = !empty($newsLines) ? implode("\n", $newsLines) : '（無近期新聞）';
+        $newsIndexSection = !empty($newsIndexLines) ? implode("\n", $newsIndexLines) : '（無消息面指數）';
         $totalCount = $candidates->count();
 
         // 注入近期教訓
@@ -171,14 +263,30 @@ class AiScreenerService
 ## 近 5 日 K 線
 {$klineTsv}
 
+## 近 5 日三大法人買賣超
+{$chipTsv}
+
+## 近 5 日融資融券
+{$marginTsv}
+
+## 近期新聞
+{$newsSection}
+
+## 消息面指數
+{$newsIndexSection}
+
 {$lessonsSection}
 
 ## 任務
-從上述候選池中選出最適合今日當沖的 10-15 檔標的。你可以：
+綜合以上所有資訊（K 線型態、籌碼面、融資券、消息面、國際市場），從候選池中選出最適合今日當沖的 10-15 檔標的。你可以：
 1. **選入規則分數高的好標的**（確認型態與量能配合）
 2. **選入規則分數偏低但型態好的標的**（例如杯柄突破、縮量回測不破前高）
 3. **排除規則分數高但有風險的標的**（例如連漲量縮、同類股過多只留最強）
 4. **控制同產業標的數量**，同產業最多 2-3 檔
+5. **參考籌碼面**：外資/投信連續買超的標的可加分，三大法人同步賣超的應警戒
+6. **參考融資券**：融資大增+股價未漲=散戶追高風險；融券大增+股價強=軋空機會
+7. **參考消息面**：利多產業的標的可優先，恐慌指數高時整體應保守、減少選入數量
+8. **參考國際市場**：台指期夜盤方向是最重要參考，費半走勢影響半導體/AI 類股
 
 每檔標的請給出：
 - `intraday_strategy`：盤中策略標籤，選項：breakout_fresh（首次突破）、breakout_retest（突破回測）、gap_pullback（跳空拉回）、bounce（跌深反彈）、momentum（量能動能）
