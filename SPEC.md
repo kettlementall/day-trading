@@ -13,7 +13,7 @@
 | 06:00 | `stock:fetch-us-indices`    | 抓取美股指數 + 台指期夜盤（S&P 500、費半、道瓊、那斯達克、美元指數、台指期） |
 | 06:00 | `news:fetch`                | 抓取隔夜國際新聞               |
 | 06:15 | `news:compute-indices`      | 計算新聞指數（供選股用）        |
-| 08:00 | `stock:ai-screen`           | AI 選股（規則式寬篩 min_score=45 + AI 審核選出 10-15 檔 + 策略標籤） |
+| 08:00 | `stock:ai-screen`           | AI 選股（規則式寬篩 min_score=35, max=40 + AI 審核選出 10-15 檔 + 策略標籤） |
 | 08:00 | `news:fetch`                | 開盤前新聞抓取                 |
 | 08:15 | `news:compute-indices`      | 計算新聞指數                   |
 | 09:05 | `stock:fetch-intraday`      | 盤中即時行情（5分K）           |
@@ -285,11 +285,26 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 
 ### 流程
 
-1. **規則式寬篩**（StockScreener, min_score=45）→ 產出 30-50 檔候選池
-2. **AI 審核選股**（AiScreenerService）→ 從候選池中選出 10-15 檔
-3. AI 為每檔標的給出：策略標籤（intraday_strategy）、參考支撐/壓力位、加減分、選股理由、價格理由
+1. **規則式寬篩**（StockScreener, min_score=35, max=40）→ 產出較大候選池供 AI 選擇
+2. **AI 審核選股**（AiScreenerService）→ 綜合 K 線、籌碼、融資券、消息面、國際市場，選出 10-15 檔
+3. AI 為每檔標的給出：策略標籤（intraday_strategy）、參考支撐/壓力位、加減分（±30）、選股理由、價格理由
 4. **AI 價格覆蓋**：AI 可覆蓋規則式的 `suggested_buy`、`target_price`、`stop_loss`，並自動重算 `risk_reward_ratio`
 5. AI 須提供 `price_reasoning`（一句話解釋三個價格設定依據），存入 `ai_price_reasoning` 欄位
+
+### AI 決策資訊
+
+AI 選股 prompt 包含以下資料：
+
+| 資料 | 來源 | 說明 |
+|------|------|------|
+| 候選標的基本資料 | `candidates` | 代號、產業、分數、策略、價格、評分理由 |
+| 近 5 日 K 線 | `daily_quotes` | 開高低收量、漲跌%、振幅% |
+| 近 5 日三大法人 | `institutional_trades` | 外資/投信/自營淨買賣張數 |
+| 近 5 日融資融券 | `margin_trades` | 融資增減/餘額、融券增減/餘額 |
+| 近期新聞標題 | `news_articles` | 近 2 日有產業標籤的新聞 |
+| 消息面指數 | `news_indices` | 整體情緒/恐慌/熱度 + 各產業情緒 |
+| 國際市場收盤 | `us_market_indices` | 台指期夜盤（最高權重）+ 美股五大指數 |
+| AI 歷史教訓 | `ai_lessons` | 近期選股教訓回饋 |
 
 ### 策略標籤
 
@@ -878,4 +893,4 @@ AI 監控指標（有 monitor 資料時顯示）：
 
 ---
 
-*最後更新：2026-04-11*
+*最後更新：2026-04-12*
