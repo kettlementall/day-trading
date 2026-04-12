@@ -12,7 +12,13 @@ use Illuminate\Support\Facades\Log;
 class FetchNews extends Command
 {
     protected $signature = 'news:fetch {date?}';
-    protected $description = '抓取 RSS 新聞並歸類產業';
+    protected $description = '抓取鉅亨新聞並歸類產業';
+
+    private const CNYES_CATEGORIES = [
+        'tw_stock' => '台股',
+        'wd_stock' => '國際股',
+        'forex'    => '外匯',
+    ];
 
     public function handle(): int
     {
@@ -20,173 +26,82 @@ class FetchNews extends Command
             ? Carbon::parse($this->argument('date'))->toDateString()
             : now()->toDateString();
 
-        $this->info("抓取新聞: {$date}");
+        $this->info("抓取鉅亨新聞: {$date}");
 
         $totalCount = 0;
 
-        foreach (NewsIndustryMap::RSS_FEEDS as $feed) {
-            $this->info("  來源: {$feed['name']}");
-            $count = $this->fetchFeed($feed, $date);
+        foreach (self::CNYES_CATEGORIES as $category => $label) {
+            $this->info("  鉅亨 {$label} ({$category})");
+            $count = $this->fetchCnyesCategory($category, $date);
             $totalCount += $count;
             $this->info("    匯入 {$count} 篇");
 
-            // 避免請求過快
             usleep(500_000);
         }
-
-        // Google News 按產業關鍵字搜尋
-        $googleCount = $this->fetchGoogleNews($date);
-        $totalCount += $googleCount;
 
         $this->info("新聞抓取完成，共 {$totalCount} 篇");
 
         return self::SUCCESS;
     }
 
-    private function fetchFeed(array $feed, string $date): int
+    private function fetchCnyesCategory(string $category, string $date): int
     {
         try {
             $response = Http::timeout(15)
-                ->withHeaders(['User-Agent' => 'Mozilla/5.0'])
-                ->get($feed['url']);
+                ->get("https://api.cnyes.com/media/api/v1/newslist/category/{$category}", [
+                    'limit' => 30,
+                ]);
 
             if (!$response->successful()) {
                 $this->warn("    HTTP {$response->status()}");
                 return 0;
             }
 
-            $xml = @simplexml_load_string($response->body());
-            if (!$xml) {
-                $this->warn("    XML 解析失敗");
+            $items = $response->json('items.data', []);
+            if (empty($items)) {
+                $this->warn("    無資料");
                 return 0;
             }
 
+            $mappedCategory = $category === 'tw_stock' ? 'tw_stock' : 'international';
             $count = 0;
-            $items = $xml->channel->item ?? $xml->entry ?? [];
 
             foreach ($items as $item) {
-                $title = trim((string) ($item->title ?? ''));
+                $title = trim($item['title'] ?? '');
                 if (!$title) continue;
 
-                $link = trim((string) ($item->link ?? $item->guid ?? ''));
-                $desc = strip_tags(trim((string) ($item->description ?? $item->summary ?? '')));
-                $pubDate = (string) ($item->pubDate ?? $item->published ?? '');
+                $summary = trim($item['summary'] ?? '');
+                $newsId = $item['newsId'] ?? '';
+                $url = $newsId ? "https://news.cnyes.com/news/id/{$newsId}" : '';
+                $publishedAt = isset($item['publishAt'])
+                    ? Carbon::createFromTimestamp($item['publishAt'])
+                    : null;
 
-                $publishedAt = null;
-                if ($pubDate) {
-                    try {
-                        $publishedAt = Carbon::parse($pubDate);
-                    } catch (\Exception $e) {
-                        $publishedAt = null;
-                    }
-                }
-
-                // 相關性過濾
-                if (!NewsIndustryMap::isRelevant($title, $feed['category'])) {
+                if (!NewsIndustryMap::isRelevant($title, $mappedCategory)) {
                     continue;
                 }
 
-                $fullText = $title . ' ' . $desc;
+                $fullText = $title . ' ' . $summary;
                 $industry = NewsIndustryMap::classify($fullText);
 
                 NewsArticle::updateOrCreate(
-                    ['source' => $feed['source'], 'title' => mb_substr($title, 0, 500), 'fetched_date' => $date],
+                    ['source' => 'cnyes', 'title' => mb_substr($title, 0, 500), 'fetched_date' => $date],
                     [
-                        'summary' => mb_substr($desc, 0, 2000),
-                        'url' => mb_substr($link, 0, 1000),
-                        'category' => $feed['category'],
+                        'summary' => mb_substr($summary, 0, 2000),
+                        'url' => mb_substr($url, 0, 1000),
+                        'category' => $mappedCategory,
                         'industry' => $industry,
                         'published_at' => $publishedAt,
                     ]
                 );
                 $count++;
-
-                if ($count >= 30) break; // 每個來源最多30篇
             }
 
             return $count;
         } catch (\Exception $e) {
-            Log::error("FetchNews {$feed['name']}: " . $e->getMessage());
+            Log::error("FetchNews cnyes/{$category}: " . $e->getMessage());
             $this->error("    錯誤: " . $e->getMessage());
             return 0;
         }
-    }
-
-    /**
-     * 用 Google News RSS 搜尋各產業關鍵字
-     */
-    private function fetchGoogleNews(string $date): int
-    {
-        $searchTerms = [
-            // 中文：聚焦台股盤勢與重要產業
-            '台股+盤勢' => ['category' => 'tw_stock', 'hl' => 'zh-TW', 'gl' => 'TW', 'ceid' => 'TW:zh-Hant'],
-            '半導體+台積電' => ['category' => 'tw_stock', 'hl' => 'zh-TW', 'gl' => 'TW', 'ceid' => 'TW:zh-Hant'],
-            // 英文：只抓影響台股的國際大事
-            'TSMC Nvidia semiconductor' => ['category' => 'international', 'hl' => 'en', 'gl' => 'US', 'ceid' => 'US:en'],
-            'Federal Reserve rate decision' => ['category' => 'international', 'hl' => 'en', 'gl' => 'US', 'ceid' => 'US:en'],
-        ];
-
-        $total = 0;
-
-        foreach ($searchTerms as $query => $config) {
-            $category = $config['category'];
-            $this->info("  Google News: {$query}");
-            $encoded = urlencode($query);
-            $url = "https://news.google.com/rss/search?q={$encoded}&hl={$config['hl']}&gl={$config['gl']}&ceid={$config['ceid']}";
-
-            try {
-                $response = Http::timeout(15)
-                    ->withHeaders(['User-Agent' => 'Mozilla/5.0'])
-                    ->get($url);
-
-                if (!$response->successful()) continue;
-
-                $xml = @simplexml_load_string($response->body());
-                if (!$xml) continue;
-
-                $count = 0;
-                foreach ($xml->channel->item ?? [] as $item) {
-                    $title = trim((string) ($item->title ?? ''));
-                    if (!$title) continue;
-
-                    $link = trim((string) ($item->link ?? ''));
-                    $desc = strip_tags(trim((string) ($item->description ?? '')));
-                    $pubDate = (string) ($item->pubDate ?? '');
-
-                    $publishedAt = null;
-                    if ($pubDate) {
-                        try { $publishedAt = Carbon::parse($pubDate); } catch (\Exception $e) {}
-                    }
-
-                    if (!NewsIndustryMap::isRelevant($title, $category)) {
-                        continue;
-                    }
-
-                    $fullText = $title . ' ' . $desc;
-                    $industry = NewsIndustryMap::classify($fullText);
-
-                    NewsArticle::updateOrCreate(
-                        ['source' => 'google', 'title' => mb_substr($title, 0, 500), 'fetched_date' => $date],
-                        [
-                            'summary' => mb_substr($desc, 0, 2000),
-                            'url' => mb_substr($link, 0, 1000),
-                            'category' => $category,
-                            'industry' => $industry,
-                            'published_at' => $publishedAt,
-                        ]
-                    );
-                    $count++;
-                    if ($count >= 10) break;
-                }
-
-                $total += $count;
-                $this->info("    匯入 {$count} 篇");
-                usleep(500_000);
-            } catch (\Exception $e) {
-                Log::error("FetchNews google/{$query}: " . $e->getMessage());
-            }
-        }
-
-        return $total;
     }
 }

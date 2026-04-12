@@ -473,6 +473,16 @@ pending → watching → entry_signal → holding → target_hit
 
 每日 06:00 / 08:00 / 12:00 / 18:00 透過 `news:fetch` 抓取，`news:compute-indices` 計算。
 
+唯一來源為**鉅亨新聞** JSON API（`api.cnyes.com`），抓取三個分類：
+
+| 分類 | API category | 對應 | 每次上限 |
+|------|-------------|------|---------|
+| 台股新聞 | `tw_stock` | `tw_stock` | 30 篇 |
+| 國際股市 | `wd_stock` | `international` | 30 篇 |
+| 外匯 | `forex` | `international` | 30 篇 |
+
+國際類新聞需通過相關性關鍵字過濾（`NewsIndustryMap::isRelevant()`）才會收錄。
+
 ### 指數定義 (NewsIndex)
 
 | 指數           | 欄位            | 範圍    | 說明           |

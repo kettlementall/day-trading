@@ -22,47 +22,7 @@ class NewsIndustryMap
     ];
 
     /**
-     * RSS 來源設定
-     * 精簡為高品質來源，避免大量無關新聞
-     */
-    public const RSS_FEEDS = [
-        // 台灣中文（主要來源）
-        [
-            'name' => 'cnyes_tw',
-            'url' => 'https://news.cnyes.com/news/cat/tw_stock/rss',
-            'source' => 'cnyes',
-            'category' => 'tw_stock',
-        ],
-        [
-            'name' => 'cnyes_intl',
-            'url' => 'https://news.cnyes.com/news/cat/wd_stock/rss',
-            'source' => 'cnyes',
-            'category' => 'international',
-        ],
-        [
-            'name' => 'yahoo_tw',
-            'url' => 'https://tw.stock.yahoo.com/rss?category=tw-market',
-            'source' => 'yahoo',
-            'category' => 'tw_stock',
-        ],
-        // 國際英文（只留 Reuters + CNBC）
-        [
-            'name' => 'reuters_markets',
-            'url' => 'https://news.google.com/rss/search?q=site:reuters.com+markets&hl=en&gl=US&ceid=US:en',
-            'source' => 'reuters',
-            'category' => 'international',
-        ],
-        [
-            'name' => 'cnbc_markets',
-            'url' => 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069',
-            'source' => 'cnbc',
-            'category' => 'international',
-        ],
-    ];
-
-    /**
      * 相關性關鍵字 — 標題必須包含至少一個才會收錄
-     * 分中文和英文兩組
      */
     public const RELEVANCE_KEYWORDS_ZH = [
         // 台股相關
@@ -80,20 +40,7 @@ class NewsIndustryMap
     ];
 
     public const RELEVANCE_KEYWORDS_EN = [
-        // Markets
-        'stock market', 'stocks', 'S&P 500', 'Nasdaq', 'Dow', 'Wall Street',
-        'rally', 'sell-off', 'correction', 'bear market', 'bull market',
-        // Macro
-        'Fed', 'Federal Reserve', 'rate cut', 'rate hike', 'interest rate',
-        'inflation', 'CPI', 'GDP', 'jobs report', 'nonfarm', 'recession',
-        'Treasury', 'bond yield',
-        // Tech/Semi
-        'TSMC', 'Nvidia', 'semiconductor', 'chip', 'AI stocks', 'tech stocks',
-        'AMD', 'Intel', 'Broadcom', 'ASML',
-        // Geopolitics affecting markets
-        'tariff', 'trade war', 'sanction', 'Taiwan', 'China',
-        // Asia
-        'Asia stocks', 'Asian markets', 'Taiwan stock', 'Nikkei', 'Hang Seng',
+        'TSMC', 'Nvidia', 'semiconductor', 'Fed', 'tariff', 'S&P 500', 'Nasdaq',
     ];
 
     /**
