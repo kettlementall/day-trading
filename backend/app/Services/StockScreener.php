@@ -18,7 +18,7 @@ class StockScreener
     /**
      * 執行選股篩選，產出隔日候選清單
      */
-    public function screen(string $tradeDate, ?int $minScoreOverride = null): Collection
+    public function screen(string $tradeDate, ?int $minScoreOverride = null, ?int $maxCandidatesOverride = null): Collection
     {
         $stocks = Stock::where('is_day_trading', true)->get();
         $rules = ScreeningRule::where('is_active', true)->orderBy('sort_order')->get();
@@ -458,7 +458,7 @@ class StockScreener
         }
 
         // 依分數排序，取前 N 名
-        $maxCandidates = $screenConfig['max_candidates'] ?? 20;
+        $maxCandidates = $maxCandidatesOverride ?? ($screenConfig['max_candidates'] ?? 20);
         $candidates = $candidates->sortByDesc('score')->take($maxCandidates);
 
         // 寫入資料庫

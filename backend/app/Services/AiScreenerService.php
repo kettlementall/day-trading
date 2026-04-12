@@ -188,7 +188,7 @@ class AiScreenerService
 - `price_reasoning`：一句話解釋三個價格的設定依據（例如：「買入設前高29.0回測位，目標為4/8高點30.5，停損設MA10下方28.5」）
 - `reference_support`：參考支撐位
 - `reference_resistance`：參考壓力位
-- `score_adjustment`：加減分（-20 ~ +20）
+- `score_adjustment`：加減分（-30 ~ +30）
 - `reasoning`：選入/排除的一句話理由
 - `warnings`：注意事項（可為 null）
 
