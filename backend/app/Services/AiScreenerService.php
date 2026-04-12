@@ -112,13 +112,90 @@ class AiScreenerService
 
     private function buildPrompt(string $tradeDate, Collection $candidates): string
     {
-        // 建立 TSV 格式候選資料
-        $header = "代號\t名稱\t產業\t分數\t策略\t建議買入\t目標\t停損\t風報比\t評分理由";
+        // 建立濃縮摘要：每檔一行，包含 K 線/籌碼/融資券預計算結果
+        $header = "代號\t名稱\t產業\t分數\t策略\t買入\t目標\t停損\tRR\t收盤\t5日漲%\t均振幅%\t量能趨勢\t連漲跌\t外資5日累計\t投信5日\t自營5日\t法人連買天\t融資5日增減\t融券5日增減\t評分理由";
         $rows = [];
 
         foreach ($candidates as $c) {
             $stock = $c->stock;
             $reasons = is_array($c->reasons) ? implode('；', $c->reasons) : ($c->reasons ?? '');
+
+            // K 線摘要
+            $quotes = DailyQuote::where('stock_id', $c->stock_id)
+                ->where('date', '<=', $tradeDate)
+                ->orderByDesc('date')
+                ->limit(5)
+                ->get();
+
+            $close = $quotes->isNotEmpty() ? (float) $quotes->first()->close : 0;
+            $change5d = 0;
+            if ($quotes->count() >= 5) {
+                $oldest = (float) $quotes->last()->open;
+                $change5d = $oldest > 0 ? round(($close - $oldest) / $oldest * 100, 1) : 0;
+            }
+            $avgAmp = $quotes->avg('amplitude') ? round($quotes->avg('amplitude'), 1) : 0;
+
+            // 量能趨勢
+            $vols = $quotes->pluck('volume')->toArray();
+            $volTrend = '持平';
+            if (count($vols) >= 3) {
+                $recent = array_sum(array_slice($vols, 0, 2)) / 2;
+                $older = array_sum(array_slice($vols, 2)) / max(1, count($vols) - 2);
+                if ($older > 0) {
+                    $ratio = $recent / $older;
+                    if ($ratio > 1.5) $volTrend = '放大';
+                    elseif ($ratio < 0.7) $volTrend = '萎縮';
+                }
+            }
+
+            // 連漲連跌
+            $changes = $quotes->pluck('change_percent')->map(fn($v) => (float) $v)->toArray();
+            $streak = 0;
+            $streakDir = '';
+            foreach ($changes as $chg) {
+                if ($streak === 0) {
+                    $streakDir = $chg >= 0 ? '漲' : '跌';
+                    $streak = 1;
+                } elseif (($chg >= 0 && $streakDir === '漲') || ($chg < 0 && $streakDir === '跌')) {
+                    $streak++;
+                } else {
+                    break;
+                }
+            }
+            $streakStr = "連{$streak}{$streakDir}";
+
+            // 法人累計
+            $instTrades = InstitutionalTrade::where('stock_id', $c->stock_id)
+                ->where('date', '<=', $tradeDate)
+                ->orderByDesc('date')
+                ->limit(5)
+                ->get();
+
+            $foreignSum = $instTrades->sum('foreign_net');
+            $trustSum = $instTrades->sum('trust_net');
+            $dealerSum = $instTrades->sum('dealer_net');
+
+            $consecutiveBuy = 0;
+            foreach ($instTrades as $t) {
+                if ($t->total_net > 0) $consecutiveBuy++;
+                else break;
+            }
+
+            // 融資融券累計
+            $margins = MarginTrade::where('stock_id', $c->stock_id)
+                ->where('date', '<=', $tradeDate)
+                ->orderByDesc('date')
+                ->limit(5)
+                ->get();
+
+            $marginChange = $margins->sum('margin_change');
+            $shortChange = $margins->sum('short_change');
+
+            // 格式化法人數字（萬張）
+            $fmtLots = fn($v) => $v >= 0
+                ? '+' . round($v / 10000, 1) . '萬'
+                : round($v / 10000, 1) . '萬';
+
             $rows[] = implode("\t", [
                 $stock->symbol,
                 $stock->name,
@@ -129,83 +206,25 @@ class AiScreenerService
                 $c->target_price,
                 $c->stop_loss,
                 $c->risk_reward_ratio,
-                mb_substr($reasons, 0, 100),
+                $close,
+                ($change5d >= 0 ? '+' : '') . $change5d . '%',
+                $avgAmp . '%',
+                $volTrend,
+                $streakStr,
+                $fmtLots($foreignSum),
+                $fmtLots($trustSum),
+                $fmtLots($dealerSum),
+                $consecutiveBuy > 0 ? "連{$consecutiveBuy}買" : '無',
+                $fmtLots($marginChange),
+                $fmtLots($shortChange),
+                mb_substr($reasons, 0, 80),
             ]);
         }
 
-        // 取近 5 日 K 線摘要（每檔一行）
-        $klineHeader = "代號\t日期\t開\t高\t低\t收\t量(張)\t漲跌%\t振幅%";
-        $klineRows = [];
+        $candidatesTsv = $header . "\n" . implode("\n", $rows);
+        $totalCount = $candidates->count();
 
-        foreach ($candidates as $c) {
-            $quotes = DailyQuote::where('stock_id', $c->stock_id)
-                ->where('date', '<=', $tradeDate)
-                ->orderByDesc('date')
-                ->limit(5)
-                ->get()
-                ->reverse();
-
-            foreach ($quotes as $q) {
-                $klineRows[] = implode("\t", [
-                    $c->stock->symbol,
-                    $q->date->format('m/d'),
-                    $q->open, $q->high, $q->low, $q->close,
-                    $q->volume,
-                    $q->change_percent ?? '',
-                    $q->amplitude ?? '',
-                ]);
-            }
-        }
-
-        // 1. 籌碼面：近 5 日三大法人買賣超
-        $chipHeader = "代號\t日期\t外資淨買(張)\t投信淨買(張)\t自營淨買(張)\t合計淨買(張)";
-        $chipRows = [];
-
-        foreach ($candidates as $c) {
-            $trades = InstitutionalTrade::where('stock_id', $c->stock_id)
-                ->where('date', '<=', $tradeDate)
-                ->orderByDesc('date')
-                ->limit(5)
-                ->get()
-                ->reverse();
-
-            foreach ($trades as $t) {
-                $chipRows[] = implode("\t", [
-                    $c->stock->symbol,
-                    $t->date->format('m/d'),
-                    $t->foreign_net,
-                    $t->trust_net,
-                    $t->dealer_net,
-                    $t->total_net,
-                ]);
-            }
-        }
-
-        // 2. 融資融券：近 5 日變化
-        $marginHeader = "代號\t日期\t融資增減(張)\t融資餘額(張)\t融券增減(張)\t融券餘額(張)";
-        $marginRows = [];
-
-        foreach ($candidates as $c) {
-            $margins = MarginTrade::where('stock_id', $c->stock_id)
-                ->where('date', '<=', $tradeDate)
-                ->orderByDesc('date')
-                ->limit(5)
-                ->get()
-                ->reverse();
-
-            foreach ($margins as $m) {
-                $marginRows[] = implode("\t", [
-                    $c->stock->symbol,
-                    $m->date->format('m/d'),
-                    $m->margin_change,
-                    $m->margin_balance,
-                    $m->short_change,
-                    $m->short_balance,
-                ]);
-            }
-        }
-
-        // 3. 當日新聞標題（最近兩日，與候選產業相關）
+        // 新聞標題（近 2 日）
         $newsLines = [];
         $news = NewsArticle::where('fetched_date', '>=', now()->subDays(2)->toDateString())
             ->whereNotNull('industry')
@@ -214,11 +233,10 @@ class AiScreenerService
             ->get();
 
         foreach ($news as $n) {
-            $label = $n->industry ?? '其他';
-            $newsLines[] = "- [{$label}] {$n->title}";
+            $newsLines[] = "- [{$n->industry}] {$n->title}";
         }
 
-        // 4. 產業消息面指數
+        // 產業消息面指數
         $newsIndexLines = [];
         $latestNewsDate = NewsIndex::where('scope', 'overall')
             ->where('date', '<=', $tradeDate)
@@ -241,13 +259,8 @@ class AiScreenerService
             }
         }
 
-        $candidatesTsv = $header . "\n" . implode("\n", $rows);
-        $klineTsv = $klineHeader . "\n" . implode("\n", $klineRows);
-        $chipTsv = $chipHeader . "\n" . implode("\n", $chipRows);
-        $marginTsv = $marginHeader . "\n" . implode("\n", $marginRows);
         $newsSection = !empty($newsLines) ? implode("\n", $newsLines) : '（無近期新聞）';
         $newsIndexSection = !empty($newsIndexLines) ? implode("\n", $newsIndexLines) : '（無消息面指數）';
-        $totalCount = $candidates->count();
 
         // 注入近期教訓
         $lessonsSection = AiLesson::getScreeningLessons();
@@ -256,22 +269,12 @@ class AiScreenerService
         $usMarketSection = UsMarketIndex::getSummary($tradeDate);
 
         return <<<PROMPT
-你是台股當沖選股 AI 助手。現在是 {$tradeDate} 盤前（08:00），以下是經規則式寬篩產出的 {$totalCount} 檔候選標的。
-注意：K 線資料截至前一交易日收盤，請用日期欄位判斷每根 K 棒的日期，不要用「今日」「昨日」等模糊說法，請用實際日期（如 4/9、4/10）。
+你是台股當沖選股 AI 助手。現在是 {$tradeDate} 盤前（08:00），以下是經規則式寬篩產出的 {$totalCount} 檔候選標的（每檔一行濃縮摘要）。
 
 {$usMarketSection}
 
-## 候選標的
+## 候選標的（含 K 線/籌碼/融資券摘要）
 {$candidatesTsv}
-
-## 近 5 日 K 線
-{$klineTsv}
-
-## 近 5 日三大法人買賣超
-{$chipTsv}
-
-## 近 5 日融資融券
-{$marginTsv}
 
 ## 近期新聞
 {$newsSection}
