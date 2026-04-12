@@ -20,7 +20,7 @@ class IntradayAiAdvisor
     public function __construct()
     {
         $this->apiKey = config('services.anthropic.api_key', '');
-        $this->model = config('services.anthropic.model', 'claude-haiku-4-5-20251001');
+        $this->model = config('services.anthropic.intraday_model', 'claude-sonnet-4-6');
     }
 
     /**
