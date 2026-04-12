@@ -438,8 +438,8 @@ class StockScreener
             $lossSpace = $suggestedBuy - $stopLoss;
             $riskReward = $lossSpace > 0 ? round($profitSpace / $lossSpace, 2) : 0;
 
-            // 風報比門檻
-            $minRR = $screenConfig['min_risk_reward'] ?? 1.5;
+            // 風報比門檻（寬篩用 1.0，AI 會重算價格）
+            $minRR = $screenConfig['min_risk_reward'] ?? 1.0;
             if ($riskReward < $minRR) continue;
 
             $candidates->push([
