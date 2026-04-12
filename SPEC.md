@@ -92,9 +92,9 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 |-----------------|----------|
 | 成交量（張）      | > 500    |
 | 股價              | > 10 元  |
-| 最終分數          | >= 30 分  |
-| 風報比            | >= 1.5   |
-| 最多選取          | 前 20 名  |
+| 最終分數          | >= 35 分（AI 模式 `minScoreOverride`） |
+| 風報比            | >= 1.0（寬篩階段，AI 會重算價格） |
+| 最多選取          | 前 40 名（AI 模式 `maxCandidatesOverride`） |
 
 ### 2.1a 硬排除條件
 
@@ -320,6 +320,18 @@ AI 選股 prompt 包含以下資料：
 
 API 失敗時自動降級為規則式：取 score 前 15 名，依 strategy_type 給預設策略。
 
+### AI Model 配置
+
+各服務依任務特性使用不同 Claude model，定義於 `backend/config/services.php`：
+
+| 服務 | 環境變數 | 預設 Model | 說明 |
+|------|---------|-----------|------|
+| AI 選股審核 | `ANTHROPIC_SCREENING_MODEL` | claude-sonnet-4-6 | 50 檔判斷，需品質與速度兼顧 |
+| 盤中校準/滾動 | `ANTHROPIC_INTRADAY_MODEL` | claude-sonnet-4-6 | 每 1-3 分鐘觸發，速度優先 |
+| 新聞情緒分析 | `ANTHROPIC_SENTIMENT_MODEL` | claude-haiku-4-5 | 高頻量大，簡單分類任務 |
+| 每日檢討 | `ANTHROPIC_MODEL` | claude-opus-4-6 | 深度分析，一天一次 |
+| 回測優化 | `ANTHROPIC_MODEL` | claude-opus-4-6 | 複雜推理，手動觸發 |
+
 ---
 
 ## 3.5. 盤前確認規則（已由 AI 開盤校準取代）
@@ -492,9 +504,9 @@ pending → watching → entry_signal → holding → target_hit
 
 | 分類 | API category | 對應 | 每次上限 |
 |------|-------------|------|---------|
-| 台股新聞 | `tw_stock` | `tw_stock` | 30 篇 |
-| 國際股市 | `wd_stock` | `international` | 30 篇 |
-| 外匯 | `forex` | `international` | 30 篇 |
+| 台股新聞 | `tw_stock` | `tw_stock` | 100 篇 |
+| 國際股市 | `wd_stock` | `international` | 100 篇 |
+| 外匯 | `forex` | `international` | 100 篇 |
 
 國際類新聞需通過相關性關鍵字過濾（`NewsIndustryMap::isRelevant()`）才會收錄。
 
