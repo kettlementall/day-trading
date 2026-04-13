@@ -14,7 +14,7 @@
             <span class="stock-symbol">{{ stock.symbol }}</span>
             <span class="stock-name">{{ stock.name }}</span>
           </div>
-          <el-tag size="small">{{ stock.industry }}</el-tag>
+          <el-tag v-if="stock.industry" size="small">{{ stock.industry }}</el-tag>
         </div>
 
         <!-- 最近行情 -->
