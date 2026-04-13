@@ -428,15 +428,24 @@ pending → watching → entry_signal → holding → target_hit
 | `closed` | 時間停損或 13:25 強制平倉 |
 | `skipped` | AI 校準否決，不參與 |
 
-### AI 開盤校準（09:05）
+### AI 開盤校準（09:05）— 分級制
 
 由 `IntradayAiAdvisor::openingCalibration()` 執行，取代原 MorningScreener。
 
-- 接收所有候選標的 + 開盤快照，呼叫 Claude API 判斷哪些標的適合當天交易
-- 為通過者設定 `watching` + 調整目標/停損；否決者設為 `skipped`
-- 結果回寫 `morning_score` / `morning_confirmed` 保持前端相容
+AI 依開盤數據將每檔標的分為四級：
 
-**Fallback**：API 失敗時使用 MorningScreener 四條規則（量能 ≥1.5 倍、開盤漲 2-5%、站上 5 分 K 高點、外盤比 >55%；跳空 >7% 否決）。
+| 等級 | 條件 | 動作 | monitor 狀態 |
+|------|------|------|-------------|
+| A（強力推薦） | score 高 + 前日漲停/強勢 + est_vol>3 + ext_ratio>70% | 全額進場 | `watching` |
+| B（標準進場） | score 中上 + 盤中走勢確認 | 半倉進場 | `watching` |
+| C（觀察） | score 尚可但有矛盾訊號 | 紙上交易追蹤，不觸發實際進場 | `watching`（不進 evaluateWatching） |
+| D（放棄） | 明確轉弱訊號 | 不進場 | `skipped` |
+
+- `morning_grade`（A/B/C/D）存入 `candidates` 表
+- `morning_confirmed` = A 或 B 時為 true（向下相容）
+- A/B/C 級均設定 `entry_conditions`（C 級用於紙上追蹤）
+
+**Fallback**：API 失敗時使用 MorningScreener 四條規則，依 morningScore 分級：≥85→A、≥70→B、≥50→C、其餘→D。
 
 ### 進場判定
 
@@ -863,7 +872,7 @@ php artisan stock:backtest --validated --max-attempts=5
 
 - **市場指數列**：台指期夜盤（加粗突顯）、S&P 500、費半、道瓊、那斯達克、美元指數的昨夜漲跌幅（紅漲綠跌），資料來自 `us_market_indices`。台指期夜盤在 AI prompt 中有較高權重，直接反映隔夜國際情勢對台股開盤影響
 - **休市提示**：週末或國定假日顯示「今日休市（假日名稱）」，取代「今日尚無候選標的」
-- **盤前確認摘要**：候選數 / 盤前確認通過數 / 篩選 radio
+- **盤前校準摘要**：候選數 / 各等級數量（A/B/C/D）/ 篩選 radio（全部、A+B、C 觀察、D 放棄）
 
 每張候選標的卡片顯示：
 

@@ -37,12 +37,18 @@
       <div class="summary-stats">
         <span>候選 <strong>{{ store.morningSummary.total }}</strong> 檔</span>
         <span class="summary-divider">|</span>
-        <span>盤前確認 <strong class="text-success">{{ store.morningSummary.confirmed }}</strong> 檔通過</span>
+        <span>校準
+          <strong class="text-success">A:{{ store.morningSummary.gradeA }}</strong>
+          <strong class="text-primary">B:{{ store.morningSummary.gradeB }}</strong>
+          <strong class="text-warning">C:{{ store.morningSummary.gradeC }}</strong>
+          <strong class="text-danger">D:{{ store.morningSummary.gradeD }}</strong>
+        </span>
       </div>
       <el-radio-group v-model="store.morningFilter" size="small">
         <el-radio-button value="all">全部</el-radio-button>
-        <el-radio-button value="confirmed">已確認</el-radio-button>
-        <el-radio-button value="unconfirmed">未通過</el-radio-button>
+        <el-radio-button value="AB">A+B</el-radio-button>
+        <el-radio-button value="C">C 觀察</el-radio-button>
+        <el-radio-button value="D">D 放棄</el-radio-button>
       </el-radio-group>
     </div>
 
@@ -273,13 +279,12 @@
         <div v-if="item.morning_signals && item.morning_signals.length > 0" class="card-morning">
           <el-divider style="margin: 8px 0" />
           <div class="morning-header">
-            <span class="morning-label">盤前確認</span>
+            <span class="morning-label">盤前校準</span>
             <el-tag
               size="small"
-              :type="item.morning_confirmed ? 'success' : 'warning'"
+              :type="gradeTagType(item.morning_grade)"
             >
-              {{ item.morning_confirmed ? '通過確認' : '未通過' }}
-              ({{ item.morning_score }}分)
+              {{ gradeLabel(item.morning_grade) }}
             </el-tag>
           </div>
           <div class="morning-signals">
@@ -393,6 +398,14 @@ function monitorStatusLabel(status) {
     trailing_stop: '停利', closed: '收盤平倉', skipped: '已跳過',
   }
   return map[status] || status
+}
+
+function gradeTagType(grade) {
+  return { A: 'success', B: '', C: 'warning', D: 'danger' }[grade] || 'info'
+}
+
+function gradeLabel(grade) {
+  return { A: 'A 強力推薦', B: 'B 標準進場', C: 'C 觀察', D: 'D 放棄' }[grade] || '未校準'
 }
 </script>
 

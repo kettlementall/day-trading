@@ -50,8 +50,9 @@ class MonitorService
             ->where('ai_selected', true)
             ->get();
 
-        $approvedCount = 0;
-        $skippedCount = 0;
+        $gradeCounts = ['A' => 0, 'B' => 0, 'C' => 0, 'D' => 0];
+        $gradeLabels = ['A' => '強力推薦', 'B' => '標準進場', 'C' => '觀察', 'D' => '放棄'];
+        $gradeEmojis = ['A' => '🟢', 'B' => '🔵', 'C' => '🟡', 'D' => '🔴'];
 
         foreach ($candidates as $candidate) {
             $monitor = $candidate->monitor;
@@ -61,35 +62,42 @@ class MonitorService
             $cal = $calibrations[$symbol] ?? null;
 
             if (!$cal) {
-                // AI 沒有回傳此標的，保持 pending
                 continue;
             }
 
-            if ($cal['approved'] ?? false) {
-                // 通過校準 → watching
-                $this->transition($monitor, CandidateMonitor::STATUS_WATCHING, 'AI 開盤校準通過');
+            // 相容舊格式：approved bool → grade 轉換
+            $grade = strtoupper($cal['grade'] ?? ($cal['approved'] ?? false ? 'B' : 'D'));
+            if (!in_array($grade, ['A', 'B', 'C', 'D'])) $grade = 'D';
 
-                // 設定動態目標/停損
+            $gradeCounts[$grade]++;
+
+            if (in_array($grade, ['A', 'B', 'C'])) {
+                // A/B/C → watching（C 為觀察模式，紙上交易）
+                $statusNote = $grade === 'C'
+                    ? 'AI 校準 C 級（觀察）'
+                    : "AI 校準 {$grade} 級（{$gradeLabels[$grade]}）";
+                $this->transition($monitor, CandidateMonitor::STATUS_WATCHING, $statusNote);
+
                 $monitor->update([
                     'current_target' => $cal['adjusted_resistance'] ?? $candidate->reference_resistance,
                     'current_stop' => $cal['adjusted_support'] ?? $candidate->reference_support,
                     'ai_calibration' => $cal,
                 ]);
 
-                // 更新 candidate 的 morning 相容欄位
                 $candidate->update([
-                    'morning_confirmed' => true,
+                    'morning_confirmed' => in_array($grade, ['A', 'B']),
+                    'morning_grade' => $grade,
                     'morning_score' => ($candidate->score + ($candidate->ai_score_adjustment ?? 0)),
                     'morning_signals' => [
-                        'ai_calibration' => 'approved',
+                        'ai_calibration' => 'grade_' . $grade,
                         'notes' => $cal['notes'] ?? '',
                     ],
                 ]);
 
-                $approvedCount++;
-
                 $this->telegram->send(sprintf(
-                    "[校準] %s %s AI通過 | %s | 支撐 %s / 壓力 %s",
+                    "[校準%s] %s %s %s | %s | 支撐 %s / 壓力 %s",
+                    $gradeEmojis[$grade],
+                    $grade,
                     $symbol,
                     $candidate->stock->name,
                     $candidate->intraday_strategy ?? '-',
@@ -97,23 +105,22 @@ class MonitorService
                     $cal['adjusted_resistance'] ?? '-'
                 ));
             } else {
-                // 否決 → skipped
-                $reason = $cal['reason'] ?? 'AI 開盤校準否決';
+                // D → skipped
+                $reason = $cal['reason'] ?? 'AI 校準 D 級（放棄）';
                 $this->transition($monitor, CandidateMonitor::STATUS_SKIPPED, $reason);
                 $monitor->update(['skip_reason' => $reason, 'ai_calibration' => $cal]);
 
                 $candidate->update([
                     'morning_confirmed' => false,
+                    'morning_grade' => 'D',
                     'morning_signals' => [
-                        'ai_calibration' => 'denied',
+                        'ai_calibration' => 'grade_D',
                         'notes' => $reason,
                     ],
                 ]);
 
-                $skippedCount++;
-
                 $this->telegram->send(sprintf(
-                    "[否決] %s %s AI否決 | %s",
+                    "[校準🔴] D %s %s | %s",
                     $symbol,
                     $candidate->stock->name,
                     $reason
@@ -121,11 +128,11 @@ class MonitorService
             }
         }
 
-        $this->telegram->send(sprintf(
-            "📋 *開盤校準完成*：通過 %d 檔 / 否決 %d 檔",
-            $approvedCount,
-            $skippedCount
-        ));
+        $summary = collect($gradeCounts)
+            ->filter(fn($c) => $c > 0)
+            ->map(fn($c, $g) => "{$gradeEmojis[$g]}{$g}:{$c}")
+            ->implode(' ');
+        $this->telegram->send("📋 *開盤校準完成*：{$summary}");
     }
 
     /**
@@ -176,6 +183,11 @@ class MonitorService
      */
     private function evaluateWatching(CandidateMonitor $monitor, Candidate $candidate, string $date): void
     {
+        // C 級（觀察）：只追蹤紙上交易，不觸發實際進場
+        if ($candidate->morning_grade === 'C') {
+            return;
+        }
+
         $stock = $candidate->stock;
         $snapshots = $this->getRecentSnapshots($stock->id, $date, 5);
         if ($snapshots->count() < 2) return;

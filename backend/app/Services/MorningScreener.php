@@ -94,10 +94,20 @@ class MorningScreener
                 $confirmed = false;
             }
 
+            // 分級制：依 morningScore 對應 A/B/C/D
+            $grade = match (true) {
+                !$confirmed => 'D',
+                $morningScore >= 85 => 'A',
+                $morningScore >= 70 => 'B',
+                $morningScore >= 50 => 'C',
+                default => 'D',
+            };
+
             $candidate->update([
                 'morning_score' => $morningScore,
                 'morning_signals' => $signals,
-                'morning_confirmed' => $confirmed,
+                'morning_confirmed' => in_array($grade, ['A', 'B']),
+                'morning_grade' => $grade,
             ]);
 
             $results->push([
@@ -105,7 +115,8 @@ class MorningScreener
                 'stock_symbol' => $candidate->stock->symbol,
                 'stock_name' => $candidate->stock->name,
                 'morning_score' => $morningScore,
-                'morning_confirmed' => $confirmed,
+                'morning_confirmed' => in_array($grade, ['A', 'B']),
+                'morning_grade' => $grade,
                 'signals' => $signals,
             ]);
         }

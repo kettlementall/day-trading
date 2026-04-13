@@ -9,32 +9,37 @@ export const useCandidateStore = defineStore('candidates', () => {
   const dates = ref([])
   const stats = ref(null)
   const loading = ref(false)
-  const morningFilter = ref('all') // 'all' | 'confirmed' | 'unconfirmed'
+  const morningFilter = ref('all') // 'all' | 'AB' | 'C' | 'D'
   const lastUpdatedAt = ref('')
   const isHoliday = ref(false)
   const holidayName = ref('')
   const usIndices = ref([])
 
-  // 依盤前確認狀態篩選
+  // 依盤前校準等級篩選
   const filteredCandidates = computed(() => {
-    if (morningFilter.value === 'confirmed') {
-      return candidates.value.filter(c => c.morning_confirmed)
+    if (morningFilter.value === 'AB') {
+      return candidates.value.filter(c => c.morning_grade === 'A' || c.morning_grade === 'B')
     }
-    if (morningFilter.value === 'unconfirmed') {
-      return candidates.value.filter(c => !c.morning_confirmed && c.morning_signals?.length > 0)
+    if (morningFilter.value === 'C') {
+      return candidates.value.filter(c => c.morning_grade === 'C')
+    }
+    if (morningFilter.value === 'D') {
+      return candidates.value.filter(c => c.morning_grade === 'D')
     }
     return candidates.value
   })
 
-  // 盤前確認統計
+  // 盤前校準統計
   const morningSummary = computed(() => {
     const all = candidates.value
-    const hasMorning = all.filter(c => c.morning_signals?.length > 0)
-    const confirmed = all.filter(c => c.morning_confirmed)
+    const hasGrade = all.filter(c => c.morning_grade)
     return {
       total: all.length,
-      screened: hasMorning.length,
-      confirmed: confirmed.length,
+      screened: hasGrade.length,
+      gradeA: all.filter(c => c.morning_grade === 'A').length,
+      gradeB: all.filter(c => c.morning_grade === 'B').length,
+      gradeC: all.filter(c => c.morning_grade === 'C').length,
+      gradeD: all.filter(c => c.morning_grade === 'D').length,
     }
   })
 

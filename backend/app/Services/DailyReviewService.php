@@ -116,7 +116,7 @@ class DailyReviewService
         $newsIndustries
     ): string {
         // 候選標的明細（TSV 格式）
-        $lines = ["symbol\tname\tind\tstrat\tscore\treasons\tbuy\ttarget\tstop\trr\topen\thigh\tlow\tclose\tbuy?\ttgt?\tstop?\tprofit%\tmorning_ok\tmorning_score"];
+        $lines = ["symbol\tname\tind\tstrat\tscore\treasons\tbuy\ttarget\tstop\trr\topen\thigh\tlow\tclose\tbuy?\ttgt?\tstop?\tprofit%\tmorning_grade\tmorning_score"];
         foreach ($candidates as $c) {
             $r = $c->result;
             $suggestedBuy = (float) $c->suggested_buy;
@@ -152,7 +152,7 @@ class DailyReviewService
                 $r ? ($r->target_reachable ? 'Y' : 'N') : '-',
                 $r ? ($r->hit_stop_loss ? 'Y' : 'N') : '-',
                 $profit,
-                $c->morning_confirmed ? 'Y' : 'N',
+                $c->morning_grade ?? '-',
                 $c->morning_score ?? 0,
             ]);
         }
@@ -260,7 +260,7 @@ MONITOR;
 {$candidatesTsv}
 
 ### 欄位說明
-symbol=股票代號, name=名稱, ind=產業, strat=策略(bounce=跌深反彈/breakout=突破追多), score=評分, reasons=選股理由(|分隔), buy/target/stop=建議價, rr=風報比, open/high/low/close=實際OHLC, buy?=買入可達(Y/N), tgt?=目標可達(Y/N), stop?=觸停損(Y/N), profit%=報酬率(-=未買到), morning_ok=盤前確認通過(Y/N), morning_score=盤前分數
+symbol=股票代號, name=名稱, ind=產業, strat=策略(bounce=跌深反彈/breakout=突破追多), score=評分, reasons=選股理由(|分隔), buy/target/stop=建議價, rr=風報比, open/high/low/close=實際OHLC, buy?=買入可達(Y/N), tgt?=目標可達(Y/N), stop?=觸停損(Y/N), profit%=報酬率(-=未買到), morning_grade=盤前校準等級(A=強力推薦/B=標準進場/C=觀察/D=放棄), morning_score=盤前分數
 
 ## 盤中行情（開盤 30 分鐘時的快照）
 {$intradayTsv}

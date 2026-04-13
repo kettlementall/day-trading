@@ -285,17 +285,22 @@ class IntradayAiAdvisor
 {$lessonsSection}
 
 ## 任務
-根據開盤數據，對每檔標的做校準判斷：
-1. **通過**：開盤數據符合策略預期，值得繼續監控
-2. **否決**：開盤走勢不如預期（如低開量縮、開盤即最高、跳空過大等）
+根據開盤數據，對每檔標的做校準分級：
 
-校準通過的標的，請設定進場條件。
+| 等級 | 條件 | 動作 |
+|------|------|------|
+| A（強力推薦） | score高 + 前日漲停或強勢 + est_vol>3 + ext_ratio>70% | 全額進場 |
+| B（標準進場） | score中上 + 盤中走勢確認 | 半倉進場 |
+| C（觀察） | score尚可但有矛盾訊號 | 紙上交易追蹤，不實際進場 |
+| D（放棄） | 明確轉弱訊號（低開量縮、開盤即最高、跳空過大等） | 不進場 |
+
+等級 A/B/C 的標的，請設定進場條件（C 級用於紙上追蹤）。
 
 ## 回覆格式（JSON array，不要加 markdown 標記）
 [
   {
     "symbol": "2460",
-    "approved": true,
+    "grade": "A",
     "strategy_override": null,
     "adjusted_support": 29.5,
     "adjusted_resistance": 30.5,
@@ -304,11 +309,11 @@ class IntradayAiAdvisor
       "min_external_ratio": 55,
       "price_rule": "站穩 30.0 以上"
     },
-    "notes": "平開偏強，量能尚可"
+    "notes": "前日漲停鎖住，開盤量比4.2，外盤比78%，強力推薦"
   },
   {
     "symbol": "6206",
-    "approved": false,
+    "grade": "D",
     "reason": "低開量縮，開盤即最高，放棄",
     "notes": null
   }
