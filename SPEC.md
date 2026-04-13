@@ -326,7 +326,7 @@ API 失敗時自動降級為規則式：取 score 前 15 名，依 strategy_type
 
 | 服務 | 環境變數 | 預設 Model | 說明 |
 |------|---------|-----------|------|
-| AI 選股審核 | `ANTHROPIC_SCREENING_MODEL` | claude-sonnet-4-6 | 50 檔判斷，需品質與速度兼顧 |
+| AI 選股審核 | `ANTHROPIC_SCREENING_MODEL` | claude-opus-4-6 | Prompt 已精簡至 ~11k chars，Opus 深度推理提升選股品質 |
 | 盤中校準/滾動 | `ANTHROPIC_INTRADAY_MODEL` | claude-sonnet-4-6 | 每 1-3 分鐘觸發，速度優先 |
 | 新聞情緒分析 | `ANTHROPIC_SENTIMENT_MODEL` | claude-haiku-4-5 | 高頻量大，簡單分類任務 |
 | 每日檢討 | `ANTHROPIC_MODEL` | claude-opus-4-6 | 深度分析，一天一次 |
@@ -735,7 +735,7 @@ php artisan stock:backtest --validated --max-attempts=5
 **報告結構：**
 
 1. **當日總覽** — 大盤氛圍、消息面影響、整體表現
-2. **逐檔分析** — 每檔的盤前設定合理性、盤中表現、達標/未達標原因、最佳進場時機、AI 監控決策是否合理
+2. **逐檔分析** — 先以摘要表格列出所有標的（代號、策略、結果、一句話評語），再挑最多 10 檔重點標的（獲利/虧損最大、AI 判斷有爭議、最具教學價值）深入分析：盤前設定合理性、盤中表現、達標/未達標原因、最佳進場時機、AI 監控決策是否合理
 3. **共通問題** — 系統性模式（買入價偏高/偏低、特定策略偏差、AI 決策品質）
 4. **AI 決策檢討** — MFE vs 實際出場利潤比較、AI 否決標的事後表現、滾動建議品質
 5. **改善建議** — 具體可改善方向（不含參數調整）

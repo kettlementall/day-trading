@@ -284,7 +284,7 @@ est_vol_ratio=預估量倍數, open_chg%=開盤漲幅, current=快照時現價, 
 簡述當天大盤氛圍、消息面影響、候選標的整體表現。
 
 ### 二、逐檔分析
-每檔標的用一個小標題（代號 名稱），分析：
+先用一個摘要表格列出所有標的（代號、策略、結果、一句話評語），然後只挑出最值得深入討論的標的（最多 10 檔：獲利最多、虧損最多、AI 判斷有爭議、最具教學價值的），詳細分析：
 - 盤前設定是否合理（買入價、目標價、停損）
 - 盤中表現如何（開盤位置、量能、走勢）
 - 為什麼達標/未達標
@@ -377,12 +377,27 @@ PROMPT;
             }
 
             $text = trim($response->json('content.0.text', ''));
-            $text = preg_replace('/^```json?\s*/i', '', $text);
-            $text = preg_replace('/\s*```$/', '', $text);
 
-            $lessons = json_decode($text, true);
+            // 嘗試從回應中提取 JSON array（AI 可能在前後加說明文字或 markdown 標記）
+            $lessons = null;
+            // 先嘗試直接解析
+            $cleaned = preg_replace('/^```json?\s*/i', '', $text);
+            $cleaned = preg_replace('/\s*```$/', '', $cleaned);
+            $decoded = json_decode(trim($cleaned), true);
+            if (is_array($decoded)) {
+                $lessons = $decoded;
+            } else {
+                // 找第一個 [ 到最後一個 ] 之間的內容
+                if (preg_match('/\[[\s\S]*\]/u', $text, $m)) {
+                    $decoded = json_decode($m[0], true);
+                    if (is_array($decoded)) {
+                        $lessons = $decoded;
+                    }
+                }
+            }
+
             if (!is_array($lessons)) {
-                Log::error('DailyReviewService: 無法解析教訓 JSON');
+                Log::error('DailyReviewService: 無法解析教訓 JSON', ['raw' => mb_substr($text, 0, 500)]);
                 return;
             }
 
@@ -428,7 +443,7 @@ PROMPT;
                 ->withOptions(['stream' => true])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
-                    'max_tokens' => 8192,
+                    'max_tokens' => 16384,
                     'stream' => true,
                     'messages' => [
                         ['role' => 'user', 'content' => $prompt],
