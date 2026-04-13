@@ -365,7 +365,7 @@ PROMPT;
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
-                    'max_tokens' => 2048,
+                    'max_tokens' => 4096,
                     'messages' => [
                         ['role' => 'user', 'content' => $prompt],
                     ],
@@ -374,6 +374,12 @@ PROMPT;
             if (!$response->successful()) {
                 Log::error('DailyReviewService extractLessons API error: ' . $response->body());
                 return;
+            }
+
+            // 檢查是否因 max_tokens 截斷
+            $stopReason = $response->json('stop_reason', '');
+            if ($stopReason === 'max_tokens') {
+                Log::warning('DailyReviewService: extractLessons 回應被截斷，嘗試修復 JSON');
             }
 
             $text = trim($response->json('content.0.text', ''));
@@ -392,6 +398,20 @@ PROMPT;
                     $decoded = json_decode($m[0], true);
                     if (is_array($decoded)) {
                         $lessons = $decoded;
+                    }
+                }
+                // 若仍失敗，嘗試修復被截斷的 JSON（去掉最後不完整的物件，補上 ]）
+                if (!is_array($lessons) && ($bracketPos = strpos($text, '[')) !== false) {
+                    $partial = substr($text, $bracketPos);
+                    // 找到最後一個完整的 }, 或 } 並截斷
+                    $lastComplete = strrpos($partial, '},');
+                    if ($lastComplete !== false) {
+                        $fixed = substr($partial, 0, $lastComplete + 1) . ']';
+                        $decoded = json_decode($fixed, true);
+                        if (is_array($decoded)) {
+                            $lessons = $decoded;
+                            Log::info("DailyReviewService: 修復截斷 JSON 成功，salvaged " . count($decoded) . " 條教訓");
+                        }
                     }
                 }
             }
