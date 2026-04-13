@@ -71,7 +71,7 @@
               <el-tag v-if="m.limit_up" size="small" type="danger" round>漲停</el-tag>
               <el-tag v-else-if="m.limit_down" size="small" type="info" round>跌停</el-tag>
               <el-tag size="small" :type="monitorStatusType(m.status)" round>
-                {{ monitorStatusLabel(m.status) }}
+                {{ monitorStatusLabel(m.status) }}<template v-if="m.status === 'skipped' && skipTime(m)"> {{ skipTime(m) }}</template>
               </el-tag>
             </div>
           </div>
@@ -100,7 +100,7 @@
             </div>
           </div>
           <div v-if="m.skip_reason" class="monitor-reason">{{ m.skip_reason }}</div>
-          <div v-if="m.last_ai_advice" class="monitor-ai">
+          <div v-if="m.last_ai_advice && m.last_ai_advice.action !== 'skip'" class="monitor-ai">
             <span class="monitor-ai-label">AI:</span> {{ m.last_ai_advice.notes }}
             <span v-if="m.last_ai_advice.adjustments?.target" class="monitor-ai-adj price-up">
               目標→{{ m.last_ai_advice.adjustments.target }}
@@ -375,6 +375,15 @@ function monitorStatusType(status) {
     trailing_stop: 'warning', closed: 'info', skipped: 'info',
   }
   return map[status] || 'info'
+}
+
+function skipTime(m) {
+  if (m.last_ai_advice?.time) return m.last_ai_advice.time.substring(0, 5)
+  if (m.updated_at) {
+    const d = new Date(m.updated_at)
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+  }
+  return ''
 }
 
 function monitorStatusLabel(status) {
