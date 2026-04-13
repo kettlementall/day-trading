@@ -332,12 +332,12 @@ class MonitorService
             }
         }
 
-        // 時間停損：持有 > 60 分鐘且利潤 < 0.5%
+        // 時間停損：持有 > 90 分鐘且仍虧損中
         if ($monitor->entry_time) {
             $holdingMinutes = $monitor->entry_time->diffInMinutes(now());
             $profitPct = ($price - $entryPrice) / $entryPrice * 100;
 
-            if ($holdingMinutes > 60 && $profitPct < 0.5) {
+            if ($holdingMinutes > 90 && $profitPct < 0) {
                 $this->exitPosition($monitor, $price, 'trailing_stop', sprintf('時間停損（持有 %d 分鐘，利潤 %.1f%%）', $holdingMinutes, $profitPct));
                 return;
             }
