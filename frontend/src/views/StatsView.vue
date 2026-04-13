@@ -218,7 +218,7 @@ const days = ref(30)
 const loading = ref(false)
 const stats = computed(() => store.stats)
 const reviewLogBox = ref(null)
-const reviewDate = ref(dayjs().subtract(1, 'day').format('YYYY-MM-DD'))
+const reviewDate = ref(dayjs().format('YYYY-MM-DD'))
 const reviewLoading = ref(false)
 
 async function fetchData() {
