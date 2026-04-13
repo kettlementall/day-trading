@@ -14,6 +14,7 @@ class IntradaySnapshot extends Model
         'buy_volume', 'sell_volume', 'external_ratio',
         'best_ask', 'best_bid',
         'change_percent', 'amplitude_percent',
+        'limit_up', 'limit_down',
     ];
 
     protected $casts = [
@@ -31,6 +32,8 @@ class IntradaySnapshot extends Model
         'best_bid' => 'decimal:2',
         'change_percent' => 'decimal:2',
         'amplitude_percent' => 'decimal:2',
+        'limit_up' => 'boolean',
+        'limit_down' => 'boolean',
     ];
 
     public function stock(): BelongsTo

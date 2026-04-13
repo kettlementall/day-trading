@@ -10,8 +10,10 @@ use App\Models\MarketHoliday;
 use App\Models\Stock;
 use App\Services\IntradayAiAdvisor;
 use App\Services\MonitorService;
+use App\Services\TelegramService;
 use App\Services\TwseRealtimeClient;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class MonitorStocks extends Command
@@ -23,6 +25,7 @@ class MonitorStocks extends Command
         private TwseRealtimeClient $client,
         private MonitorService $monitorService,
         private IntradayAiAdvisor $aiAdvisor,
+        private TelegramService $telegram,
     ) {
         parent::__construct();
     }
@@ -71,8 +74,11 @@ class MonitorStocks extends Command
         $written = $this->writeSnapshots($quotes, $date, $now);
         $this->info("寫入 {$written} 筆快照");
 
-        // ===== Step 2: 09:05 AI 開盤校準（首次快照後） =====
-        if ($timeStr === '09:05' || ($hour === 9 && $minute <= 5 && !$this->hasCalibrated($date))) {
+        // ===== Step 1.5: 漲停/跌停通知 =====
+        $this->notifyLimitHits($quotes, $date);
+
+        // ===== Step 2: 09:05 AI 開盤校準（需有快照資料才執行） =====
+        if ($written > 0 && !$this->hasCalibrated($date) && $hour === 9 && $minute >= 1 && $minute <= 10) {
             $this->performOpeningCalibration($date, $candidates);
         }
 
@@ -201,11 +207,17 @@ class MonitorStocks extends Command
             $buyVolume = $prevSnapshot?->buy_volume ?? 0;
             $sellVolume = $prevSnapshot?->sell_volume ?? 0;
 
-            if ($data['current_price'] > 0 && $data['best_ask'] > 0 && $data['best_bid'] > 0) {
-                $midPrice = ($data['best_ask'] + $data['best_bid']) / 2;
-                $prevAccVolume = $prevSnapshot?->accumulated_volume ?? 0;
-                $deltaVolume = max(0, $data['accumulated_volume'] - $prevAccVolume);
+            $prevAccVolume = $prevSnapshot?->accumulated_volume ?? 0;
+            $deltaVolume = max(0, $data['accumulated_volume'] - $prevAccVolume);
 
+            if (!empty($data['limit_up'])) {
+                // 漲停：全部算外盤（買方）
+                $buyVolume += $deltaVolume;
+            } elseif (!empty($data['limit_down'])) {
+                // 跌停：全部算內盤（賣方）
+                $sellVolume += $deltaVolume;
+            } elseif ($data['current_price'] > 0 && $data['best_ask'] > 0 && $data['best_bid'] > 0) {
+                $midPrice = ($data['best_ask'] + $data['best_bid']) / 2;
                 if ($data['current_price'] >= $midPrice) {
                     $buyVolume += $deltaVolume;
                 } else {
@@ -218,26 +230,32 @@ class MonitorStocks extends Command
                 ? round($buyVolume / $totalBuySell * 100, 2)
                 : 50;
 
-            IntradaySnapshot::create([
-                'stock_id' => $stock->id,
-                'trade_date' => $date,
-                'snapshot_time' => $snapshotTime,
-                'open' => $data['open'],
-                'high' => $data['high'],
-                'low' => $data['low'],
-                'current_price' => $data['current_price'],
-                'prev_close' => $data['prev_close'],
-                'accumulated_volume' => $data['accumulated_volume'],
-                'estimated_volume_ratio' => $estimatedRatio,
-                'open_change_percent' => $openChangePercent,
-                'buy_volume' => $buyVolume,
-                'sell_volume' => $sellVolume,
-                'external_ratio' => $externalRatio,
-                'best_ask' => $data['best_ask'] ?? 0,
-                'best_bid' => $data['best_bid'] ?? 0,
-                'change_percent' => $changePercent,
-                'amplitude_percent' => $amplitudePercent,
-            ]);
+            IntradaySnapshot::updateOrCreate(
+                [
+                    'stock_id' => $stock->id,
+                    'trade_date' => $date,
+                    'snapshot_time' => $snapshotTime,
+                ],
+                [
+                    'open' => $data['open'],
+                    'high' => $data['high'],
+                    'low' => $data['low'],
+                    'current_price' => $data['current_price'],
+                    'prev_close' => $data['prev_close'],
+                    'accumulated_volume' => $data['accumulated_volume'],
+                    'estimated_volume_ratio' => $estimatedRatio,
+                    'open_change_percent' => $openChangePercent,
+                    'buy_volume' => $buyVolume,
+                    'sell_volume' => $sellVolume,
+                    'external_ratio' => $externalRatio,
+                    'best_ask' => $data['best_ask'] ?? 0,
+                    'best_bid' => $data['best_bid'] ?? 0,
+                    'change_percent' => $changePercent,
+                    'amplitude_percent' => $amplitudePercent,
+                    'limit_up' => !empty($data['limit_up']),
+                    'limit_down' => !empty($data['limit_down']),
+                ]
+            );
 
             $written++;
         }
@@ -263,6 +281,53 @@ class MonitorStocks extends Command
             $hour >= 13 => 10,
             default => 20,
         };
+    }
+
+    /**
+     * 漲停/跌停通知（每檔每日只通知一次）
+     */
+    private function notifyLimitHits(array $quotes, string $date): void
+    {
+        foreach ($quotes as $symbol => $data) {
+            $isLimitUp = !empty($data['limit_up']);
+            $isLimitDown = !empty($data['limit_down']);
+
+            if (!$isLimitUp && !$isLimitDown) continue;
+
+            $stock = Stock::where('symbol', $symbol)->first();
+            if (!$stock) continue;
+
+            // 只通知有 active monitor 的標的
+            $monitor = CandidateMonitor::whereHas('candidate', fn($q) => $q
+                ->where('trade_date', $date)
+                ->where('stock_id', $stock->id)
+            )->whereIn('status', CandidateMonitor::ACTIVE_STATUSES)->first();
+
+            if (!$monitor) continue;
+
+            $cacheKey = sprintf('limit_notified:%s:%s:%s', $symbol, $date, $isLimitUp ? 'up' : 'down');
+            if (Cache::has($cacheKey)) continue;
+
+            $label = $isLimitUp ? '漲停' : '跌停';
+            $pct = $data['prev_close'] > 0
+                ? round(($data['current_price'] - $data['prev_close']) / $data['prev_close'] * 100, 1)
+                : 0;
+
+            $this->telegram->send(sprintf(
+                "[%s] %s %s %.2f (%+.1f%%) | 量 %s 股 | 監控 %s",
+                $label,
+                $symbol,
+                $stock->name,
+                $data['current_price'],
+                $pct,
+                number_format($data['accumulated_volume']),
+                $monitor->status
+            ));
+
+            $this->line("  {$symbol} {$stock->name} → {$label} {$data['current_price']}");
+
+            Cache::put($cacheKey, true, now()->endOfDay());
+        }
     }
 
     private function getYesterdayVolume(int $stockId, string $date): int

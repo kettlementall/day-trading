@@ -150,6 +150,11 @@ class MonitorService
 
             if (!$latestSnapshot) continue;
 
+            // 漲停中無法買入，watching 狀態不評估進場
+            if ($latestSnapshot->limit_up && $monitor->status === CandidateMonitor::STATUS_WATCHING) {
+                continue;
+            }
+
             // 13:25 強制平倉
             $now = now();
             if ($now->format('H:i') >= '13:25' && $monitor->status === CandidateMonitor::STATUS_HOLDING) {
@@ -177,6 +182,13 @@ class MonitorService
 
         $latest = $snapshots->last();
         $price = (float) $latest->current_price;
+        $prevClose = (float) $latest->prev_close;
+
+        // 漲停價附近（≥9.5%）不進場 — 買不到或追高風險極大
+        if ($prevClose > 0 && ($price - $prevClose) / $prevClose >= 0.095) {
+            return;
+        }
+
         $cal = $monitor->ai_calibration ?? [];
         $entryConditions = $cal['entry_conditions'] ?? [];
 
@@ -472,7 +484,8 @@ class MonitorService
             ->where('trade_date', $date)
             ->orderBy('snapshot_time')
             ->get()
-            ->takeLast($count);
+            ->slice(-$count)
+            ->values();
     }
 
     /**
@@ -490,7 +503,7 @@ class MonitorService
         if ($price < $support - $tolerance || $price > $support + $tolerance) return false;
 
         // 最近 3 筆量遞減
-        $recent3 = $snapshots->takeLast(3)->values();
+        $recent3 = $snapshots->take(-3)->values();
         for ($i = 1; $i < $recent3->count(); $i++) {
             if ($recent3[$i]->accumulated_volume >= $recent3[$i - 1]->accumulated_volume * 1.1) {
                 return false; // 量沒有遞減
@@ -507,7 +520,7 @@ class MonitorService
     {
         if ($snapshots->count() < 3 || $support <= 0) return false;
 
-        $recent3 = $snapshots->takeLast(3)->values();
+        $recent3 = $snapshots->take(-3)->values();
 
         // 至少有一筆曾觸及支撐
         $touchedSupport = false;
@@ -534,7 +547,7 @@ class MonitorService
     {
         if ($snapshots->count() < 3) return 'pullback';
 
-        $recent = $snapshots->takeLast(5)->values();
+        $recent = $snapshots->take(-5)->values();
         $downMoveVolume = 0;
         $upMoveVolume = 0;
         $consecutiveDown = 0;

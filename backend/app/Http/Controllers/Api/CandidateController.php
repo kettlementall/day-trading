@@ -151,6 +151,8 @@ class CandidateController extends Controller
                     'current_stop' => $monitor->current_stop,
                     'current_price' => $currentPrice,
                     'profit_pct' => $profitPct,
+                    'limit_up' => $latestSnapshot?->limit_up ?? false,
+                    'limit_down' => $latestSnapshot?->limit_down ?? false,
                     'skip_reason' => $monitor->skip_reason,
                     'last_ai_advice' => $monitor->ai_advice_log
                         ? collect($monitor->ai_advice_log)->last()

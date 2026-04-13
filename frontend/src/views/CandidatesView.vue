@@ -11,7 +11,7 @@
           :clearable="false"
           size="small"
           style="width: 140px"
-          @change="store.fetchCandidates"
+          @change="onDateChange"
         />
         <span v-if="store.lastUpdatedAt" class="last-updated">{{ formatTime(store.lastUpdatedAt) }}</span>
       </div>
@@ -67,14 +67,18 @@
               <span class="stock-symbol">{{ m.symbol }}</span>
               <span class="stock-name">{{ m.name }}</span>
             </div>
-            <el-tag size="small" :type="monitorStatusType(m.status)" round>
-              {{ monitorStatusLabel(m.status) }}
-            </el-tag>
+            <div class="monitor-tags">
+              <el-tag v-if="m.limit_up" size="small" type="danger" round>漲停</el-tag>
+              <el-tag v-else-if="m.limit_down" size="small" type="info" round>跌停</el-tag>
+              <el-tag size="small" :type="monitorStatusType(m.status)" round>
+                {{ monitorStatusLabel(m.status) }}
+              </el-tag>
+            </div>
           </div>
           <div class="monitor-item-body">
             <div v-if="m.current_price" class="monitor-price">
               <span class="label">現價</span>
-              <span class="value">{{ m.current_price }}</span>
+              <span class="value" :class="{ 'price-limit-up': m.limit_up, 'price-limit-down': m.limit_down }">{{ m.current_price }}</span>
             </div>
             <div v-if="m.profit_pct !== null" class="monitor-price">
               <span class="label">損益</span>
@@ -340,6 +344,12 @@ onMounted(() => {
 onUnmounted(() => {
   store.stopMonitorPolling()
 })
+
+function onDateChange() {
+  store.stopMonitorPolling()
+  store.fetchCandidates()
+  store.fetchMonitors(store.currentDate)
+}
 
 function goDetail(item) {
   router.push(`/stock/${item.stock_id}`)
@@ -689,6 +699,24 @@ function monitorStatusLabel(status) {
 .monitor-item.monitor-target_hit { border-left-color: #67c23a; }
 .monitor-item.monitor-stop_hit { border-left-color: #f56c6c; }
 .monitor-item.monitor-trailing_stop { border-left-color: #e6a23c; }
+
+.monitor-tags {
+  display: flex;
+  gap: 4px;
+}
+
+.price-limit-up {
+  color: #f56c6c !important;
+  animation: limit-pulse 1.5s ease-in-out infinite;
+}
+.price-limit-down {
+  color: #67c23a !important;
+  animation: limit-pulse 1.5s ease-in-out infinite;
+}
+@keyframes limit-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
 
 .monitor-item-top {
   display: flex;

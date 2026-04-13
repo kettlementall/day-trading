@@ -130,6 +130,40 @@ class TwseRealtimeClient
         $bestAsk = self::parsePrice(explode('_', $item['a'] ?? '')[0] ?? '');
         $bestBid = self::parsePrice(explode('_', $item['b'] ?? '')[0] ?? '');
 
+        // 漲停/跌停偵測
+        // 情境 1: z="-" + 單邊有掛單（bid>0 ask=0 或反之）
+        // 情境 2: z 有值但過時 + 雙邊都沒掛單（ask=0 bid=0）+ high 接近漲停價
+        $limitUp = false;
+        $limitDown = false;
+
+        if ($bestAsk <= 0 && $bestBid > 0 && $current <= 0) {
+            // 情境 1: z 無值，買方排隊
+            $limitUp = true;
+            $current = $bestBid;
+        } elseif ($bestBid <= 0 && $bestAsk > 0 && $current <= 0) {
+            // 情境 1: z 無值，賣方排隊
+            $limitDown = true;
+            $current = $bestAsk;
+        } elseif ($bestAsk <= 0 && $bestBid <= 0 && $prevClose > 0 && $high > 0) {
+            // 情境 2: 雙邊都沒掛單，用 high/low 判斷是否鎖漲停/跌停
+            $highPct = ($high - $prevClose) / $prevClose;
+            $lowPct = ($prevClose - ($low > 0 ? $low : $prevClose)) / $prevClose;
+
+            if ($highPct >= 0.09) {
+                $limitUp = true;
+                $current = $high;   // 漲停價 = 今日最高
+            } elseif ($lowPct >= 0.09) {
+                $limitDown = true;
+                $current = $low;    // 跌停價 = 今日最低
+            }
+        }
+
+        if ($limitUp) {
+            $high = max($high, $current);
+        } elseif ($limitDown && $low > 0) {
+            $low = min($low, $current);
+        }
+
         return [
             'symbol' => $symbol,
             'name' => $item['n'] ?? '',
@@ -141,6 +175,8 @@ class TwseRealtimeClient
             'accumulated_volume' => $accVolume,
             'best_ask' => $bestAsk,
             'best_bid' => $bestBid,
+            'limit_up' => $limitUp,
+            'limit_down' => $limitDown,
             'timestamp_ms' => (int) ($item['tlong'] ?? 0),
         ];
     }
