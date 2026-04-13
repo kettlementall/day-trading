@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <div class="back-row" @click="router.back()">
+    <div class="back-row" @click="goBack">
       <el-icon><ArrowLeft /></el-icon>
       <span>返回</span>
     </div>
@@ -72,6 +72,15 @@ use([CanvasRenderer, CandlestickChart, BarChart, GridComponent, TooltipComponent
 
 const route = useRoute()
 const router = useRouter()
+
+function goBack() {
+  if (window.history.length <= 1) {
+    window.close()
+  } else {
+    router.back()
+  }
+}
+
 const stock = ref(null)
 const klineData = ref([])
 const loading = ref(false)

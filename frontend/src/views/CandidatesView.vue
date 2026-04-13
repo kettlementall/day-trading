@@ -357,7 +357,8 @@ function onDateChange() {
 }
 
 function goDetail(item) {
-  router.push(`/stock/${item.stock_id}`)
+  const route = router.resolve(`/stock/${item.stock_id}`)
+  window.open(route.href, '_blank')
 }
 
 function formatTime(dt) {
