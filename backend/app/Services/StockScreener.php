@@ -480,12 +480,21 @@ class StockScreener
                 'target_price' => $targetPrice,
                 'stop_loss' => $stopLoss,
                 'risk_reward_ratio' => $riskReward,
-                'score' => min($score, 100),
+                'score' => max($score, 0),
                 'strategy_type' => $strategyType,
                 'strategy_detail' => $strategyDetail,
                 'reasons' => $reasons,
                 'indicators' => $indicators,
             ]);
+        }
+
+        // 正規化分數：最高分 = 100，其餘按比例換算
+        $maxScore = $candidates->max('score');
+        if ($maxScore > 0) {
+            $candidates = $candidates->map(function ($c) use ($maxScore) {
+                $c['score'] = round($c['score'] / $maxScore * 100);
+                return $c;
+            });
         }
 
         // 依分數排序，取前 N 名
