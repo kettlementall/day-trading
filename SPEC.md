@@ -94,7 +94,7 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 | 股價              | > 10 元  |
 | 最終分數          | >= 35 分（AI 模式 `minScoreOverride`） |
 | 風報比            | >= 1.0（寬篩階段，AI 會重算價格） |
-| 最多選取          | 前 40 名（AI 模式 `maxCandidatesOverride`） |
+| 最多選取          | 前 20 名（AI 模式 `maxCandidatesOverride`，負面因子已加強鑑別力） |
 
 ### 2.1a 硬排除條件
 
@@ -131,7 +131,10 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 | 18 | 自營大買       | 5       | 自營淨買 > 當日成交量 × 3%             | `dealer_big_buy`    |
 | 19 | 萬張量能       | 5       | 成交量 >= 10,000 張                    | `high_volume`       |
 | 20 | 消息面情緒     | ±10~15  | 依消息面指數調整（見 §2.5）             | `news_sentiment`    |
-| 21 | 長上影線懲罰   | -10     | 上影線 > 實體 ×1.5 且收盤在下方 30%     | （內建規則）         |
+| 21 | 長上影線懲罰   | -10     | 上影線 > 實體 ×1.5                       | （內建規則）         |
+| 22 | 量能萎縮懲罰   | -8      | 最近成交量 < 5日均量                     | `volume_shrink_penalty` |
+| 23 | 連漲過度延伸   | -5      | 連續 ≥ 5 日收紅                          | `extended_rally_penalty` |
+| 24 | 風報比偏低     | -5      | RR < 1.2（價格計算後套用）               | `low_rr_penalty`    |
 
 ### 2.3 策略分類
 
@@ -164,6 +167,7 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 - **假突破**：爆量長上影線（上影 > 實體 ×1.5）+ 收盤貼近低點 → 不加分，標記 `fake_breakout`
 - **過高回測**：前幾日已突破 → 拉回不破前高 → 確認站穩才是最佳進場時機
 - **壓力試探**：接近長期高點（近60日）但未突破 → 標記 `near_pressure`，不宜追買
+- **前日黑 K 排除**：前日高開低走收黑（實體佔比 >50%、開盤接近最高）→ 賣壓釋放信號，不列入 breakout，標記 `bearish_candle_excluded`
 
 ### 2.4 價格計算
 

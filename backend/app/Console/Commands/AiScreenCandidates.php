@@ -23,9 +23,9 @@ class AiScreenCandidates extends Command
             return self::SUCCESS;
         }
 
-        // Step 1: 規則式寬篩（門檻 35，池子 40，讓 AI 有更大選擇空間）
-        $this->info("Step 1: 規則式寬篩（min_score=35, max=40），交易日: {$date}");
-        $screener->screen($date, minScoreOverride: 35, maxCandidatesOverride: 40);
+        // Step 1: 規則式寬篩（門檻 35，池子 20，負面因子已加強鑑別力）
+        $this->info("Step 1: 規則式寬篩（min_score=35, max=20），交易日: {$date}");
+        $screener->screen($date, minScoreOverride: 35, maxCandidatesOverride: 20);
 
         // 取出剛寫入的候選
         $candidates = Candidate::with('stock')

@@ -384,16 +384,37 @@ class StockScreener
                 $strategyDetail['news_panic'] = $newsFactor['panic'];
             }
 
-            // 長上影線降分：上影 > 實體 ×1.5 且收盤在下方 30%
+            // 21. 長上影線降分：上影 > 實體 ×1.5（不再要求收盤在下方 30%）
             $upperShadowPenalty = $scoringConfig['upper_shadow_penalty'] ?? -10;
             $body = abs($closes[0] - $opens[0]);
             $upperShadow = $highs[0] - max($closes[0], $opens[0]);
-            $range = $highs[0] - $lows[0];
-            if ($body > 0 && $upperShadow > $body * 1.5 && $range > 0) {
-                $closePosition = ($closes[0] - $lows[0]) / $range;
-                if ($closePosition < 0.3) {
-                    $score += $upperShadowPenalty;
-                    $reasons[] = '前日長上影線（賣壓訊號）';
+            if ($body > 0 && $upperShadow > $body * 1.5) {
+                $score += $upperShadowPenalty;
+                $reasons[] = '前日長上影線（賣壓訊號）';
+            }
+
+            // 22. 量縮懲罰：最近成交量 < 5日均量（預估量倍數 < 1.0 等效）
+            $cfg = $sc('volume_shrink');
+            if ($cfg['enabled'] ?? true) {
+                $avgVol5ForPenalty = array_sum(array_slice($volumes, 0, 5)) / 5;
+                if ($avgVol5ForPenalty > 0 && $volumes[0] < $avgVol5ForPenalty) {
+                    $score += $cfg['score'] ?? -8;
+                    $reasons[] = '量能萎縮';
+                }
+            }
+
+            // 23. 連漲過多天懲罰：連續 N 日以上收紅，過度延伸風險
+            $cfg = $sc('extended_rally');
+            if ($cfg['enabled'] ?? true) {
+                $minDays = $cfg['min_days'] ?? 5;
+                $consecutiveUp = 0;
+                for ($i = 0; $i < min(count($changePcts), 10); $i++) {
+                    if ($changePcts[$i] > 0) $consecutiveUp++;
+                    else break;
+                }
+                if ($consecutiveUp >= $minDays) {
+                    $score += $cfg['score'] ?? -5;
+                    $reasons[] = "連漲{$consecutiveUp}日（過度延伸）";
                 }
             }
 
@@ -441,6 +462,16 @@ class StockScreener
             // 風報比門檻（寬篩用 1.0，AI 會重算價格）
             $minRR = $screenConfig['min_risk_reward'] ?? 1.0;
             if ($riskReward < $minRR) continue;
+
+            // 24. 風報比偏低懲罰：RR < threshold 獲利空間不足
+            $cfg = $sc('low_rr');
+            if ($cfg['enabled'] ?? true) {
+                $rrThreshold = $cfg['threshold'] ?? 1.2;
+                if ($riskReward < $rrThreshold) {
+                    $score += $cfg['score'] ?? -5;
+                    $reasons[] = 'RR偏低(' . $riskReward . ')';
+                }
+            }
 
             $candidates->push([
                 'stock_id' => $stock->id,
@@ -563,7 +594,19 @@ class StockScreener
             $prev10High = count($highs) >= 11 ? max(array_slice($highs, 1, 10)) : 0;
             $nearBreakout = $prev5High > 0 && $close >= $prev5High * $nearPct;
             $aboveMa5 = $ma5 && $close > $ma5;
-            $isBreakout = $nearBreakout && $aboveMa5;
+            // 前日高開低走收黑 K → 賣壓釋放信號，不適用 breakout
+            $prevOpen = $opens[0];
+            $prevClose = $closes[0];
+            $prevRange = $highs[0] - $lows[0];
+            $isBearishCandle = $prevClose < $prevOpen && $prevRange > 0
+                && ($prevOpen - $prevClose) / $prevRange > 0.5  // 實體佔比 > 50%
+                && ($highs[0] - $prevOpen) / $prevRange < 0.2;  // 開盤接近最高（上影短）
+
+            $isBreakout = $nearBreakout && $aboveMa5 && !$isBearishCandle;
+
+            if ($isBearishCandle && $nearBreakout && $aboveMa5) {
+                $detail['bearish_candle_excluded'] = true;
+            }
 
             if ($isBreakout) {
                 $detail['prev_5d_high'] = $prev5High;

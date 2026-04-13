@@ -431,6 +431,15 @@ const scoringGroups = [
       { key: 'high_volume', label: '萬張量能', params: [{ field: 'min_lots', label: '最低張數', min: 1000, max: 100000, step: 1000, unit: '張' }] },
     ],
   },
+  {
+    key: 'penalty',
+    label: '負面因子（扣分）',
+    items: [
+      { key: 'volume_shrink', label: '量能萎縮', params: [] },
+      { key: 'extended_rally', label: '連漲過度延伸', params: [{ field: 'min_days', label: '連漲天數', min: 3, max: 10, unit: '日' }] },
+      { key: 'low_rr', label: '風報比偏低', params: [{ field: 'threshold', label: 'RR 門檻', min: 1.0, max: 2.0, step: 0.1, precision: 1, unit: '' }] },
+    ],
+  },
 ]
 
 onMounted(async () => {
