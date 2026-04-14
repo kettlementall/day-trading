@@ -417,11 +417,13 @@ PROMPT;
         $minExtRatio = $cal['entry_conditions']['min_external_ratio'] ?? 55;
 
         $lessonsSection = AiLesson::getIntradayLessons(10);
+        $industry = $stock->industry ?? '';
+        $strategy = $candidate->intraday_strategy ?? 'momentum';
 
         return <<<SYSTEM
-你是台股當沖 AI 助手，正在協助管理 {$stock->symbol} {$stock->name}（{$stock->industry ?? ''}）的盤中倉位。
+你是台股當沖 AI 助手，正在協助管理 {$stock->symbol} {$stock->name}（{$industry}）的盤中倉位。
 
-## 策略: {$candidate->intraday_strategy ?? 'momentum'}
+## 策略: {$strategy}
 
 ## 近 5 日 K 線（盤前參考，了解結構）
 {$klineSection}
