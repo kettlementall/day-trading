@@ -341,7 +341,7 @@ API 不可用時，全部標記 `haiku_selected=true`，讓 Opus 自行判斷。
 
 #### Fallback
 
-API 失敗時，取 Haiku 信度前 15 名，依 `strategy_type` 給預設策略標籤。
+API 失敗時，取 Haiku 信度前 15 名，預設 `intraday_strategy = 'momentum'`。
 
 ### 3.4 AiLesson — 唯一調優入口
 
@@ -401,7 +401,7 @@ API 失敗時，取 Haiku 信度前 15 名，依 `strategy_type` 給預設策略
 | 5  | 跳空風險 | 開盤漲幅 > 7% | 否決通過（隔日沖風險過高） |
 | 6  | 支撐確認 | 突破型：現價需站穩買入價上方，盤中低點未跌破買入價×0.99 | 突破型未通過 → 否決 |
 
-規則 6 僅適用於 `strategy_type = breakout` 的標的，跌深反彈型不受此規則約束。
+規則 6 僅適用於突破型標的（`strategy_type = breakout`，此欄位已棄用，目前規則 6 恆通過），跌深反彈型不受此規則約束。
 
 ### 通過條件
 
@@ -465,12 +465,14 @@ AI 依開盤數據將每檔標的分為四級：
 |------|------|------|-------------|
 | A（強力推薦） | score 高 + 前日漲停/強勢 + est_vol>3 + ext_ratio>70% | 全額進場 | `watching` |
 | B（標準進場） | score 中上 + 盤中走勢確認 | 半倉進場 | `watching` |
-| C（觀察） | score 尚可但有矛盾訊號 | 紙上交易追蹤，不觸發實際進場 | `watching`（不進 evaluateWatching） |
+| C（觀察） | score 尚可但有矛盾訊號 | 紙上交易追蹤；AI 滾動建議 entry 且時間 < 11:00 可自動升格為 B | `watching`（暫不進 evaluateWatching） |
 | D（放棄） | 明確轉弱訊號 | 不進場 | `skipped` |
 
 - `morning_grade`（A/B/C/D）存入 `candidates` 表
 - `morning_confirmed` = A 或 B 時為 true（向下相容）
 - A/B/C 級均設定 `entry_conditions`（C 級用於紙上追蹤）
+
+**C 級升格**：AI 滾動建議（`rollingAdvice`）判斷進場（`action: entry`）且時間 < 11:00，自動將 `morning_grade` 升為 B、`morning_confirmed = true`，下次快照觸發進場邏輯，並發送 `[升格 C→B]` Telegram 通知。
 
 **Fallback**：API 失敗時使用 MorningScreener 四條規則，依 morningScore 分級：≥85→A、≥70→B、≥50→C、其餘→D。
 
@@ -480,11 +482,28 @@ AI 依開盤數據將每檔標的分為四級：
 
 | 策略 | 進場條件 |
 |------|----------|
-| breakout_fresh / momentum | 現價 > 參考壓力位 |
-| breakout_retest / gap_pullback | 拉回至參考支撐位附近後反彈 |
-| bounce | 觸及參考支撐位 + 出現反彈跡象 |
+| breakout_fresh / momentum | 現價 > 參考壓力位 × 0.995（接近或突破） |
+| breakout_retest / gap_pullback | 拉回至參考支撐位 ±0.5% 範圍後量縮止穩 |
+| bounce | 觸及參考支撐位 + 最後 2 筆價格/外盤比均上升 |
 
-共同條件：量能充足（預估量比 ≥ 設定值）、外盤比合理、非弱勢走勢（連續 3+ 根下跌量縮判定為 weakness）。
+共同前提條件：量能充足（預估量比 ≥ AI 設定值）、外盤比合理（≥ AI 設定值）、非弱勢走勢（連續 3+ 根下跌且下跌量 > 上漲量 × 1.5 判定為 weakness，不進場）。
+
+#### 動態目標/停損公式
+
+進場時依近 5 日平均振幅計算當日目標/停損（`evaluateWatching()` → `evaluateHolding()` 切換時設定）：
+
+```
+目標價 = round(進場價 × (1 + 5日均振幅% × 0.6), 2)
+目標價 = min(目標價, 進場價 × 1.08)              // 振幅公式上限
+若 AI 校準壓力位 > 進場價 且 ≤ 進場價 × 1.10:
+    目標價 = max(目標價, AI 壓力位)              // AI 值可突破公式上限
+目標價 = min(目標價, 進場價 × 1.10)             // 絕對上限
+
+停損價 = round(進場價 × (1 - 5日均振幅% × 0.55), 2)
+停損價 = max(停損價, 進場價 × 0.97)             // 下限 3%
+```
+
+AI 滾動建議隨時可透過 `adjustments.stop` 動態調整停損（鎖利）；WATCHING 狀態可透過 `adjustments.support` / `resistance` 更新支撐/壓力，影響下次進場判定。
 
 ### 出場判定
 
@@ -495,9 +514,9 @@ AI 依開盤數據將每檔標的分為四級：
 | 現價 ≥ 目標價 | `target_hit` |
 | 現價 ≤ 停損價 | `stop_hit` |
 | 持有期最高價回落 50% | `trailing_stop`（移動停利） |
-| 獲利 >2% 時提高停損 | 動態停損（不低於進場價） |
-| 獲利 >4% 時進一步收緊停損 | 動態停損（至少鎖 2% 利潤） |
-| 持有 >60 分鐘且獲利 <0.5% | `closed`（時間停損） |
+| 獲利 >2% 時提高停損 | 動態停損至進場價 +0.5% |
+| 獲利 >4% 時進一步收緊停損 | 動態停損至進場價 +2%（鎖利） |
+| 持有 >90 分鐘且仍虧損中 | `closed`（時間停損） |
 | 13:25 | `closed`（強制平倉） |
 
 ### AI 滾動建議（依時段動態頻率）
@@ -511,11 +530,66 @@ AI 依開盤數據將每檔標的分為四級：
 | 10:30-13:00 | 每 20 分鐘 | 盤中趨緩 |
 | 13:00-13:25 | 每 10 分鐘 | 尾盤平倉決策 |
 
-一天約 20 次 AI call，Sonnet 約 NT$15-25/天。
+一天約 20 次定期 AI call（不含緊急觸發），Sonnet 約 NT$15-25/天。
 
-- 接收近期快照 + 持倉狀態，呼叫 Claude API 給出 hold/adjust_target/adjust_stop/close 建議
-- MonitorService 根據建議調整目標/停損
-- Fallback：回傳 `{action: 'hold'}`
+#### Prompt 架構（System/User 分離 + Prompt Caching）
+
+使用 `anthropic-beta: prompt-caching-2024-07-31`，靜態部分快取全天，節省 token：
+
+**System Prompt（靜態，每日每股首次後快取）**
+- 股票基本資訊（代號、名稱、產業、策略）
+- 近 5 日 K 線摘要（日期/開高低收/量/漲幅）
+- 開盤校準結果（等級 / 支撐位 / 壓力位 / 進場門檻 / 備註）
+- AiLesson 盤中教訓
+
+**User Message（動態，每次重新計算）**
+- 聚合後的 5 分 K 線（開/高/低/收/量張/外盤%）——從當日所有原始快照聚合
+- 開盤區間（首根 5 分 K 高/低）：突破→多方確認 / 跌破→多方失守
+- 狀態與距離標示：
+  - **HOLDING**：進場價 + 進場時間、損益%、距目標、距停損、距今日最高
+  - **WATCHING**：現價、距支撐、距壓力、進場條件文字描述、今日高低
+- 狀態別任務提問（HOLDING 問走勢是否支持持有/出場訊號；WATCHING 問進場觸發與支撐壓力調整）
+
+#### 回應格式
+
+```json
+{
+  "action": "hold",
+  "notes": "量能從 2.1x 降至 1.6x，支撐有效，繼續持有",
+  "adjustments": {
+    "target": null,
+    "stop": null,
+    "support": null,
+    "resistance": null
+  }
+}
+```
+
+| action | 狀態 | 效果 |
+|--------|------|------|
+| `hold` | 任意 | 套用 adjustments（若有）|
+| `exit` | HOLDING | 立即以現價出場（trailing_stop）|
+| `skip` | WATCHING | 轉為 skipped，放棄追蹤 |
+| `entry` | WATCHING | C 級且 < 11:00 → 升格 B；其餘僅記錄 |
+
+`adjustments.target` / `stop`：HOLDING 中調整目標/停損（可鎖利）
+`adjustments.support` / `resistance`：WATCHING 中更新 AI 支撐/壓力位，影響進場判定
+
+Fallback（API 失敗）：回傳 `{action: 'hold', notes: 'AI 不可用，維持現狀'}`
+
+### 緊急 AI 觸發
+
+由 `MonitorService::detectEmergency()` 偵測，任一條件成立即對 HOLDING 標的立即觸發：
+
+| 條件 | 閾值 | 說明 |
+|------|------|------|
+| 急殺 | 最近 2 筆快照跌幅 > 1.5% | 短時間內價格急速崩跌 |
+| 外盤崩潰 | external_ratio < 35% 且 change_percent < -0.5% | 賣壓大量湧現 |
+| 接近停損 | 現價 < 停損價 × 1.01 | 距停損不到 1% |
+
+觸發後立即呼叫 `IntradayAiAdvisor::emergencyAdvice()`，不等下一個定期排程週期。System prompt 複用相同快取，user message 額外標注緊急原因，要求 AI 明確回覆 hold 或 exit。
+
+**Rate limit**：每股每 5 分鐘最多觸發一次（cache key: `emergency_ai:{stock_id}:{date}:{5min_slot}`）
 
 ### Telegram 通知
 
@@ -524,13 +598,15 @@ AI 依開盤數據將每檔標的分為四級：
 | 事件 | 通知內容 |
 |------|---------|
 | AI 選股完成 | 寬篩 N 檔 → Haiku M 檔 → Opus 選入 K 檔，附各標的摘要 |
-| AI 校準通過/否決 | 標的代號、名稱、AI 備註 |
-| 進場訊號 | 標的、進場價、策略、目標/停損 |
+| AI 校準通過/否決 | 標的代號、名稱、等級、支撐/壓力、AI 備註 |
+| 進場訊號 | 標的、進場價、量比、外盤比、目標/停損 |
 | 走弱到價 | 標的到達買入價但走勢偏弱，不進場（含外盤比） |
-| 達標出場 | 標的、出場價、獲利% |
-| 觸停損出場 | 標的、出場價、虧損% |
-| 移動停利 | 標的、出場價、鎖利% |
-| AI 滾動建議 | 標的、建議動作、調整內容 |
+| C→B 升格 | C 級 AI 滾動建議進場，升格為 B（含 AI 備註）|
+| 達標出場 | 標的、出場價、獲利%、持有時間 |
+| 觸停損出場 | 標的、出場價、虧損%、持有時間 |
+| 移動停利 | 標的、出場價、鎖利%、持有時間 |
+| AI 調整 | 標的、調整內容（目標/停損/支撐/壓力）、AI 備註 |
+| 漲停/跌停 | 監控中的標的觸及漲跌停（每日每檔一次）|
 | 13:25 強制平倉 | 標的、平倉價 |
 
 ---
@@ -651,7 +727,7 @@ expected_value = avg(所有 buy_reachable 為 true 的 profit)
 
 #### 策略分類分析
 
-指標可依策略類型（`bounce` / `breakout`）分別統計，回傳於 `by_strategy` 欄位。
+指標可依 `intraday_strategy` 分別統計，回傳於 `by_strategy` 欄位。支援類型：`bounce` / `breakout_fresh` / `breakout_retest` / `gap_pullback` / `momentum`。
 
 #### 日別趨勢
 
