@@ -8,7 +8,6 @@ use App\Models\FormulaSetting;
 use App\Models\InstitutionalTrade;
 use App\Models\MarginTrade;
 use App\Models\NewsIndex;
-use App\Models\ScreeningRule;
 use App\Models\Stock;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
@@ -21,12 +20,12 @@ class StockScreener
     public function screen(string $tradeDate, ?int $minScoreOverride = null, ?int $maxCandidatesOverride = null): Collection
     {
         $stocks = Stock::where('is_day_trading', true)->get();
-        $rules = ScreeningRule::where('is_active', true)->orderBy('sort_order')->get();
         $buyConfig = FormulaSetting::getConfig('suggested_buy');
         $targetConfig = FormulaSetting::getConfig('target_price');
         $stopConfig = FormulaSetting::getConfig('stop_loss');
         $screenConfig = FormulaSetting::getConfig('screen_thresholds');
         $newsConfig = FormulaSetting::getConfig('news_sentiment');
+        $labelConfig = FormulaSetting::getConfig('signal_labels');
         $candidates = collect();
 
         // 取得最新消息面指數
@@ -104,22 +103,47 @@ class StockScreener
             $indicators = compact('ma5', 'ma10', 'ma20', 'rsi', 'kd', 'atr', 'bollinger');
 
             // =========================================
-            // 事實標籤（3–5 個，讓 AI 快速掌握關鍵信號）
+            // 事實標籤（讓 AI 快速掌握關鍵信號，參數可在設定頁調整）
             // =========================================
             $reasons = [];
-            $avgVol5 = array_sum(array_slice($volumes, 0, 5)) / 5;
-            if ($volumes[0] > $avgVol5 * 1.5) $reasons[] = '量放大';
-            if ($inst->isNotEmpty() && $inst->first()->foreign_net > 0) $reasons[] = '外資買超';
-            if ($inst->isNotEmpty() && $inst->first()->trust_net > 0) $reasons[] = '投信買超';
-            $prev5High = count($highs) >= 6 ? max(array_slice($highs, 1, 5)) : 0;
-            if ($prev5High > 0 && $closes[0] > $prev5High) $reasons[] = '突破前高';
-            if ($margin->isNotEmpty() && $margin->first()->margin_change < 0) $reasons[] = '融資減';
 
-            // 自訂規則匹配 → 加入標籤供 AI 參考（不做硬排除）
-            foreach ($rules as $rule) {
-                if ($this->matchRule($rule, $latest, $inst->first(), $margin->first())) {
-                    $reasons[] = $rule->name;
-                }
+            // 量放大
+            $cfg = $labelConfig['volume_surge'] ?? [];
+            if ($cfg['enabled'] ?? true) {
+                $days = $cfg['days'] ?? 5;
+                $multiplier = $cfg['multiplier'] ?? 1.5;
+                $avgVol = array_sum(array_slice($volumes, 0, $days)) / max($days, 1);
+                if ($volumes[0] > $avgVol * $multiplier) $reasons[] = $cfg['label'] ?? '量放大';
+            }
+
+            // 外資買超
+            $cfg = $labelConfig['foreign_buy'] ?? [];
+            if (($cfg['enabled'] ?? true) && $inst->isNotEmpty()) {
+                $minNet = $cfg['min_net'] ?? 0;
+                if ((float) $inst->first()->foreign_net > $minNet) $reasons[] = $cfg['label'] ?? '外資買超';
+            }
+
+            // 投信買超
+            $cfg = $labelConfig['trust_buy'] ?? [];
+            if (($cfg['enabled'] ?? true) && $inst->isNotEmpty()) {
+                $minNet = $cfg['min_net'] ?? 0;
+                if ((float) $inst->first()->trust_net > $minNet) $reasons[] = $cfg['label'] ?? '投信買超';
+            }
+
+            // 突破前高
+            $cfg = $labelConfig['breakout_high'] ?? [];
+            if ($cfg['enabled'] ?? true) {
+                $days = $cfg['days'] ?? 5;
+                $prevHighArr = count($highs) >= $days + 1 ? array_slice($highs, 1, $days) : [];
+                $prevHigh = !empty($prevHighArr) ? max($prevHighArr) : 0;
+                if ($prevHigh > 0 && $closes[0] > $prevHigh) $reasons[] = $cfg['label'] ?? '突破前高';
+            }
+
+            // 融資減
+            $cfg = $labelConfig['margin_decrease'] ?? [];
+            if (($cfg['enabled'] ?? true) && $margin->isNotEmpty()) {
+                $maxChange = $cfg['max_change'] ?? 0;
+                if ((float) $margin->first()->margin_change < $maxChange) $reasons[] = $cfg['label'] ?? '融資減';
             }
 
             // =========================================
@@ -390,32 +414,4 @@ class StockScreener
         };
     }
 
-    private function matchRule(ScreeningRule $rule, $quote, $inst, $margin): bool
-    {
-        foreach ($rule->conditions as $cond) {
-            $value = match ($cond['field'] ?? '') {
-                'volume'         => ($quote->volume ?? 0) / 1000,
-                'amplitude'      => $quote->amplitude ?? 0,
-                'change_percent' => $quote->change_percent ?? 0,
-                'foreign_net'    => $inst?->foreign_net ?? 0,
-                'trust_net'      => $inst?->trust_net ?? 0,
-                'total_net'      => $inst?->total_net ?? 0,
-                'margin_change'  => $margin?->margin_change ?? 0,
-                default          => 0,
-            };
-
-            $target = $cond['value'] ?? 0;
-            $pass = match ($cond['operator'] ?? '>') {
-                '>'  => $value > $target,
-                '>=' => $value >= $target,
-                '<'  => $value < $target,
-                '<=' => $value <= $target,
-                default => false,
-            };
-
-            if (!$pass) return false;
-        }
-
-        return true;
-    }
 }

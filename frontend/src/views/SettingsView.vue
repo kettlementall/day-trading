@@ -111,33 +111,108 @@
           </div>
         </el-tab-pane>
 
-        <!-- ==================== Tab 3: 自訂規則 ==================== -->
-        <el-tab-pane label="自訂規則" name="rules">
-          <div class="tab-section">
-            <el-button type="primary" size="small" @click="showAdd = true" style="margin-bottom: 12px">
-              <el-icon><Plus /></el-icon> 新增規則
-            </el-button>
+        <!-- ==================== Tab 3: 訊號標籤 ==================== -->
+        <el-tab-pane label="訊號標籤" name="labels">
+          <div v-if="formulas.signal_labels" class="tab-section">
 
-            <el-skeleton v-if="loading" :rows="4" animated />
-            <div v-else>
-              <div v-for="rule in rules" :key="rule.id" class="stock-card rule-card">
-                <div class="rule-header">
-                  <span class="rule-name">{{ rule.name }}</span>
-                  <div class="rule-actions">
-                    <el-switch v-model="rule.is_active" size="small" @change="toggleRule(rule)" />
-                    <el-button type="danger" size="small" text @click="removeRule(rule)">
-                      <el-icon><Delete /></el-icon>
-                    </el-button>
-                  </div>
+            <!-- 量放大 -->
+            <div class="stock-card">
+              <div class="label-header">
+                <div>
+                  <div class="label-title">{{ formulas.signal_labels.config.volume_surge.label }}</div>
+                  <div class="label-desc">前日量 > N日均量 × 倍數</div>
                 </div>
-                <div class="rule-conditions">
-                  <el-tag v-for="(cond, i) in rule.conditions" :key="i" size="small" effect="plain">
-                    {{ formatCondition(cond) }}
-                  </el-tag>
+                <el-switch v-model="formulas.signal_labels.config.volume_surge.enabled" size="small" />
+              </div>
+              <div v-if="formulas.signal_labels.config.volume_surge.enabled" class="label-params">
+                <div class="param-item">
+                  <span>均量天數</span>
+                  <el-input-number v-model="formulas.signal_labels.config.volume_surge.days" :min="1" :max="20" size="small" />
+                  <span class="unit">日</span>
+                </div>
+                <div class="param-item">
+                  <span>放量倍數</span>
+                  <el-input-number v-model="formulas.signal_labels.config.volume_surge.multiplier" :min="1.0" :max="5.0" :step="0.1" :precision="1" size="small" />
+                  <span class="unit">倍</span>
                 </div>
               </div>
-              <el-empty v-if="rules.length === 0" description="尚未設定篩選規則" />
             </div>
+
+            <!-- 外資買超 -->
+            <div class="stock-card">
+              <div class="label-header">
+                <div>
+                  <div class="label-title">{{ formulas.signal_labels.config.foreign_buy.label }}</div>
+                  <div class="label-desc">最近1日外資淨買超過閾值</div>
+                </div>
+                <el-switch v-model="formulas.signal_labels.config.foreign_buy.enabled" size="small" />
+              </div>
+              <div v-if="formulas.signal_labels.config.foreign_buy.enabled" class="label-params">
+                <div class="param-item">
+                  <span>最小淨買</span>
+                  <el-input-number v-model="formulas.signal_labels.config.foreign_buy.min_net" :min="-99999" :step="100" size="small" />
+                  <span class="unit">張</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 投信買超 -->
+            <div class="stock-card">
+              <div class="label-header">
+                <div>
+                  <div class="label-title">{{ formulas.signal_labels.config.trust_buy.label }}</div>
+                  <div class="label-desc">最近1日投信淨買超過閾值</div>
+                </div>
+                <el-switch v-model="formulas.signal_labels.config.trust_buy.enabled" size="small" />
+              </div>
+              <div v-if="formulas.signal_labels.config.trust_buy.enabled" class="label-params">
+                <div class="param-item">
+                  <span>最小淨買</span>
+                  <el-input-number v-model="formulas.signal_labels.config.trust_buy.min_net" :min="-99999" :step="100" size="small" />
+                  <span class="unit">張</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 突破前高 -->
+            <div class="stock-card">
+              <div class="label-header">
+                <div>
+                  <div class="label-title">{{ formulas.signal_labels.config.breakout_high.label }}</div>
+                  <div class="label-desc">前日收盤突破近N日最高價</div>
+                </div>
+                <el-switch v-model="formulas.signal_labels.config.breakout_high.enabled" size="small" />
+              </div>
+              <div v-if="formulas.signal_labels.config.breakout_high.enabled" class="label-params">
+                <div class="param-item">
+                  <span>回溯天數</span>
+                  <el-input-number v-model="formulas.signal_labels.config.breakout_high.days" :min="1" :max="20" size="small" />
+                  <span class="unit">日</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 融資減 -->
+            <div class="stock-card">
+              <div class="label-header">
+                <div>
+                  <div class="label-title">{{ formulas.signal_labels.config.margin_decrease.label }}</div>
+                  <div class="label-desc">最近1日融資增減低於閾值</div>
+                </div>
+                <el-switch v-model="formulas.signal_labels.config.margin_decrease.enabled" size="small" />
+              </div>
+              <div v-if="formulas.signal_labels.config.margin_decrease.enabled" class="label-params">
+                <div class="param-item">
+                  <span>最大增減</span>
+                  <el-input-number v-model="formulas.signal_labels.config.margin_decrease.max_change" :max="0" :step="100" size="small" />
+                  <span class="unit">張</span>
+                </div>
+              </div>
+            </div>
+
+            <el-button type="primary" size="small" @click="saveFormula('signal_labels')" :loading="formulaSaving === 'signal_labels'">
+              儲存標籤設定
+            </el-button>
           </div>
         </el-tab-pane>
 
@@ -185,42 +260,6 @@
 
       </el-tabs>
 
-      <!-- 新增規則 Dialog -->
-      <el-dialog v-model="showAdd" title="新增篩選規則" :width="'95%'" style="max-width: 500px;">
-        <el-form label-position="top">
-          <el-form-item label="規則名稱">
-            <el-input v-model="form.name" placeholder="例：量能突破" />
-          </el-form-item>
-          <div v-for="(cond, i) in form.conditions" :key="i" class="condition-row">
-            <el-select v-model="cond.field" size="small" placeholder="指標" style="width: 35%">
-              <el-option value="volume" label="成交量(張)" />
-              <el-option value="amplitude" label="振幅(%)" />
-              <el-option value="change_percent" label="漲跌幅(%)" />
-              <el-option value="foreign_net" label="外資淨買(張)" />
-              <el-option value="trust_net" label="投信淨買(張)" />
-              <el-option value="total_net" label="法人合計(張)" />
-              <el-option value="margin_change" label="融資增減(張)" />
-            </el-select>
-            <el-select v-model="cond.operator" size="small" style="width: 20%">
-              <el-option value=">" label=">" />
-              <el-option value=">=" label=">=" />
-              <el-option value="<" label="<" />
-              <el-option value="<=" label="<=" />
-            </el-select>
-            <el-input-number v-model="cond.value" size="small" style="width: 30%" />
-            <el-button size="small" text type="danger" @click="form.conditions.splice(i, 1)">
-              <el-icon><Delete /></el-icon>
-            </el-button>
-          </div>
-          <el-button size="small" @click="addCondition" style="margin-top: 8px">
-            <el-icon><Plus /></el-icon> 增加條件
-          </el-button>
-        </el-form>
-        <template #footer>
-          <el-button @click="showAdd = false">取消</el-button>
-          <el-button type="primary" @click="saveRule" :loading="saving">儲存</el-button>
-        </template>
-      </el-dialog>
     </template>
 
     <router-link to="/spec" class="spec-link">
@@ -234,24 +273,12 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import {
-  getScreeningRules, createScreeningRule, updateScreeningRule, deleteScreeningRule,
   getFormulaSettings, updateFormulaSetting,
   triggerDataSync,
 } from '../api'
-import { ElMessageBox, ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus'
 
 const activeTab = ref('formula')
-
-// 篩選規則
-const rules = ref([])
-const loading = ref(false)
-const showAdd = ref(false)
-const saving = ref(false)
-
-const form = ref({
-  name: '',
-  conditions: [{ field: 'volume', operator: '>', value: 1000 }],
-})
 
 // 公式設定
 const formulas = ref({})
@@ -265,17 +292,11 @@ const syncing = ref(false)
 const syncResults = ref([])
 
 onMounted(async () => {
-  loading.value = true
   formulaLoading.value = true
   try {
-    const [rulesRes, formulaRes] = await Promise.all([
-      getScreeningRules(),
-      getFormulaSettings(),
-    ])
-    rules.value = rulesRes.data
-    formulas.value = formulaRes.data
+    const { data } = await getFormulaSettings()
+    formulas.value = data
   } finally {
-    loading.value = false
     formulaLoading.value = false
   }
 })
@@ -312,46 +333,6 @@ async function runSync() {
   }
 }
 
-function addCondition() {
-  form.value.conditions.push({ field: 'volume', operator: '>', value: 0 })
-}
-
-async function saveRule() {
-  if (!form.value.name) {
-    ElMessage.warning('請輸入規則名稱')
-    return
-  }
-  saving.value = true
-  try {
-    const { data } = await createScreeningRule(form.value)
-    rules.value.push(data)
-    showAdd.value = false
-    form.value = { name: '', conditions: [{ field: 'volume', operator: '>', value: 1000 }] }
-    ElMessage.success('已新增')
-  } finally {
-    saving.value = false
-  }
-}
-
-async function toggleRule(rule) {
-  await updateScreeningRule(rule.id, { is_active: rule.is_active })
-}
-
-async function removeRule(rule) {
-  await ElMessageBox.confirm('確定刪除此規則？', '確認')
-  await deleteScreeningRule(rule.id)
-  rules.value = rules.value.filter(r => r.id !== rule.id)
-  ElMessage.success('已刪除')
-}
-
-function formatCondition(cond) {
-  const labels = {
-    volume: '成交量', amplitude: '振幅', change_percent: '漲跌幅',
-    foreign_net: '外資淨買', trust_net: '投信淨買',
-    total_net: '法人合計', margin_change: '融資增減',
-  }
-  return `${labels[cond.field] || cond.field} ${cond.operator} ${cond.value}`
-}
 </script>
 
 <style scoped>
@@ -413,36 +394,31 @@ function formatCondition(cond) {
   color: var(--el-text-color-secondary);
 }
 
-/* 自訂規則 */
-.rule-header {
+/* 訊號標籤 */
+.label-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: 8px;
 }
 
-.rule-name {
+.label-title {
   font-weight: 600;
   font-size: 15px;
 }
 
-.rule-actions {
+.label-desc {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 2px;
+}
+
+.label-params {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
-}
-
-.rule-conditions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.condition-row {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--el-border-color-lighter);
 }
 
 /* 資料同步 */
