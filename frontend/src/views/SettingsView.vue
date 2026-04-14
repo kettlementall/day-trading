@@ -6,64 +6,7 @@
     <template v-else>
       <el-tabs v-model="activeTab" stretch>
 
-        <!-- ==================== Tab 1: 策略分類 ==================== -->
-        <el-tab-pane label="策略分類" name="scoring">
-          <div v-if="formulas.strategy" class="tab-section">
-            <div class="stock-card">
-              <div class="formula-header">
-                <span class="formula-title">跌深反彈</span>
-                <el-switch v-model="formulas.strategy.config.bounce.enabled" size="small" />
-              </div>
-              <div v-if="formulas.strategy.config.bounce.enabled" class="formula-body">
-                <div class="param-row">
-                  <span>單日急跌門檻</span>
-                  <el-input-number v-model="formulas.strategy.config.bounce.washout_drop_pct" :min="-20" :max="0" :step="1" size="small" />
-                  <span class="unit">%</span>
-                </div>
-                <div class="param-row">
-                  <span>連兩日合計跌幅</span>
-                  <el-input-number v-model="formulas.strategy.config.bounce.two_day_drop_pct" :min="-30" :max="0" :step="1" size="small" />
-                  <span class="unit">%</span>
-                </div>
-                <div class="param-row">
-                  <span>洗盤回溯天數</span>
-                  <el-input-number v-model="formulas.strategy.config.bounce.washout_lookback_days" :min="1" :max="10" size="small" />
-                  <span class="unit">日</span>
-                </div>
-                <div class="param-row">
-                  <span>反彈確認幅度</span>
-                  <el-input-number v-model="formulas.strategy.config.bounce.bounce_from_low_pct" :min="0" :max="20" :step="0.5" :precision="1" size="small" />
-                  <span class="unit">%</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="stock-card">
-              <div class="formula-header">
-                <span class="formula-title">突破追多</span>
-                <el-switch v-model="formulas.strategy.config.breakout.enabled" size="small" />
-              </div>
-              <div v-if="formulas.strategy.config.breakout.enabled" class="formula-body">
-                <div class="param-row">
-                  <span>前高回溯天數</span>
-                  <el-input-number v-model="formulas.strategy.config.breakout.prev_high_days" :min="1" :max="20" size="small" />
-                  <span class="unit">日</span>
-                </div>
-                <div class="param-row">
-                  <span>接近前高比例</span>
-                  <el-input-number v-model="formulas.strategy.config.breakout.near_breakout_pct" :min="0.90" :max="1.00" :step="0.01" :precision="2" size="small" />
-                  <span class="unit">× 前高</span>
-                </div>
-              </div>
-            </div>
-
-            <el-button type="primary" size="small" @click="saveFormula('strategy')" :loading="formulaSaving === 'strategy'">
-              儲存策略設定
-            </el-button>
-          </div>
-        </el-tab-pane>
-
-        <!-- ==================== Tab 2: 價格公式 ==================== -->
+        <!-- ==================== Tab 1: 價格公式 ==================== -->
         <el-tab-pane label="價格公式" name="formula">
           <div class="tab-section">
             <!-- 建議買入價 -->
@@ -297,7 +240,7 @@ import {
 } from '../api'
 import { ElMessageBox, ElMessage } from 'element-plus'
 
-const activeTab = ref('scoring')
+const activeTab = ref('formula')
 
 // 篩選規則
 const rules = ref([])
@@ -418,25 +361,7 @@ function formatCondition(cond) {
   gap: 12px;
 }
 
-.section-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-  margin-bottom: 4px;
-}
-
-.tab-section .section-title:not(:first-child) {
-  margin-top: 16px;
-}
-
-/* 策略 & 公式卡片 */
-.formula-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
+/* 公式卡片 */
 .formula-title {
   font-weight: 600;
   font-size: 15px;
@@ -447,13 +372,6 @@ function formatCondition(cond) {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-.param-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
 }
 
 /* 價格公式 */
