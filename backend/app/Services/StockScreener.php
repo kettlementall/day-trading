@@ -418,6 +418,21 @@ class StockScreener
                 }
             }
 
+            // 24b. 動能延續：近 N 日漲幅達標且收盤仍站 MA5，長上影線或回檔後趨勢未破
+            $cfg = $sc('momentum_continuation');
+            if ($cfg['enabled'] ?? true) {
+                $lookback = $cfg['lookback_days'] ?? 20;
+                $minGain  = $cfg['min_gain_pct']  ?? 30;
+                $minK     = $cfg['min_k']          ?? 50;
+                $gainPct  = isset($closes[$lookback - 1]) && $closes[$lookback - 1] > 0
+                    ? ($closes[0] - $closes[$lookback - 1]) / $closes[$lookback - 1] * 100
+                    : 0;
+                if ($gainPct >= $minGain && $closes[0] > $ma5 && $kd['k'] >= $minK) {
+                    $score += $cfg['score'] ?? 15;
+                    $reasons[] = sprintf('動能延續(+%.0f%%)', $gainPct);
+                }
+            }
+
             // 套用自訂規則
             foreach ($rules as $rule) {
                 if ($this->matchRule($rule, $latest, $inst->first(), $margin->first())) {
