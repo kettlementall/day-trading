@@ -8,29 +8,29 @@
 
 排程定義於 `backend/routes/console.php`。
 
-| 時間  | 指令                        | 說明                           |
-|-------|-----------------------------|-------------------------------|
-| 06:00 | `stock:fetch-us-indices`    | 抓取美股指數 + 台指期夜盤（S&P 500、費半、道瓊、那斯達克、美元指數、台指期） |
-| 06:00 | `news:fetch`                | 抓取隔夜國際新聞               |
-| 06:15 | `news:compute-indices`      | 計算新聞指數（供選股用）        |
-| 08:00 | `stock:ai-screen`           | AI 選股（規則式寬篩 min_score=35, max=40 + AI 審核選出 10-15 檔 + 策略標籤） |
-| 08:45 | `stock:fetch-us-indices --tx-only` | 更新台指期日盤開盤價（日盤 08:45 開盤，確保候選頁顯示當日盤中即時價而非夜盤收盤價） |
-| 08:00 | `news:fetch`                | 開盤前新聞抓取                 |
-| 08:15 | `news:compute-indices`      | 計算新聞指數                   |
-| 09:05 | `stock:fetch-intraday`      | 盤中即時行情（5分K）           |
-| 09:30 | `stock:fetch-intraday`      | 盤中即時行情（30分鐘後狀態）   |
-| 09:00-13:30 | `stock:monitor-intraday` | 盤中即時監控（每分鐘觸發，內部依時段動態控頻） |
-| 12:00 | `news:fetch`                | 午間新聞抓取                   |
-| 12:15 | `news:compute-indices`      | 計算新聞指數                   |
-| 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情             |
-| 15:00 | `stock:update-results`      | 更新前日候選標的的盤後結果     |
-| 15:30 | `stock:daily-review`        | 自動產出前日 AI 檢討報告 + 萃取教訓（依賴 15:00 結果回填） |
-| 16:00 | `stock:fetch-institutional` | 抓取三大法人買賣超             |
-| 16:30 | `stock:fetch-margin`        | 抓取融資融券                   |
-| 18:00 | `news:fetch`                | 盤後新聞抓取                   |
-| 18:15 | `news:compute-indices`      | 計算新聞指數                   |
-| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 結果未回填重跑） |
-| 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除） |
+| 時間  | 指令                        | 說明                                                        |
+|-------|-----------------------------|-----------------------------------------------------------|
+| 06:00 | `stock:fetch-us-indices`    | 抓取美股指數 + 台指期夜盤（S&P 500、費半、道瓊、那斯達克、美元指數、台指期）               |
+| 06:00 | `news:fetch`                | 抓取隔夜國際新聞                                                  |
+| 06:15 | `news:compute-indices`      | 計算新聞指數（供選股用）                                              |
+| 08:00 | `stock:ai-screen`           | AI 選股（規則式寬篩 min_score=60, max=40 + AI 審核選出 10-15 檔 + 策略標籤） |
+| 08:45 | `stock:fetch-us-indices --tx-only` | 更新台指期日盤開盤價（日盤 08:45 開盤，確保候選頁顯示當日盤中即時價而非夜盤收盤價）             |
+| 08:00 | `news:fetch`                | 開盤前新聞抓取                                                   |
+| 08:15 | `news:compute-indices`      | 計算新聞指數                                                    |
+| 09:05 | `stock:fetch-intraday`      | 盤中即時行情（5分K）                                               |
+| 09:30 | `stock:fetch-intraday`      | 盤中即時行情（30分鐘後狀態）                                           |
+| 09:00-13:30 | `stock:monitor-intraday` | 盤中即時監控（每分鐘觸發，內部依時段動態控頻）                                   |
+| 12:00 | `news:fetch`                | 午間新聞抓取                                                    |
+| 12:15 | `news:compute-indices`      | 計算新聞指數                                                    |
+| 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情                                                 |
+| 15:00 | `stock:update-results`      | 更新前日候選標的的盤後結果                                             |
+| 15:30 | `stock:daily-review`        | 自動產出前日 AI 檢討報告 + 萃取教訓（依賴 15:00 結果回填）                      |
+| 16:00 | `stock:fetch-institutional` | 抓取三大法人買賣超                                                 |
+| 16:30 | `stock:fetch-margin`        | 抓取融資融券                                                    |
+| 18:00 | `news:fetch`                | 盤後新聞抓取                                                    |
+| 18:15 | `news:compute-indices`      | 計算新聞指數                                                    |
+| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 結果未回填重跑）                   |
+| 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
 
 > `stock:backtest --validated` 已停用自動排程（AI 覆蓋價格後，調整規則式公式參數意義不大）。指令保留可手動執行回測指標檢視。
 
@@ -290,11 +290,12 @@ php artisan stock:repair-quotes --from=2026-03-01 --to=2026-04-08
 
 ### 流程
 
-1. **規則式寬篩**（StockScreener, min_score=35, max=40）→ 產出較大候選池供 AI 選擇
-2. **AI 審核選股**（AiScreenerService）→ 綜合 K 線、籌碼、融資券、消息面、國際市場，選出 10-15 檔
-3. AI 為每檔標的給出：策略標籤（intraday_strategy）、參考支撐/壓力位、加減分（±30）、選股理由、價格理由
-4. **AI 價格覆蓋**：AI 可覆蓋規則式的 `suggested_buy`、`target_price`、`stop_loss`，並自動重算 `risk_reward_ratio`
-5. AI 須提供 `price_reasoning`（一句話解釋三個價格設定依據），存入 `ai_price_reasoning` 欄位
+1. **規則式寬篩**（StockScreener, min_score=60, max=40）→ 產出候選池
+2. **AI 逐支評估**（AiScreenerService）→ 每檔獨立一次 API call，AI 判斷選入/排除
+3. **Prompt caching**：市場背景（美股指數、新聞、教訓、任務說明）放入 system prompt 並快取，40 支共用同一份快取，只有個股資料計費
+4. AI 為每檔標的給出：選入與否、策略標籤（intraday_strategy）、參考支撐/壓力位、加減分（±30）、選股理由、價格理由
+5. **AI 價格覆蓋**：AI 可覆蓋規則式的 `suggested_buy`、`target_price`、`stop_loss`，並自動重算 `risk_reward_ratio`
+6. AI 須提供 `price_reasoning`（一句話解釋三個價格設定依據），存入 `ai_price_reasoning` 欄位
 
 ### AI 決策資訊
 

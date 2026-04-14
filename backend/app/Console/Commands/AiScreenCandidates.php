@@ -24,7 +24,7 @@ class AiScreenCandidates extends Command
         }
 
         // Step 1: 規則式寬篩（門檻 35，池子 20，負面因子已加強鑑別力）
-        $this->info("Step 1: 規則式寬篩（min_score=35, max=20），交易日: {$date}");
+        $this->info("Step 1: 規則式寬篩（min_score=60, max=40），交易日: {$date}");
         $screener->screen($date, minScoreOverride: 35, maxCandidatesOverride: 20);
 
         // 取出剛寫入的候選

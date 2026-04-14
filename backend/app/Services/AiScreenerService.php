@@ -26,7 +26,7 @@ class AiScreenerService
     }
 
     /**
-     * AI 審核選股：從寬篩候選池中選出最終名單
+     * AI 審核選股：逐支評估候選標的，共用快取的市場背景
      *
      * @param  string      $tradeDate
      * @param  Collection  $candidates  已載入 stock 關聯的候選集合
@@ -43,45 +43,27 @@ class AiScreenerService
             return $this->fallbackScreen($candidates);
         }
 
-        $prompt = $this->buildPrompt($tradeDate, $candidates);
+        // 市場背景 system prompt — Anthropic 快取，所有股票共用
+        $systemPrompt = $this->buildSystemPrompt($tradeDate);
 
-        try {
-            $response = Http::timeout(120)
-                ->withHeaders([
-                    'x-api-key' => $this->apiKey,
-                    'anthropic-version' => '2023-06-01',
-                    'content-type' => 'application/json',
-                ])
-                ->post('https://api.anthropic.com/v1/messages', [
-                    'model' => $this->model,
-                    'max_tokens' => 8192,
-                    'messages' => [
-                        ['role' => 'user', 'content' => $prompt],
-                    ],
+        foreach ($candidates as $candidate) {
+            $symbol = $candidate->stock->symbol;
+            try {
+                $userMessage = $this->buildStockMessage($tradeDate, $candidate);
+                $result = $this->callApi($systemPrompt, $userMessage);
+                $this->applyResult($candidate, $result);
+                Log::info("AiScreenerService {$symbol}: " . ($result['selected'] ? '選入' : '排除'));
+            } catch (\Exception $e) {
+                Log::error("AiScreenerService {$symbol}: " . $e->getMessage());
+                $candidate->update([
+                    'ai_selected'  => false,
+                    'ai_reasoning' => 'AI 評估失敗',
                 ]);
-
-            if (!$response->successful()) {
-                Log::error('AiScreenerService API error: ' . $response->body());
-                return $this->fallbackScreen($candidates);
             }
-
-            $text = $response->json('content.0.text', '');
-            $aiResult = $this->parseResponse($text);
-
-            if (empty($aiResult)) {
-                Log::error('AiScreenerService: 無法解析 AI 回應', [
-                    'response_length' => mb_strlen($text),
-                    'response_preview' => mb_substr($text, 0, 500),
-                    'stop_reason' => $response->json('stop_reason'),
-                ]);
-                return $this->fallbackScreen($candidates);
-            }
-
-            return $this->applyAiResult($candidates, $aiResult);
-        } catch (\Exception $e) {
-            Log::error('AiScreenerService: ' . $e->getMessage());
-            return $this->fallbackScreen($candidates);
+            usleep(150_000); // 150ms，避免觸發 rate limit
         }
+
+        return $candidates->fresh();
     }
 
     /**
@@ -95,186 +77,62 @@ class AiScreenerService
         foreach ($sorted as $i => $candidate) {
             $selected = $i < $selectedCount;
             $candidate->update([
-                'ai_selected' => $selected,
-                'ai_score_adjustment' => 0,
-                'ai_reasoning' => $selected
+                'ai_selected'        => $selected,
+                'ai_score_adjustment'=> 0,
+                'ai_reasoning'       => $selected
                     ? '規則式 fallback（AI 不可用），依分數排名選入'
                     : '規則式 fallback（AI 不可用），分數排名未入選',
-                'intraday_strategy' => $selected ? $this->defaultStrategy($candidate) : null,
-                'reference_support' => $selected ? $candidate->stop_loss : null,
+                'intraday_strategy'  => $selected ? $this->defaultStrategy($candidate) : null,
+                'reference_support'  => $selected ? $candidate->stop_loss : null,
                 'reference_resistance' => $selected ? $candidate->target_price : null,
-                'ai_warnings' => null,
+                'ai_warnings'        => null,
             ]);
         }
 
         return $candidates->fresh();
     }
 
-    private function buildPrompt(string $tradeDate, Collection $candidates): string
+    // -------------------------------------------------------------------------
+    // 快取 system prompt：市場背景 + 任務說明（所有股票共用）
+    // -------------------------------------------------------------------------
+
+    private function buildSystemPrompt(string $tradeDate): string
     {
-        // 建立濃縮摘要：每檔一行，包含 K 線/籌碼/融資券預計算結果
-        $header = "代號\t名稱\t產業\t分數\t策略\t買入\t目標\t停損\tRR\t收盤\t5日漲%\t均振幅%\t量能趨勢\t連漲跌\t外資5日累計\t投信5日\t自營5日\t法人連買天\t融資5日增減\t融券5日增減\t評分理由";
-        $rows = [];
-
-        foreach ($candidates as $c) {
-            $stock = $c->stock;
-            $reasons = is_array($c->reasons) ? implode('；', $c->reasons) : ($c->reasons ?? '');
-
-            // K 線摘要
-            $quotes = DailyQuote::where('stock_id', $c->stock_id)
-                ->where('date', '<=', $tradeDate)
-                ->orderByDesc('date')
-                ->limit(5)
-                ->get();
-
-            $close = $quotes->isNotEmpty() ? (float) $quotes->first()->close : 0;
-            $change5d = 0;
-            if ($quotes->count() >= 5) {
-                $oldest = (float) $quotes->last()->open;
-                $change5d = $oldest > 0 ? round(($close - $oldest) / $oldest * 100, 1) : 0;
-            }
-            $avgAmp = $quotes->avg('amplitude') ? round($quotes->avg('amplitude'), 1) : 0;
-
-            // 量能趨勢
-            $vols = $quotes->pluck('volume')->toArray();
-            $volTrend = '持平';
-            if (count($vols) >= 3) {
-                $recent = array_sum(array_slice($vols, 0, 2)) / 2;
-                $older = array_sum(array_slice($vols, 2)) / max(1, count($vols) - 2);
-                if ($older > 0) {
-                    $ratio = $recent / $older;
-                    if ($ratio > 1.5) $volTrend = '放大';
-                    elseif ($ratio < 0.7) $volTrend = '萎縮';
-                }
-            }
-
-            // 連漲連跌
-            $changes = $quotes->pluck('change_percent')->map(fn($v) => (float) $v)->toArray();
-            $streak = 0;
-            $streakDir = '';
-            foreach ($changes as $chg) {
-                if ($streak === 0) {
-                    $streakDir = $chg >= 0 ? '漲' : '跌';
-                    $streak = 1;
-                } elseif (($chg >= 0 && $streakDir === '漲') || ($chg < 0 && $streakDir === '跌')) {
-                    $streak++;
-                } else {
-                    break;
-                }
-            }
-            $streakStr = "連{$streak}{$streakDir}";
-
-            // 法人累計
-            $instTrades = InstitutionalTrade::where('stock_id', $c->stock_id)
-                ->where('date', '<=', $tradeDate)
-                ->orderByDesc('date')
-                ->limit(5)
-                ->get();
-
-            $foreignSum = $instTrades->sum('foreign_net');
-            $trustSum = $instTrades->sum('trust_net');
-            $dealerSum = $instTrades->sum('dealer_net');
-
-            $consecutiveBuy = 0;
-            foreach ($instTrades as $t) {
-                if ($t->total_net > 0) $consecutiveBuy++;
-                else break;
-            }
-
-            // 融資融券累計
-            $margins = MarginTrade::where('stock_id', $c->stock_id)
-                ->where('date', '<=', $tradeDate)
-                ->orderByDesc('date')
-                ->limit(5)
-                ->get();
-
-            $marginChange = $margins->sum('margin_change');
-            $shortChange = $margins->sum('short_change');
-
-            // 格式化法人數字（萬張）
-            $fmtLots = fn($v) => $v >= 0
-                ? '+' . round($v / 10000, 1) . '萬'
-                : round($v / 10000, 1) . '萬';
-
-            $rows[] = implode("\t", [
-                $stock->symbol,
-                $stock->name,
-                $stock->industry ?? '',
-                $c->score,
-                $c->strategy_type ?? '',
-                $c->suggested_buy,
-                $c->target_price,
-                $c->stop_loss,
-                $c->risk_reward_ratio,
-                $close,
-                ($change5d >= 0 ? '+' : '') . $change5d . '%',
-                $avgAmp . '%',
-                $volTrend,
-                $streakStr,
-                $fmtLots($foreignSum),
-                $fmtLots($trustSum),
-                $fmtLots($dealerSum),
-                $consecutiveBuy > 0 ? "連{$consecutiveBuy}買" : '無',
-                $fmtLots($marginChange),
-                $fmtLots($shortChange),
-                mb_substr($reasons, 0, 80),
-            ]);
-        }
-
-        $candidatesTsv = $header . "\n" . implode("\n", $rows);
-        $totalCount = $candidates->count();
+        $usMarketSection  = UsMarketIndex::getSummary($tradeDate);
+        $lessonsSection   = AiLesson::getScreeningLessons();
 
         // 新聞標題（近 2 日）
-        $newsLines = [];
         $news = NewsArticle::where('fetched_date', '>=', now()->subDays(2)->toDateString())
             ->whereNotNull('industry')
             ->orderByDesc('published_at')
             ->limit(30)
             ->get();
+        $newsLines = $news->map(fn($n) => "- [{$n->industry}] {$n->title}")->implode("\n");
+        $newsSection = $newsLines ?: '（無近期新聞）';
 
-        foreach ($news as $n) {
-            $newsLines[] = "- [{$n->industry}] {$n->title}";
-        }
-
-        // 產業消息面指數
-        $newsIndexLines = [];
+        // 消息面指數
         $latestNewsDate = NewsIndex::where('scope', 'overall')
             ->where('date', '<=', $tradeDate)
             ->orderByDesc('date')
             ->value('date');
 
+        $newsIndexLines = [];
         if ($latestNewsDate) {
             $overall = NewsIndex::where('scope', 'overall')->where('date', $latestNewsDate)->first();
             if ($overall) {
                 $newsIndexLines[] = "整體情緒: {$overall->sentiment} | 熱度: {$overall->heatmap} | 恐慌: {$overall->panic} | 國際: {$overall->international} (文章數: {$overall->article_count})";
             }
-
-            $industries = NewsIndex::where('scope', 'industry')
-                ->where('date', $latestNewsDate)
-                ->orderByDesc('sentiment')
-                ->get();
-
-            foreach ($industries as $idx) {
-                $newsIndexLines[] = "{$idx->scope_value}: 情緒 {$idx->sentiment} | 熱度 {$idx->heatmap} (文章數: {$idx->article_count})";
-            }
+            NewsIndex::where('scope', 'industry')->where('date', $latestNewsDate)
+                ->orderByDesc('sentiment')->get()
+                ->each(fn($idx) => $newsIndexLines[] = "{$idx->scope_value}: 情緒 {$idx->sentiment} | 熱度 {$idx->heatmap} (文章數: {$idx->article_count})");
         }
+        $newsIndexSection = $newsIndexLines ? implode("\n", $newsIndexLines) : '（無消息面指數）';
 
-        $newsSection = !empty($newsLines) ? implode("\n", $newsLines) : '（無近期新聞）';
-        $newsIndexSection = !empty($newsIndexLines) ? implode("\n", $newsIndexLines) : '（無消息面指數）';
-
-        // 注入近期教訓
-        $lessonsSection = AiLesson::getScreeningLessons();
-
-        // 注入美股指數
-        $usMarketSection = UsMarketIndex::getSummary($tradeDate);
-
-        return <<<PROMPT
-你是台股當沖選股 AI 助手。現在是 {$tradeDate} 盤前（08:00），以下是經規則式寬篩產出的 {$totalCount} 檔候選標的（每檔一行濃縮摘要）。
+        return <<<SYSTEM
+你是台股當沖選股 AI 助手。現在是 {$tradeDate} 盤前（08:00）。
+我將逐一提交每檔候選標的，請針對每支獨立判斷是否適合今日當沖操作。
 
 {$usMarketSection}
-
-## 候選標的（含 K 線/籌碼/融資券摘要）
-{$candidatesTsv}
 
 ## 近期新聞
 {$newsSection}
@@ -284,64 +142,164 @@ class AiScreenerService
 
 {$lessonsSection}
 
-## 任務
-綜合以上所有資訊（K 線型態、籌碼面、融資券、消息面、國際市場），從候選池中選出最適合今日當沖的 10-15 檔標的。你可以：
-1. **選入規則分數高的好標的**（確認型態與量能配合）
-2. **選入規則分數偏低但型態好的標的**（例如杯柄突破、縮量回測不破前高）
-3. **排除規則分數高但有風險的標的**（例如連漲量縮、同類股過多只留最強）
-4. **控制同產業標的數量**，同產業最多 2-3 檔
-5. **參考籌碼面**：外資/投信連續買超的標的可加分，三大法人同步賣超的應警戒
-6. **參考融資券**：融資大增+股價未漲=散戶追高風險；融券大增+股價強=軋空機會
-7. **參考消息面**：利多產業的標的可優先，恐慌指數高時整體應保守、減少選入數量
-8. **參考國際市場**：台指期夜盤方向是最重要參考，費半走勢影響半導體/AI 類股
-
-每檔標的請給出：
-- `intraday_strategy`：盤中策略標籤，選項：breakout_fresh（首次突破）、breakout_retest（突破回測）、gap_pullback（跳空拉回）、bounce（跌深反彈）、momentum（量能動能）
-- `suggested_buy`：建議買入價（根據 K 線型態、支撐壓力位、策略特性給出合理的進場價）
-- `target_price`：目標獲利價（根據壓力位、近期振幅、型態空間合理設定）
-- `stop_loss`：停損價（根據支撐位、ATR、型態破壞點設定）
-- `price_reasoning`：一句話解釋三個價格的設定依據（例如：「買入設前高29.0回測位，目標為4/8高點30.5，停損設MA10下方28.5」）
-- `reference_support`：參考支撐位
-- `reference_resistance`：參考壓力位
-- `score_adjustment`：加減分（-30 ~ +30）
-- `reasoning`：選入/排除的一句話理由
-- `warnings`：注意事項（可為 null）
-
-價格設定原則：
-- 買入價應設在合理回測位置（突破型可設前高附近，反彈型設支撐附近）
-- 目標價不宜超過收盤價 +10%，停損不宜超過收盤價 -2.5%
-- 風報比（目標-買入）/（買入-停損）應 >= 1.5
+## 評估原則
+1. 確認 K 線型態與量能是否配合策略（突破型需量能放大，反彈型需跌深量縮）
+2. 籌碼面：外資/投信連續買超加分，三大法人同步賣超警戒
+3. 融資券：融資大增+股價未漲=散戶追高風險；融券大增+股價強=軋空機會
+4. 消息面：利多產業優先；恐慌指數高時標準從嚴
+5. 國際市場：台指期夜盤方向最重要；費半影響半導體/AI 類股
 
 ## 回覆格式
 請直接回覆 JSON（不要加 markdown 標記），格式：
 {
-  "selected": [
-    {
-      "symbol": "2460",
-      "score_adjustment": 8,
-      "reasoning": "突破後縮量回測不破前高，型態教科書級",
-      "intraday_strategy": "breakout_retest",
-      "suggested_buy": 29.5,
-      "target_price": 30.5,
-      "stop_loss": 29.0,
-      "price_reasoning": "買入設前高29.5回測位，目標為4/8高點30.5，停損設MA10下方29.0",
-      "reference_support": 29.0,
-      "reference_resistance": 30.5,
-      "warnings": ["上方 30.5 為 60 日高點壓力"]
-    }
-  ],
-  "rejected": [
-    {
-      "symbol": "2888",
-      "reasoning": "雖然技術面過關但量能連 3 天萎縮"
-    }
-  ],
-  "market_notes": "半導體類股今日過熱，同類只留最強 2 檔"
+  "selected": true,
+  "score_adjustment": 5,
+  "reasoning": "一句話選入/排除理由",
+  "intraday_strategy": "breakout_fresh|breakout_retest|gap_pullback|bounce|momentum",
+  "suggested_buy": 29.5,
+  "target_price": 30.5,
+  "stop_loss": 29.0,
+  "price_reasoning": "買入設前高29.5回測位，目標為4/8高點30.5，停損設MA10下方29.0",
+  "reference_support": 29.0,
+  "reference_resistance": 30.5,
+  "warnings": ["注意事項，可為 null"]
 }
-PROMPT;
+
+若不選入，`intraday_strategy`、`suggested_buy`、`target_price`、`stop_loss`、`price_reasoning`、`reference_support`、`reference_resistance`、`warnings` 均可為 null。
+
+價格設定原則：
+- 買入價應設在合理回測位置（突破型設前高附近，反彈型設支撐附近）
+- 目標價不超過收盤價 +10%，停損不超過收盤價 -2.5%
+- 風報比（目標-買入）/（買入-停損）應 >= 1.5
+SYSTEM;
     }
 
-    private function parseResponse(string $text): ?array
+    // -------------------------------------------------------------------------
+    // 個股 user message：K 線 / 籌碼 / 評分理由
+    // -------------------------------------------------------------------------
+
+    private function buildStockMessage(string $tradeDate, Candidate $candidate): string
+    {
+        $stock   = $candidate->stock;
+        $reasons = is_array($candidate->reasons)
+            ? implode('；', $candidate->reasons)
+            : ($candidate->reasons ?? '');
+
+        // 近 10 日 K 線
+        $quotes = DailyQuote::where('stock_id', $candidate->stock_id)
+            ->where('date', '<=', $tradeDate)
+            ->orderByDesc('date')
+            ->limit(10)
+            ->get();
+
+        $klineLines = ['日期  開  高  低  收  量(張)  漲%  振幅%'];
+        foreach ($quotes as $q) {
+            $klineLines[] = implode('  ', [
+                \Carbon\Carbon::parse($q->date)->format('m/d'),
+                (float) $q->open,
+                (float) $q->high,
+                (float) $q->low,
+                (float) $q->close,
+                round($q->volume / 1000),
+                (float) $q->change_percent . '%',
+                (float) $q->amplitude . '%',
+            ]);
+        }
+        $klineTsv = implode("\n", $klineLines);
+
+        // 法人近 5 日
+        $instTrades = InstitutionalTrade::where('stock_id', $candidate->stock_id)
+            ->where('date', '<=', $tradeDate)
+            ->orderByDesc('date')
+            ->limit(5)
+            ->get();
+
+        $fmtLots = fn($v) => ($v >= 0 ? '+' : '') . round($v / 1000) . '張';
+        $instLines = $instTrades->map(fn($t) =>
+            \Carbon\Carbon::parse($t->date)->format('m/d') . '  ' .
+            '外資' . $fmtLots($t->foreign_net) . '  ' .
+            '投信' . $fmtLots($t->trust_net) . '  ' .
+            '自營' . $fmtLots($t->dealer_net)
+        )->implode("\n");
+        $instSection = $instLines ?: '（無法人資料）';
+
+        // 融資融券近 5 日
+        $margins = MarginTrade::where('stock_id', $candidate->stock_id)
+            ->where('date', '<=', $tradeDate)
+            ->orderByDesc('date')
+            ->limit(5)
+            ->get();
+
+        $marginLines = $margins->map(fn($m) =>
+            \Carbon\Carbon::parse($m->date)->format('m/d') . '  ' .
+            '融資' . $fmtLots($m->margin_change) . '  ' .
+            '融券' . $fmtLots($m->short_change)
+        )->implode("\n");
+        $marginSection = $marginLines ?: '（無融資券資料）';
+
+        return <<<MSG
+## 待評估標的：{$stock->symbol} {$stock->name}（{$stock->industry}）
+
+規則式分數：{$candidate->score}　策略分類：{$candidate->strategy_type}
+建議買入：{$candidate->suggested_buy}　目標：{$candidate->target_price}　停損：{$candidate->stop_loss}　RR：{$candidate->risk_reward_ratio}
+評分理由：{$reasons}
+
+### 近 10 日 K 線
+{$klineTsv}
+
+### 近 5 日法人籌碼
+{$instSection}
+
+### 近 5 日融資融券
+{$marginSection}
+
+請依上述資料及市場背景，回覆此標的的 JSON 評估結果。
+MSG;
+    }
+
+    // -------------------------------------------------------------------------
+    // API call（含 prompt caching）
+    // -------------------------------------------------------------------------
+
+    private function callApi(string $systemPrompt, string $userMessage): array
+    {
+        $response = Http::timeout(60)
+            ->withHeaders([
+                'x-api-key'         => $this->apiKey,
+                'anthropic-version' => '2023-06-01',
+                'anthropic-beta'    => 'prompt-caching-2024-07-31',
+                'content-type'      => 'application/json',
+            ])
+            ->post('https://api.anthropic.com/v1/messages', [
+                'model'      => $this->model,
+                'max_tokens' => 512,
+                'system'     => [
+                    [
+                        'type'          => 'text',
+                        'text'          => $systemPrompt,
+                        'cache_control' => ['type' => 'ephemeral'],
+                    ],
+                ],
+                'messages' => [
+                    ['role' => 'user', 'content' => $userMessage],
+                ],
+            ]);
+
+        if (!$response->successful()) {
+            throw new \RuntimeException('API ' . $response->status() . ': ' . $response->body());
+        }
+
+        $text = $response->json('content.0.text', '');
+        $result = $this->parseSingleResponse($text);
+
+        if ($result === null) {
+            throw new \RuntimeException('無法解析 AI 回應：' . mb_substr($text, 0, 200));
+        }
+
+        return $result;
+    }
+
+    private function parseSingleResponse(string $text): ?array
     {
         $text = trim($text);
         $text = preg_replace('/^```json?\s*/i', '', $text);
@@ -349,77 +307,47 @@ PROMPT;
 
         $data = json_decode($text, true);
 
-        if (!is_array($data) || !isset($data['selected'])) {
+        if (!is_array($data) || !array_key_exists('selected', $data)) {
             return null;
         }
 
         return $data;
     }
 
-    /**
-     * 將 AI 結果寫入候選標的
-     */
-    private function applyAiResult(Collection $candidates, array $aiResult): Collection
+    // -------------------------------------------------------------------------
+    // 將單支評估結果寫入 DB
+    // -------------------------------------------------------------------------
+
+    private function applyResult(Candidate $candidate, array $result): void
     {
-        // 建立 symbol → AI 結果 mapping
-        $selectedMap = collect($aiResult['selected'] ?? [])->keyBy('symbol');
-        $rejectedMap = collect($aiResult['rejected'] ?? [])->keyBy('symbol');
+        $selected = (bool) ($result['selected'] ?? false);
 
-        foreach ($candidates as $candidate) {
-            $symbol = $candidate->stock->symbol;
+        $updates = [
+            'ai_selected'         => $selected,
+            'ai_score_adjustment' => $result['score_adjustment'] ?? 0,
+            'ai_reasoning'        => $result['reasoning'] ?? '',
+            'intraday_strategy'   => $selected ? ($result['intraday_strategy'] ?? $this->defaultStrategy($candidate)) : null,
+            'reference_support'   => $selected ? ($result['reference_support'] ?? $candidate->stop_loss) : null,
+            'reference_resistance'=> $selected ? ($result['reference_resistance'] ?? $candidate->target_price) : null,
+            'ai_warnings'         => $result['warnings'] ?? null,
+            'ai_price_reasoning'  => $selected ? ($result['price_reasoning'] ?? null) : null,
+        ];
 
-            if ($selectedMap->has($symbol)) {
-                $ai = $selectedMap->get($symbol);
+        if ($selected) {
+            if (!empty($result['suggested_buy']))  $updates['suggested_buy']  = $result['suggested_buy'];
+            if (!empty($result['target_price']))   $updates['target_price']   = $result['target_price'];
+            if (!empty($result['stop_loss']))      $updates['stop_loss']      = $result['stop_loss'];
 
-                // AI 給的價格覆蓋規則式價格
-                $updates = [
-                    'ai_selected' => true,
-                    'ai_score_adjustment' => $ai['score_adjustment'] ?? 0,
-                    'ai_reasoning' => $ai['reasoning'] ?? '',
-                    'intraday_strategy' => $ai['intraday_strategy'] ?? $this->defaultStrategy($candidate),
-                    'reference_support' => $ai['reference_support'] ?? $candidate->stop_loss,
-                    'reference_resistance' => $ai['reference_resistance'] ?? $candidate->target_price,
-                    'ai_warnings' => $ai['warnings'] ?? null,
-                    'ai_price_reasoning' => $ai['price_reasoning'] ?? null,
-                ];
-
-                if (!empty($ai['suggested_buy'])) {
-                    $updates['suggested_buy'] = $ai['suggested_buy'];
-                }
-                if (!empty($ai['target_price'])) {
-                    $updates['target_price'] = $ai['target_price'];
-                }
-                if (!empty($ai['stop_loss'])) {
-                    $updates['stop_loss'] = $ai['stop_loss'];
-                }
-
-                // 重算風報比
-                if (isset($updates['suggested_buy'], $updates['target_price'], $updates['stop_loss'])) {
-                    $buy = (float) $updates['suggested_buy'];
-                    $stop = (float) $updates['stop_loss'];
-                    if ($buy > $stop && $stop > 0) {
-                        $updates['risk_reward_ratio'] = round(
-                            ((float) $updates['target_price'] - $buy) / ($buy - $stop), 2
-                        );
-                    }
-                }
-
-                $candidate->update($updates);
-            } else {
-                $rejected = $rejectedMap->get($symbol);
-                $candidate->update([
-                    'ai_selected' => false,
-                    'ai_score_adjustment' => 0,
-                    'ai_reasoning' => $rejected['reasoning'] ?? 'AI 未選入',
-                    'intraday_strategy' => null,
-                    'reference_support' => null,
-                    'reference_resistance' => null,
-                    'ai_warnings' => null,
-                ]);
+            // 重算風報比
+            $buy  = (float) ($updates['suggested_buy']  ?? $candidate->suggested_buy);
+            $tgt  = (float) ($updates['target_price']   ?? $candidate->target_price);
+            $stop = (float) ($updates['stop_loss']      ?? $candidate->stop_loss);
+            if ($buy > $stop && $stop > 0) {
+                $updates['risk_reward_ratio'] = round(($tgt - $buy) / ($buy - $stop), 2);
             }
         }
 
-        return $candidates->fresh();
+        $candidate->update($updates);
     }
 
     /**
@@ -428,9 +356,9 @@ PROMPT;
     private function defaultStrategy(Candidate $candidate): string
     {
         return match ($candidate->strategy_type) {
-            'bounce' => 'bounce',
+            'bounce'   => 'bounce',
             'breakout' => 'breakout_fresh',
-            default => 'momentum',
+            default    => 'momentum',
         };
     }
 }
