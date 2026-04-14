@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getCandidates, getCandidateDates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getMonitorStatus } from '../api'
+import { getCandidates, getCandidateDates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getMonitorStatus, getAnalyzeTipUrl } from '../api'
 import dayjs from 'dayjs'
 
 export const useCandidateStore = defineStore('candidates', () => {
@@ -112,6 +112,12 @@ export const useCandidateStore = defineStore('candidates', () => {
   const reviewStreamText = ref('')
   const reviewDates = ref([])
 
+  // 明牌分析
+  const tipAnalyzing = ref(false)
+  const tipLogs = ref([])
+  const tipStreamText = ref('')
+  const tipResult = ref(null)
+
   async function fetchReviewDates() {
     const { data } = await getDailyReviewDates()
     reviewDates.value = data
@@ -179,14 +185,59 @@ export const useCandidateStore = defineStore('candidates', () => {
     })
   }
 
+  function analyzeTip(date, symbol, notes) {
+    tipAnalyzing.value = true
+    tipLogs.value = []
+    tipResult.value = null
+    tipStreamText.value = ''
+
+    return new Promise((resolve, reject) => {
+      const url = getAnalyzeTipUrl(date, symbol, notes)
+      const eventSource = new EventSource(url)
+
+      eventSource.addEventListener('log', (e) => {
+        const { message } = JSON.parse(e.data)
+        tipLogs.value.push(message)
+      })
+
+      eventSource.addEventListener('chunk', (e) => {
+        const { text } = JSON.parse(e.data)
+        tipStreamText.value += text
+      })
+
+      eventSource.addEventListener('done', (e) => {
+        tipResult.value = JSON.parse(e.data)
+        tipStreamText.value = ''
+        tipAnalyzing.value = false
+        eventSource.close()
+        resolve(tipResult.value)
+      })
+
+      eventSource.onerror = () => {
+        if (tipStreamText.value) {
+          tipResult.value = { date, symbol, report: tipStreamText.value }
+          tipStreamText.value = ''
+        }
+        tipAnalyzing.value = false
+        eventSource.close()
+        if (!tipResult.value) {
+          reject(new Error('SSE connection failed'))
+        } else {
+          resolve(tipResult.value)
+        }
+      }
+    })
+  }
+
   return {
     candidates, currentDate, dates, stats, loading,
     morningFilter, filteredCandidates, morningSummary, lastUpdatedAt,
     isHoliday, holidayName, usIndices,
     monitors, monitorLoading, activeMonitors, completedMonitors,
     reviewing, reviewLogs, reviewResult, reviewStreamText, reviewDates,
+    tipAnalyzing, tipLogs, tipStreamText, tipResult,
     fetchCandidates, fetchDates, fetchStats,
     fetchMonitors, startMonitorPolling, stopMonitorPolling,
-    fetchReviewDates, fetchDailyReview, dailyReview,
+    fetchReviewDates, fetchDailyReview, dailyReview, analyzeTip,
   }
 })

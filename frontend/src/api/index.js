@@ -89,6 +89,12 @@ export const getDailyReviewShow = (date) =>
 export const getDailyReviewDates = () =>
   api.get('/backtest/daily-review-dates')
 
+export const getAnalyzeTipUrl = (date, symbol, notes) => {
+  const base = api.defaults.baseURL || '/api'
+  const params = new URLSearchParams({ date, symbol, notes: notes || '' })
+  return `${base}/backtest/analyze-tip?${params}`
+}
+
 // 系統規格
 export const getSpec = () =>
   api.get('/spec')

@@ -48,6 +48,7 @@ Route::post('/backtest/rounds/{round}/apply', [BacktestController::class, 'apply
 Route::get('/backtest/daily-review', [BacktestController::class, 'dailyReview']);
 Route::get('/backtest/daily-review-show', [BacktestController::class, 'dailyReviewShow']);
 Route::get('/backtest/daily-review-dates', [BacktestController::class, 'dailyReviewDates']);
+Route::get('/backtest/analyze-tip', [BacktestController::class, 'analyzeTip']);
 
 // 系統規格
 Route::get('/spec', function () {

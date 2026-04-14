@@ -14,6 +14,7 @@
 | 06:00 | `news:fetch`                | 抓取隔夜國際新聞               |
 | 06:15 | `news:compute-indices`      | 計算新聞指數（供選股用）        |
 | 08:00 | `stock:ai-screen`           | AI 選股（規則式寬篩 min_score=35, max=40 + AI 審核選出 10-15 檔 + 策略標籤） |
+| 08:45 | `stock:fetch-us-indices --tx-only` | 更新台指期日盤開盤價（日盤 08:45 開盤，確保候選頁顯示當日盤中即時價而非夜盤收盤價） |
 | 08:00 | `news:fetch`                | 開盤前新聞抓取                 |
 | 08:15 | `news:compute-indices`      | 計算新聞指數                   |
 | 09:05 | `stock:fetch-intraday`      | 盤中即時行情（5分K）           |
@@ -774,12 +775,39 @@ php artisan stock:backtest --validated --max-attempts=5
 | `market` | 大盤/產業面教訓 | 全部 |
 
 **注入規則：**
-- 選股 prompt：注入 `screening` + `market` + `entry`，最多 20 條
+- 選股 prompt：注入 `screening` + `market` + `entry`，最多 20 條，`priority DESC → trade_date DESC` 排序
 - 校準/滾動 prompt：注入 `calibration` + `entry` + `exit` + `market`，最多 15/10 條
-- 教訓預設 14 天過期，避免過時資訊干擾判斷
-- 同一交易日不重複萃取
+- 每日自動萃取的教訓預設 **14 天**過期；手動明牌分析的教訓預設 **60 天**過期
+- Prompt 中明牌教訓以 `★明牌` 標記取代 type，視覺上更顯眼
+- 同一交易日不重複萃取（自動萃取）
+
+**教訓優先度欄位：**
+
+| `source` | `priority` | 來源 | 說明 |
+|---------|-----------|------|------|
+| `null` | 0 | 每日 AI 自動萃取 | 一般優先度，14 天過期 |
+| `'tip'` | 1 | 使用者手動明牌分析 | 高優先度，60 天過期，排序優先注入 |
 
 **category 分類：** breakout, bounce, gap, momentum, sector, volume, price_setting, timing
+
+### 5.7 明牌分析（手動輸入）
+
+定義於 `DailyReviewService::analyzeTip()`，透過前端 StatsView 手動觸發。
+
+**用途：** 使用者當天跟著外部大神的明牌操作並有獲利，輸入股票代號後，AI 從數值找最可能的技術面理由，自動萃取成高優先教訓供未來 AI 選股/校準參考。
+
+**輸入欄位：**
+- `symbol`：股票代號（必填）
+- `date`：交易日（預設今日）
+- `notes`：使用者備註（選填，例如「跟某大神說早盤突破可追」）
+
+**分析流程：**
+1. 查詢股票近 15 日 K 線（`daily_quotes`）+ 當日盤中快照（`intraday_quotes`，若有）
+2. 請 Claude Opus 從量能、振幅、K 線形態分析進場時機
+3. 從 AI 回應中提取單條 JSON 教訓（`{type, category, content}`）
+4. 存入 `ai_lessons`，`source='tip'`、`priority=1`、有效期 60 天
+
+**實作：** SSE 串流，前端透過 EventSource 接收 `log`、`chunk`、`done` 事件；完成後顯示「教訓已儲存 ★」或「未提取到教訓」徽章。
 
 ---
 
@@ -800,7 +828,7 @@ php artisan stock:backtest --validated --max-attempts=5
 | `screening_rules`     | 自訂篩選規則       | `conditions` (JSON), `is_active`, `sort_order`        |
 | `formula_settings`    | 公式參數設定       | `type`, `config` (JSON)                               |
 | `news_articles`       | 新聞文章           | `source`, `title`, `url`, `industry`, `sentiment_score`, `sentiment_label`, `ai_analysis`, `fetched_date`, `published_at` |
-| `ai_lessons`          | AI 教訓回饋       | `trade_date`, `type`(screening/calibration/entry/exit/market), `category`, `content`, `expires_at` |
+| `ai_lessons`          | AI 教訓回饋       | `trade_date`, `type`(screening/calibration/entry/exit/market), `category`, `content`, `expires_at`, `source`(null=自動/'tip'=明牌), `priority`(0=一般/1=高) |
 | `daily_reviews`       | AI 檢討報告       | `trade_date`(unique), `candidates_count`, `report`(longText) |
 | `market_holidays`     | 休市日             | `date`(unique), `name`（假日名稱） |
 | `us_market_indices`   | 美股指數 + 台指期   | `date`, `symbol`(^GSPC/^SOX/^DJI/^IXIC/DX-Y.NYB/TX), `name`, `close`, `prev_close`, `change_percent` |
@@ -837,6 +865,7 @@ php artisan stock:backtest --validated --max-attempts=5
 | GET    | `/api/backtest/daily-review` | 單日 AI 檢討報告（SSE 串流產出） |
 | GET    | `/api/backtest/daily-review-show` | 讀取已存的檢討報告 |
 | GET    | `/api/backtest/daily-review-dates` | 有報告的日期列表 |
+| GET    | `/api/backtest/analyze-tip` | 明牌分析（SSE 串流）：`?date=&symbol=&notes=` |
 | GET    | `/api/spec`               | 系統規格文件（SPEC.md）  |
 
 ---
@@ -912,10 +941,12 @@ AI 監控指標（有 monitor 資料時顯示）：
 
 可達率趨勢圖（折線圖）+ 策略分類分析（bounce vs breakout）。
 
+**明牌分析**（§5.7）：輸入股票代號 + 日期 + 可選備註，點「分析」即時串流 AI 分析過程。AI 從 K 線和盤中數值找技術面理由並萃取高優先教訓（priority=1，60 天有效），完成後顯示「教訓已儲存 ★」徽章。
+
 **單日 AI 檢討**：切換日期時自動載入已存報告（來自排程或先前手動觸發）。若無報告，點「產出報告」即時生成（SSE 串流）。已有報告時按鈕變為「重新產出」。報告完成後自動萃取教訓寫入 `ai_lessons`。
 
 > 前端已移除 AI 公式優化面板（排程已停用，見 §5.4）。後端 API 保留可手動觸發。
 
 ---
 
-*最後更新：2026-04-12*
+*最後更新：2026-04-14*

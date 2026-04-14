@@ -9,6 +9,7 @@ use App\Models\DailyQuote;
 use App\Models\DailyReview;
 use App\Models\IntradayQuote;
 use App\Models\NewsIndex;
+use App\Models\Stock;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -443,6 +444,148 @@ PROMPT;
         } catch (\Exception $e) {
             Log::error('DailyReviewService extractLessons: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * 分析使用者手動輸入的明牌，從數值找理由並存成高優先教訓
+     */
+    public function analyzeTip(
+        string $date,
+        string $symbol,
+        string $notes = '',
+        ?\Closure $logger = null,
+        ?\Closure $onChunk = null
+    ): array {
+        $log = $logger ?? function (string $msg) { Log::info($msg); };
+
+        $stock = Stock::where('symbol', $symbol)->first();
+        if (!$stock) {
+            return ['error' => "找不到股票代號 {$symbol}"];
+        }
+
+        $log("開始分析明牌 {$symbol} {$stock->name} ({$date})...");
+
+        // 近 15 日 K 線
+        $klines = DailyQuote::where('stock_id', $stock->id)
+            ->where('date', '<=', $date)
+            ->orderByDesc('date')
+            ->limit(15)
+            ->get()
+            ->reverse()
+            ->values();
+
+        if ($klines->isEmpty()) {
+            return ['error' => "找不到 {$symbol} 在 {$date} 的 K 線資料"];
+        }
+
+        // 盤中快照（若有）
+        $intraday = IntradayQuote::where('stock_id', $stock->id)
+            ->where('date', $date)
+            ->first();
+
+        $log("已收集資料，呼叫 AI 分析中...");
+
+        $prompt = $this->buildTipPrompt($date, $stock, $klines, $intraday, $notes);
+        $report = $this->callApiStreaming($prompt, $onChunk);
+
+        $log("AI 分析完成");
+
+        // 從報告中提取 JSON 教訓
+        $lesson = null;
+        if (preg_match('/\{[\s\S]*?\}/u', $report, $m)) {
+            $decoded = json_decode($m[0], true);
+            if (is_array($decoded) && !empty($decoded['content']) && !empty($decoded['type'])) {
+                $lesson = $decoded;
+            }
+        }
+
+        if ($lesson) {
+            $validTypes = ['screening', 'calibration', 'entry', 'exit', 'market'];
+            $type = in_array($lesson['type'], $validTypes) ? $lesson['type'] : 'screening';
+
+            AiLesson::create([
+                'trade_date' => $date,
+                'type'       => $type,
+                'category'   => $lesson['category'] ?? null,
+                'content'    => $lesson['content'],
+                'expires_at' => now()->addDays(60)->toDateString(), // 明牌教訓保留較久
+                'source'     => 'tip',
+                'priority'   => 1,
+            ]);
+
+            $log("教訓已儲存（優先級：高，有效期 60 天）");
+        } else {
+            $log("警告：未能從 AI 回應中提取結構化教訓");
+        }
+
+        return [
+            'date'   => $date,
+            'symbol' => $symbol,
+            'name'   => $stock->name,
+            'report' => $report,
+            'lesson' => $lesson,
+        ];
+    }
+
+    private function buildTipPrompt(
+        string $date,
+        Stock $stock,
+        $klines,
+        ?IntradayQuote $intraday,
+        string $notes
+    ): string {
+        // K 線表
+        $klineLines = ["date\topen\thigh\tlow\tclose\tvol(張)\tchange%\tamplitude%"];
+        foreach ($klines as $q) {
+            $klineLines[] = implode("\t", [
+                $q->date->format('m/d'),
+                (float) $q->open,
+                (float) $q->high,
+                (float) $q->low,
+                (float) $q->close,
+                round($q->volume / 1000),
+                (float) $q->change_percent,
+                (float) $q->amplitude,
+            ]);
+        }
+        $klineTsv = implode("\n", $klineLines);
+
+        // 盤中資料
+        $intradaySection = '（無盤中快照資料）';
+        if ($intraday) {
+            $intradaySection = implode("\n", [
+                "預估量倍數: {$intraday->estimated_volume_ratio}",
+                "開盤漲幅: {$intraday->open_change_percent}%",
+                "第一根5分K: 高={$intraday->first_5min_high} 低={$intraday->first_5min_low}",
+                "外盤比: {$intraday->external_ratio}%",
+            ]);
+        }
+
+        $notesSection = $notes ? "## 使用者備註\n{$notes}" : '';
+
+        return <<<PROMPT
+你是台股當沖交易分析師。使用者今天跟著外部訊號買了 {$stock->symbol} {$stock->name}（產業：{$stock->industry ?? '未知'}），而且有賺錢。
+
+請透過以下數值資料，找出最有可能解釋這筆當沖交易成功的技術面理由，
+並在分析後萃取一條具體可操作的教訓，供未來 AI 選股或盤中校準參考。
+
+## 近期 K 線（含 {$date} 當日）
+{$klineTsv}
+
+## 盤中快照（{$date} 開盤 30 分鐘）
+{$intradaySection}
+
+{$notesSection}
+
+## 分析要求
+1. 從 K 線形態、量能、振幅等技術面，解釋為何 {$date} 是這檔股票的好進場時機
+2. 指出哪些具體數值或形態是關鍵訊號（例如：量能放大倍數、跌深後反彈幅度、突破前高等）
+3. 這個訊號是通用規律，還是當天特殊情況？
+4. 如果要改善 AI 的選股或校準，這個案例最重要的一條教訓是什麼？
+
+請用繁體中文分析，最後**單獨**輸出一個 JSON 教訓（包在 {} 內，無其他標記）：
+{"type": "screening|calibration|entry|exit|market", "category": "breakout|bounce|gap|volume|momentum|timing|price_setting|sector", "content": "一句具體可操作的規則"}
+PROMPT;
     }
 
     private function callApiStreaming(string $prompt, ?\Closure $onChunk = null): string

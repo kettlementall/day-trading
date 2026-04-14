@@ -120,6 +120,77 @@
         </div>
       </div>
 
+      <!-- 明牌分析 -->
+      <div class="stock-card" style="margin-top: 16px;">
+        <div class="ai-header">
+          <h3>明牌分析</h3>
+          <span class="tip-hint">輸入今天跟著大神賺到的明牌，AI 從數值找理由存成高優先教訓</span>
+        </div>
+        <div class="tip-form">
+          <el-input
+            v-model="tipSymbol"
+            placeholder="股票代號（如 2330）"
+            size="small"
+            style="width: 160px"
+            clearable
+          />
+          <el-date-picker
+            v-model="tipDate"
+            type="date"
+            format="MM/DD"
+            value-format="YYYY-MM-DD"
+            :clearable="false"
+            size="small"
+            style="width: 110px"
+          />
+          <el-button
+            type="primary"
+            size="small"
+            :loading="store.tipAnalyzing"
+            :disabled="!tipSymbol"
+            @click="runTipAnalysis"
+          >
+            分析
+          </el-button>
+        </div>
+        <el-input
+          v-model="tipNotes"
+          type="textarea"
+          placeholder="備註（可選）：例如「跟強哥說早盤突破可追」"
+          :rows="2"
+          size="small"
+          style="margin-top: 8px;"
+        />
+
+        <div v-if="store.tipAnalyzing || store.tipResult" class="validation-section" style="margin-top: 8px;">
+          <div v-if="store.tipAnalyzing" class="validation-status">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>AI 分析中...</span>
+          </div>
+          <div v-if="store.tipLogs.length" class="validation-logs">
+            <div v-for="(log, i) in store.tipLogs" :key="i" class="log-line">{{ log }}</div>
+          </div>
+          <div v-if="store.tipAnalyzing && store.tipStreamText" class="review-report">
+            <div class="report-content" v-html="renderMarkdown(store.tipStreamText)" />
+          </div>
+          <div v-else-if="store.tipResult?.report && !store.tipResult?.error" class="review-report">
+            <div class="report-header">
+              <span>{{ store.tipResult.symbol }} {{ store.tipResult.name }} — {{ store.tipResult.date }}</span>
+              <el-tag v-if="store.tipResult.lesson" type="success" size="small" style="margin-left: 8px;">
+                教訓已儲存 ★
+              </el-tag>
+              <el-tag v-else type="warning" size="small" style="margin-left: 8px;">
+                未提取到教訓
+              </el-tag>
+            </div>
+            <div class="report-content" v-html="renderMarkdown(store.tipResult.report)" />
+          </div>
+          <div v-else-if="store.tipResult?.error" class="review-error">
+            {{ store.tipResult.error }}
+          </div>
+        </div>
+      </div>
+
       <!-- 單日 AI 檢討 -->
       <div class="stock-card" style="margin-top: 16px;">
         <div class="ai-header">
@@ -221,6 +292,11 @@ const reviewLogBox = ref(null)
 const reviewDate = ref(dayjs().format('YYYY-MM-DD'))
 const reviewLoading = ref(false)
 
+// 明牌分析
+const tipSymbol = ref('')
+const tipDate = ref(dayjs().format('YYYY-MM-DD'))
+const tipNotes = ref('')
+
 async function fetchData() {
   loading.value = true
   try {
@@ -244,6 +320,15 @@ async function runDailyReview() {
     await store.dailyReview(reviewDate.value)
   } catch (e) {
     console.error('Daily review failed:', e)
+  }
+}
+
+async function runTipAnalysis() {
+  if (!tipSymbol.value) return
+  try {
+    await store.analyzeTip(tipDate.value, tipSymbol.value.trim(), tipNotes.value.trim())
+  } catch (e) {
+    console.error('Tip analysis failed:', e)
   }
 }
 
@@ -407,16 +492,30 @@ onMounted(() => {
 
 .ai-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 10px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
 .ai-header h3 { margin: 0; }
 
+.tip-hint {
+  font-size: 11px;
+  color: #909399;
+}
+
 .ai-buttons {
   display: flex;
   gap: 6px;
+  margin-left: auto;
+}
+
+.tip-form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .validation-section {

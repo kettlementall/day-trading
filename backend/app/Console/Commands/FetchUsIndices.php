@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Log;
 
 class FetchUsIndices extends Command
 {
-    protected $signature = 'stock:fetch-us-indices {date?}';
+    protected $signature = 'stock:fetch-us-indices {date?} {--tx-only : 僅更新台指期，略過美股指數}';
     protected $description = '抓取台指期夜盤 + 美股主要指數收盤數據';
 
     private const INDICES = [
@@ -24,8 +24,12 @@ class FetchUsIndices extends Command
     {
         $date = $this->argument('date') ?? now()->format('Y-m-d');
         $count = 0;
+        $txOnly = $this->option('tx-only');
 
         foreach (self::INDICES as $symbol => $name) {
+            if ($txOnly) {
+                continue;
+            }
             try {
                 $encoded = urlencode($symbol);
                 $response = Http::timeout(10)

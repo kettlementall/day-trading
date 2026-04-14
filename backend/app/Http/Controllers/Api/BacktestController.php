@@ -119,6 +119,52 @@ class BacktestController extends Controller
     }
 
     /**
+     * 明牌分析：使用者輸入賺錢明牌 → AI 從數值找理由 → 存成高優先教訓（SSE 串流）
+     */
+    public function analyzeTip(Request $request): StreamedResponse
+    {
+        $date   = $request->input('date', now()->toDateString());
+        $symbol = strtoupper(trim($request->input('symbol', '')));
+        $notes  = $request->input('notes', '');
+
+        return response()->stream(function () use ($date, $symbol, $notes) {
+            while (ob_get_level()) ob_end_clean();
+
+            $sendEvent = function (string $event, array $data) {
+                echo "event: {$event}\n";
+                echo "data: " . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n\n";
+                flush();
+            };
+
+            if (!$symbol) {
+                $sendEvent('done', ['error' => '請輸入股票代號']);
+                return;
+            }
+
+            $service = new DailyReviewService();
+
+            $result = $service->analyzeTip(
+                $date,
+                $symbol,
+                $notes,
+                function (string $msg) use ($sendEvent) {
+                    $sendEvent('log', ['message' => $msg]);
+                },
+                function (string $chunk) use ($sendEvent) {
+                    $sendEvent('chunk', ['text' => $chunk]);
+                }
+            );
+
+            $sendEvent('done', $result);
+        }, 200, [
+            'Content-Type'    => 'text/event-stream',
+            'Cache-Control'   => 'no-cache',
+            'Connection'      => 'keep-alive',
+            'X-Accel-Buffering' => 'no',
+        ]);
+    }
+
+    /**
      * 單日候選標的 AI 檢討分析（SSE 串流）
      */
     public function dailyReview(Request $request): StreamedResponse

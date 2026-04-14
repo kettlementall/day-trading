@@ -51,6 +51,8 @@ scheduledCommand('stock:daily-review', 'AI 每日檢討')->dailyAt('15:30');
 
 // 每日 06:00 抓取隔夜國際新聞 + 美股指數（供 08:00 選股用）
 scheduledCommand('stock:fetch-us-indices', '美股指數抓取')->dailyAt('06:00');
+// 每日 08:45 更新台指期日盤開盤價（日盤 08:45 開盤，供候選頁顯示用）
+scheduledCommand('stock:fetch-us-indices --tx-only', '台指期日盤更新')->dailyAt('08:45');
 scheduledCommand('news:fetch', '新聞抓取(06:00)')->dailyAt('06:00');
 scheduledCommand('news:compute-indices', '新聞指數(06:15)')->dailyAt('06:15');
 
