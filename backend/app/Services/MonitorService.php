@@ -137,13 +137,16 @@ class MonitorService
 
     /**
      * 處理新快照：對所有活躍 monitor 評估狀態轉換
+     * 回傳 [monitor_id => emergencyReason] 供呼叫方觸發緊急 AI
      */
-    public function processSnapshot(string $date): void
+    public function processSnapshot(string $date): array
     {
         $monitors = CandidateMonitor::with(['candidate.stock'])
             ->whereHas('candidate', fn($q) => $q->where('trade_date', $date))
             ->whereIn('status', CandidateMonitor::ACTIVE_STATUSES)
             ->get();
+
+        $emergencyMonitors = [];
 
         foreach ($monitors as $monitor) {
             $candidate = $monitor->candidate;
@@ -169,13 +172,21 @@ class MonitorService
                 continue;
             }
 
-            match ($monitor->status) {
-                CandidateMonitor::STATUS_WATCHING => $this->evaluateWatching($monitor, $candidate, $date),
-                CandidateMonitor::STATUS_ENTRY_SIGNAL => $this->evaluateEntrySignal($monitor, $candidate, $date),
-                CandidateMonitor::STATUS_HOLDING => $this->evaluateHolding($monitor, $candidate, $date),
-                default => null,
-            };
+            if ($monitor->status === CandidateMonitor::STATUS_HOLDING) {
+                $emergencyReason = $this->evaluateHolding($monitor, $candidate, $date);
+                if ($emergencyReason !== null) {
+                    $emergencyMonitors[$monitor->id] = $emergencyReason;
+                }
+            } else {
+                match ($monitor->status) {
+                    CandidateMonitor::STATUS_WATCHING => $this->evaluateWatching($monitor, $candidate, $date),
+                    CandidateMonitor::STATUS_ENTRY_SIGNAL => $this->evaluateEntrySignal($monitor, $candidate, $date),
+                    default => null,
+                };
+            }
         }
+
+        return $emergencyMonitors;
     }
 
     /**
@@ -256,12 +267,18 @@ class MonitorService
         // 計算動態目標/停損
         $entryPrice = $price;
         $avgAmplitude = $this->getAvgAmplitude($stock->id, $date, 5);
-        $targetPrice = round($entryPrice * (1 + $avgAmplitude * 0.45 / 100), 2);
-        $stopPrice = round($entryPrice * (1 - $avgAmplitude * 0.55 / 100), 2);
+        $targetPrice = round($entryPrice * (1 + $avgAmplitude * 0.6 / 100), 2);
+        $targetPrice = min($targetPrice, round($entryPrice * 1.08, 2));  // 振幅公式上限
 
-        // 上限限制
-        $targetPrice = min($targetPrice, round($entryPrice * 1.03, 2));
-        $stopPrice = max($stopPrice, round($entryPrice * 0.975, 2));
+        // 若 AI 校準壓力位更高（≤1.10），以 AI 為準（可超越振幅公式上限）
+        $aiResistance = (float) $monitor->current_target;
+        if ($aiResistance > $entryPrice && $aiResistance <= $entryPrice * 1.10) {
+            $targetPrice = max($targetPrice, $aiResistance);
+        }
+        $targetPrice = min($targetPrice, round($entryPrice * 1.10, 2));  // 絕對上限
+
+        $stopPrice = round($entryPrice * (1 - $avgAmplitude * 0.55 / 100), 2);
+        $stopPrice = max($stopPrice, round($entryPrice * 0.97, 2));
 
         $monitor->update([
             'entry_price' => $entryPrice,
@@ -300,34 +317,39 @@ class MonitorService
 
     /**
      * holding → target_hit / stop_hit / trailing_stop
+     * 回傳緊急原因字串（仍持有且偵測到急殺/崩潰/接近停損），或 null
      */
-    private function evaluateHolding(CandidateMonitor $monitor, Candidate $candidate, string $date): void
+    private function evaluateHolding(CandidateMonitor $monitor, Candidate $candidate, string $date): ?string
     {
         $stock = $candidate->stock;
-        $latest = IntradaySnapshot::where('stock_id', $stock->id)
+        $recentSnapshots = IntradaySnapshot::where('stock_id', $stock->id)
             ->where('trade_date', $date)
             ->orderByDesc('snapshot_time')
-            ->first();
+            ->limit(3)
+            ->get()
+            ->sortBy('snapshot_time')
+            ->values();
 
-        if (!$latest) return;
+        if ($recentSnapshots->isEmpty()) return null;
+        $latest = $recentSnapshots->last();
 
         $price = (float) $latest->current_price;
         $entryPrice = (float) $monitor->entry_price;
         $target = (float) $monitor->current_target;
         $stop = (float) $monitor->current_stop;
 
-        if ($entryPrice <= 0) return;
+        if ($entryPrice <= 0) return null;
 
         // 達標出場
         if ($target > 0 && $price >= $target) {
             $this->exitPosition($monitor, $price, 'target_hit', sprintf('達標 %.2f', $target));
-            return;
+            return null;
         }
 
         // 停損出場
         if ($stop > 0 && $price <= $stop) {
             $this->exitPosition($monitor, $price, 'stop_hit', sprintf('停損 %.2f', $stop));
-            return;
+            return null;
         }
 
         // 移動停利：最高點回落超過 50% 已實現利潤
@@ -340,7 +362,7 @@ class MonitorService
             // 從最高回落超過 50%，且已有 >1% 利潤曾經出現過
             if ($pullbackRatio < 0.5 && ($unrealizedProfit / $entryPrice * 100) > 1.0) {
                 $this->exitPosition($monitor, $price, 'trailing_stop', sprintf('移動停利，從高點 %.2f 回落', $highSinceEntry));
-                return;
+                return null;
             }
         }
 
@@ -351,7 +373,7 @@ class MonitorService
 
             if ($holdingMinutes > 90 && $profitPct < 0) {
                 $this->exitPosition($monitor, $price, 'trailing_stop', sprintf('時間停損（持有 %d 分鐘，利潤 %.1f%%）', $holdingMinutes, $profitPct));
-                return;
+                return null;
             }
         }
 
@@ -366,6 +388,41 @@ class MonitorService
             $newStop = round($entryPrice * 1.02, 2);
             $monitor->update(['current_stop' => $newStop]);
         }
+
+        // ===== 緊急觸發偵測（仍持有中才評估）=====
+        return $this->detectEmergency($recentSnapshots, $price, $stop);
+    }
+
+    /**
+     * 偵測緊急出場條件，回傳原因字串或 null
+     */
+    private function detectEmergency(Collection $recentSnapshots, float $price, float $stop): ?string
+    {
+        if ($recentSnapshots->count() < 2) return null;
+
+        $latest = $recentSnapshots->last();
+
+        // 條件 1：最近 2 筆快照急殺 > 1.5%
+        $prev = $recentSnapshots[$recentSnapshots->count() - 2];
+        $prevPrice = (float) $prev->current_price;
+        if ($prevPrice > 0) {
+            $priceDrop = ($prevPrice - $price) / $prevPrice * 100;
+            if ($priceDrop > 1.5) {
+                return sprintf("急殺 %.1f%%（%.2f→%.2f）", $priceDrop, $prevPrice, $price);
+            }
+        }
+
+        // 條件 2：外盤崩潰且持續下跌中
+        if ((float) $latest->external_ratio < 35 && (float) $latest->change_percent < -0.5) {
+            return sprintf("外盤崩潰 %.0f%% 跌幅 %.1f%%", $latest->external_ratio, $latest->change_percent);
+        }
+
+        // 條件 3：接近停損 1% 以內
+        if ($stop > 0 && $price < $stop * 1.01) {
+            return sprintf("接近停損（現價 %.2f / 停損 %.2f）", $price, $stop);
+        }
+
+        return null;
     }
 
     /**
@@ -378,11 +435,26 @@ class MonitorService
 
         $monitor->logAiAdvice($action, $notes, $advice['adjustments'] ?? null);
 
+        // C 級升格：AI 建議進場且時間 < 11:00 → 升為 B，下次 tick 自動觸發進場
+        $candidate = $monitor->candidate;
+        if ($action === 'entry' && $candidate->morning_grade === 'C' && now()->hour < 11) {
+            $stock = $candidate->stock;
+            $candidate->update(['morning_grade' => 'B', 'morning_confirmed' => true]);
+            $this->telegram->send(sprintf(
+                "[升格 C→B] %s %s | %s",
+                $stock->symbol,
+                $stock->name,
+                $notes
+            ));
+            $monitor->save();
+            return;
+        }
+
         match ($action) {
             'exit' => $this->exitByAiAdvice($monitor, $notes),
             'skip' => $this->skipByAiAdvice($monitor, $notes),
             'hold' => $this->applyAdjustments($monitor, $advice),
-            'entry' => null, // AI 建議進場由規則式處理，這裡只記錄
+            'entry' => null, // 非 C 升格的 entry：由規則式處理，這裡只記錄
             default => null,
         };
 
@@ -467,6 +539,7 @@ class MonitorService
         $adjustments = $advice['adjustments'] ?? [];
         $updated = [];
 
+        // HOLDING 狀態調整
         if (isset($adjustments['target'])) {
             $monitor->current_target = $adjustments['target'];
             $updated[] = "目標→{$adjustments['target']}";
@@ -474,6 +547,15 @@ class MonitorService
         if (isset($adjustments['stop'])) {
             $monitor->current_stop = $adjustments['stop'];
             $updated[] = "停損→{$adjustments['stop']}";
+        }
+        // WATCHING 狀態支撐/壓力調整（更新 current_stop/target 供進場條件使用）
+        if (isset($adjustments['support'])) {
+            $monitor->current_stop = $adjustments['support'];
+            $updated[] = "支撐→{$adjustments['support']}";
+        }
+        if (isset($adjustments['resistance'])) {
+            $monitor->current_target = $adjustments['resistance'];
+            $updated[] = "壓力→{$adjustments['resistance']}";
         }
 
         if (!empty($updated)) {

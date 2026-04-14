@@ -83,13 +83,18 @@ class MonitorStocks extends Command
         }
 
         // ===== Step 3: 規則式監控（每次快照後） =====
-        $this->monitorService->processSnapshot($date);
+        $emergencyMonitors = $this->monitorService->processSnapshot($date);
 
         // ===== Step 4: AI 滾動判斷（依時段動態頻率） =====
         // 09:05-09:30 每10分 / 09:30-10:30 每15分 / 10:30-13:00 每20分 / 13:00-13:25 每10分
         $aiInterval = $this->getAiInterval($hour, $minute);
         if ($aiInterval > 0 && $minute % $aiInterval === 5 && $timeStr >= '09:15') {
             $this->performRollingAdvice($date);
+        }
+
+        // ===== Step 5: 緊急 AI 觸發（不等下一個排程週期）=====
+        if (!empty($emergencyMonitors)) {
+            $this->performEmergencyAdvice($date, $emergencyMonitors);
         }
 
         return self::SUCCESS;
@@ -121,7 +126,7 @@ class MonitorStocks extends Command
     }
 
     /**
-     * AI 滾動判斷
+     * AI 滾動判斷（取當日所有快照供 5 分 K 聚合）
      */
     private function performRollingAdvice(string $date): void
     {
@@ -137,19 +142,51 @@ class MonitorStocks extends Command
         foreach ($monitors as $monitor) {
             $stock = $monitor->candidate->stock;
 
-            // 取最近 30 分鐘快照
-            $recentSnapshots = IntradaySnapshot::where('stock_id', $stock->id)
+            // 取當日所有快照（供 5 分 K 聚合）
+            $allSnapshots = IntradaySnapshot::where('stock_id', $stock->id)
                 ->where('trade_date', $date)
-                ->where('snapshot_time', '>=', now()->subMinutes(30))
                 ->orderBy('snapshot_time')
                 ->get();
 
-            if ($recentSnapshots->isEmpty()) continue;
+            if ($allSnapshots->isEmpty()) continue;
 
-            $advice = $this->aiAdvisor->rollingAdvice($date, $monitor, $recentSnapshots);
+            $advice = $this->aiAdvisor->rollingAdvice($date, $monitor, $allSnapshots);
             $this->monitorService->applyRollingAdvice($monitor, $advice);
 
             $this->line("  {$stock->symbol}: {$advice['action']} - {$advice['notes']}");
+        }
+    }
+
+    /**
+     * 緊急 AI 觸發：HOLDING 中出現急殺，不等排程週期
+     */
+    private function performEmergencyAdvice(string $date, array $emergencyMonitors): void
+    {
+        foreach ($emergencyMonitors as $monitorId => $reason) {
+            $monitor = CandidateMonitor::with(['candidate.stock'])->find($monitorId);
+            if (!$monitor) continue;
+
+            $stock = $monitor->candidate->stock;
+
+            // 每股每 5 分鐘最多觸發一次緊急 AI
+            $fiveMinSlot = (int) (now()->minute / 5);
+            $cacheKey = "emergency_ai:{$stock->id}:{$date}:{$fiveMinSlot}";
+            if (Cache::has($cacheKey)) continue;
+            Cache::put($cacheKey, true, 300);
+
+            $this->info("緊急 AI 觸發：{$stock->symbol} - {$reason}");
+
+            $allSnapshots = IntradaySnapshot::where('stock_id', $stock->id)
+                ->where('trade_date', $date)
+                ->orderBy('snapshot_time')
+                ->get();
+
+            if ($allSnapshots->isEmpty()) continue;
+
+            $advice = $this->aiAdvisor->emergencyAdvice($date, $monitor, $allSnapshots, $reason);
+            $this->monitorService->applyRollingAdvice($monitor, $advice);
+
+            $this->line("  {$stock->symbol} [緊急]: {$advice['action']} - {$advice['notes']}");
         }
     }
 
