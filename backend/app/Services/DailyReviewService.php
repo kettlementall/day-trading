@@ -483,9 +483,18 @@ PROMPT;
             ->where('date', $date)
             ->first();
 
+        // 即時抓 5 分 K
+        $log("抓取 {$date} 盤中 5 分 K...");
+        $intradayKlines = $this->fetchYahooIntraday($stock, $date);
+        if ($intradayKlines) {
+            $log("取得 " . count($intradayKlines) . " 根 5 分 K");
+        } else {
+            $log("無盤中 5 分 K 資料（可能為非交易日或尚未開盤）");
+        }
+
         $log("已收集資料，呼叫 AI 分析中...");
 
-        $prompt = $this->buildTipPrompt($date, $stock, $klines, $intraday, $notes);
+        $prompt = $this->buildTipPrompt($date, $stock, $klines, $intraday, $intradayKlines, $notes);
         $report = $this->callApiStreaming($prompt, $onChunk);
 
         $log("AI 分析完成");
@@ -532,6 +541,7 @@ PROMPT;
         Stock $stock,
         $klines,
         ?IntradayQuote $intraday,
+        array $intradayKlines,
         string $notes
     ): string {
         // K 線表
@@ -549,6 +559,7 @@ PROMPT;
             ]);
         }
         $klineTsv = implode("\n", $klineLines);
+        $industry = $stock->industry ?? '未知';
 
         // 盤中資料
         $intradaySection = '（無盤中快照資料）';
@@ -561,10 +572,20 @@ PROMPT;
             ]);
         }
 
+        // 5 分 K 走勢
+        $intradayKlineSection = '';
+        if ($intradayKlines) {
+            $lines = ["time\topen\thigh\tlow\tclose\tvol(股)"];
+            foreach ($intradayKlines as $k) {
+                $lines[] = "{$k['time']}\t{$k['open']}\t{$k['high']}\t{$k['low']}\t{$k['close']}\t{$k['volume']}";
+            }
+            $intradayKlineSection = "## 盤中 5 分 K 走勢（{$date}）\n" . implode("\n", $lines);
+        }
+
         $notesSection = $notes ? "## 使用者備註\n{$notes}" : '';
 
         return <<<PROMPT
-你是台股當沖交易分析師。使用者今天跟著外部訊號買了 {$stock->symbol} {$stock->name}（產業：{$stock->industry ?? '未知'}），而且有賺錢。
+你是台股當沖交易分析師。使用者今天跟著外部訊號買了 {$stock->symbol} {$stock->name}（產業：{$industry}），而且有賺錢。
 
 請透過以下數值資料，找出最有可能解釋這筆當沖交易成功的技術面理由，
 並在分析後萃取一條具體可操作的教訓，供未來 AI 選股或盤中校準參考。
@@ -574,6 +595,8 @@ PROMPT;
 
 ## 盤中快照（{$date} 開盤 30 分鐘）
 {$intradaySection}
+
+{$intradayKlineSection}
 
 {$notesSection}
 
@@ -586,6 +609,75 @@ PROMPT;
 請用繁體中文分析，最後**單獨**輸出一個 JSON 教訓（包在 {} 內，無其他標記）：
 {"type": "screening|calibration|entry|exit|market", "category": "breakout|bounce|gap|volume|momentum|timing|price_setting|sector", "content": "一句具體可操作的規則"}
 PROMPT;
+    }
+
+    /**
+     * 向 Yahoo Finance 抓取指定日期的 5 分 K 資料
+     * 返回 [['time'=>'09:00','open'=>x,'high'=>x,'low'=>x,'close'=>x,'volume'=>x], ...]
+     */
+    private function fetchYahooIntraday(Stock $stock, string $date): array
+    {
+        $suffix = $stock->market === 'twse' ? '.TW' : '.TWO';
+        $yahooSymbol = $stock->symbol . $suffix;
+
+        $tz = new \DateTimeZone('Asia/Taipei');
+        $start = (new \DateTime("{$date} 00:00:00", $tz))->getTimestamp();
+        $end   = (new \DateTime("{$date} 23:59:59", $tz))->getTimestamp();
+
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders(['User-Agent' => 'Mozilla/5.0'])
+                ->get("https://query1.finance.yahoo.com/v8/finance/chart/{$yahooSymbol}", [
+                    'interval' => '5m',
+                    'period1'  => $start,
+                    'period2'  => $end,
+                ]);
+
+            if (!$response->successful()) {
+                return [];
+            }
+
+            $result = $response->json('chart.result.0');
+            if (!$result) {
+                return [];
+            }
+
+            $timestamps = $result['timestamp'] ?? [];
+            $q = $result['indicators']['quote'][0] ?? [];
+            $opens   = $q['open']   ?? [];
+            $highs   = $q['high']   ?? [];
+            $lows    = $q['low']    ?? [];
+            $closes  = $q['close']  ?? [];
+            $volumes = $q['volume'] ?? [];
+
+            $klines = [];
+            foreach ($timestamps as $i => $ts) {
+                if (!isset($closes[$i]) || $closes[$i] === null) {
+                    continue;
+                }
+                $dt = new \DateTime('@' . $ts);
+                $dt->setTimezone($tz);
+                $hour   = (int) $dt->format('G');
+                $minute = (int) $dt->format('i');
+                // 只保留台股交易時間 09:00–13:30
+                if ($hour < 9 || $hour > 13 || ($hour === 13 && $minute > 30)) {
+                    continue;
+                }
+                $klines[] = [
+                    'time'   => $dt->format('H:i'),
+                    'open'   => round((float) ($opens[$i]   ?? 0), 2),
+                    'high'   => round((float) ($highs[$i]   ?? 0), 2),
+                    'low'    => round((float) ($lows[$i]    ?? 0), 2),
+                    'close'  => round((float) ($closes[$i]  ?? 0), 2),
+                    'volume' => (int) ($volumes[$i] ?? 0),
+                ];
+            }
+
+            return $klines;
+        } catch (\Exception $e) {
+            Log::warning("fetchYahooIntraday {$stock->symbol}: " . $e->getMessage());
+            return [];
+        }
     }
 
     private function callApiStreaming(string $prompt, ?\Closure $onChunk = null): string

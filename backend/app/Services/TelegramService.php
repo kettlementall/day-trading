@@ -23,7 +23,7 @@ class TelegramService
             return false;
         }
 
-        $hostname = gethostname() ?: 'unknown';
+        $hostname = 'msi';
         $message = "[{$hostname}]\n" . $message;
 
         try {

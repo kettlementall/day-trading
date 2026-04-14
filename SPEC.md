@@ -803,9 +803,10 @@ php artisan stock:backtest --validated --max-attempts=5
 
 **分析流程：**
 1. 查詢股票近 15 日 K 線（`daily_quotes`）+ 當日盤中快照（`intraday_quotes`，若有）
-2. 請 Claude Opus 從量能、振幅、K 線形態分析進場時機
-3. 從 AI 回應中提取單條 JSON 教訓（`{type, category, content}`）
-4. 存入 `ai_lessons`，`source='tip'`、`priority=1`、有效期 60 天
+2. 即時向 Yahoo Finance 抓取當日 5 分 K（`fetchYahooIntraday()`，TWSE 用 `{symbol}.TW`、TPEX 用 `{symbol}.TWO`，僅保留台股交易時間 09:00–13:30）
+3. 請 Claude Opus 從量能、振幅、K 線形態及盤中走勢分析進場時機
+4. 從 AI 回應中提取單條 JSON 教訓（`{type, category, content}`）
+5. 存入 `ai_lessons`，`source='tip'`、`priority=1`、有效期 60 天
 
 **實作：** SSE 串流，前端透過 EventSource 接收 `log`、`chunk`、`done` 事件；完成後顯示「教訓已儲存 ★」或「未提取到教訓」徽章。
 

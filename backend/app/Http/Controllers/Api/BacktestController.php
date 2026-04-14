@@ -125,7 +125,7 @@ class BacktestController extends Controller
     {
         $date   = $request->input('date', now()->toDateString());
         $symbol = strtoupper(trim($request->input('symbol', '')));
-        $notes  = $request->input('notes', '');
+        $notes  = $request->input('notes') ?? '';
 
         return response()->stream(function () use ($date, $symbol, $notes) {
             while (ob_get_level()) ob_end_clean();
