@@ -393,7 +393,7 @@ class BacktestOptimizer
                 \Carbon\Carbon::parse($c->trade_date)->format('m/d'),
                 $c->stock->symbol,
                 $c->stock->industry ?? '-',
-                $c->strategy_type ?? '-',
+                $c->intraday_strategy ?? '-',
                 $c->score,
                 $suggestedBuy,
                 (float) $c->target_price,

@@ -1,0 +1,343 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\AiLesson;
+use App\Models\Candidate;
+use App\Models\DailyQuote;
+use App\Models\InstitutionalTrade;
+use App\Models\NewsArticle;
+use App\Models\NewsIndex;
+use App\Models\UsMarketIndex;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+
+class HaikuPreFilterService
+{
+    private string $apiKey;
+    private string $model;
+    private int $batchSize;
+
+    public function __construct()
+    {
+        $this->apiKey    = config('services.anthropic.api_key', '');
+        $this->model     = config('services.anthropic.haiku_model', 'claude-haiku-4-5-20251001');
+        $this->batchSize = (int) config('services.anthropic.haiku_batch_size', 15);
+    }
+
+    /**
+     * 批量快速預篩候選股
+     *
+     * 用 Haiku 對所有物理門檻通過的候選做快速判斷，
+     * 更新 score（信度 0–100）、haiku_selected、haiku_reasoning。
+     *
+     * @param int|null $maxPassThrough 最多放行幾檔給 Opus（取信度最高的 N 檔，null = 不限制）
+     */
+    public function filter(string $tradeDate, Collection $candidates, ?int $maxPassThrough = null): Collection
+    {
+        if ($candidates->isEmpty()) {
+            return $candidates;
+        }
+
+        if (!$this->apiKey) {
+            Log::warning('HaikuPreFilterService: ANTHROPIC_API_KEY 未設定，全部標記 haiku_selected=true');
+            return $this->fallbackAll($candidates);
+        }
+
+        $systemPrompt = $this->buildSystemPrompt($tradeDate);
+
+        // 分批處理
+        $batches = $candidates->chunk($this->batchSize);
+        foreach ($batches as $batch) {
+            try {
+                $userMessage = $this->buildBatchMessage($tradeDate, $batch);
+                $results     = $this->callApi($systemPrompt, $userMessage);
+                $this->applyBatchResults($batch, $results);
+            } catch (\Exception $e) {
+                Log::error('HaikuPreFilterService batch error: ' . $e->getMessage());
+                // 批次失敗時全部標記通過（寧可多送 Opus 也不漏掉好股）
+                foreach ($batch as $candidate) {
+                    $candidate->update([
+                        'haiku_selected'  => true,
+                        'haiku_reasoning' => 'Haiku 批次失敗，預設通過',
+                        'score'           => 50,
+                    ]);
+                }
+            }
+            usleep(200_000); // 200ms，避免 rate limit
+        }
+
+        // 若設定了最多放行數，將信度不足的降為 haiku_selected=false
+        if ($maxPassThrough !== null) {
+            $passed = Candidate::where('trade_date', $tradeDate)
+                ->where('haiku_selected', true)
+                ->orderByDesc('score')
+                ->pluck('id');
+
+            if ($passed->count() > $maxPassThrough) {
+                $toReject = $passed->slice($maxPassThrough);
+                Candidate::whereIn('id', $toReject)->update(['haiku_selected' => false]);
+                Log::info("HaikuPreFilterService: 放行數限制 {$maxPassThrough}，額外排除 {$toReject->count()} 檔");
+            }
+        }
+
+        return $candidates->fresh();
+    }
+
+    // -------------------------------------------------------------------------
+    // System prompt（所有批次共用，Anthropic 快取）
+    // -------------------------------------------------------------------------
+
+    private function buildSystemPrompt(string $tradeDate): string
+    {
+        $usMarketSection = UsMarketIndex::getSummary($tradeDate);
+        $lessonsSection  = AiLesson::getScreeningLessons();
+
+        // 近 2 日新聞標題
+        $news = NewsArticle::where('fetched_date', '>=', now()->subDays(2)->toDateString())
+            ->whereNotNull('industry')
+            ->orderByDesc('published_at')
+            ->limit(20)
+            ->get();
+        $newsLines   = $news->map(fn($n) => "- [{$n->industry}] {$n->title}")->implode("\n");
+        $newsSection = $newsLines ?: '（無近期新聞）';
+
+        // 消息面指數
+        $latestNewsDate = NewsIndex::where('scope', 'overall')
+            ->where('date', '<=', $tradeDate)
+            ->orderByDesc('date')
+            ->value('date');
+
+        $newsIndexLines = [];
+        if ($latestNewsDate) {
+            $overall = NewsIndex::where('scope', 'overall')->where('date', $latestNewsDate)->first();
+            if ($overall) {
+                $newsIndexLines[] = "整體情緒:{$overall->sentiment} 熱度:{$overall->heatmap} 恐慌:{$overall->panic}";
+            }
+            NewsIndex::where('scope', 'industry')->where('date', $latestNewsDate)
+                ->orderByDesc('sentiment')->limit(5)->get()
+                ->each(fn($idx) => $newsIndexLines[] = "{$idx->scope_value}:情緒{$idx->sentiment}");
+        }
+        $newsIndexSection = $newsIndexLines ? implode("\n", $newsIndexLines) : '（無消息面指數）';
+
+        return <<<SYSTEM
+你是台股當沖選股 AI 助手（快速預篩模式）。現在是 {$tradeDate} 盤前。
+
+我將以批次方式提交候選標的，每批最多 {$this->batchSize} 檔。
+請對每檔快速判斷：「這檔股票今日是否值得進一步精審？」
+
+{$usMarketSection}
+
+## 近期新聞
+{$newsSection}
+
+## 消息面指數
+{$newsIndexSection}
+
+{$lessonsSection}
+
+## 快速評估標準
+- 量能：有量放大跡象（前日或今日量 > 5日均量 1.5 倍）優先
+- 趨勢：突破型要站上支撐；反彈型要有洗盤訊號後止跌
+- 籌碼：外資或投信買超加分；法人連續賣超警戒
+- 排除：振幅太小不適合當沖、明顯弱勢型態
+
+## 回覆格式
+請直接回覆 JSON array（不要加 markdown），格式：
+[
+  {"symbol":"2330","keep":true,"confidence":75,"reason":"一句話理由"},
+  {"symbol":"2317","keep":false,"confidence":20,"reason":"一句話理由"}
+]
+
+- keep: true = 值得精審，false = 不需要
+- confidence: 0–100，代表值得精審的把握度
+- reason: 一句話，說明關鍵理由（10–30 字）
+
+每檔都必須回覆，不可省略。
+SYSTEM;
+    }
+
+    // -------------------------------------------------------------------------
+    // Per-batch user message（每批 15 檔的緊湊資料）
+    // -------------------------------------------------------------------------
+
+    private function buildBatchMessage(string $tradeDate, Collection $batch): string
+    {
+        $lines = ["## 批量預篩（{$batch->count()} 檔）：請依序回覆 JSON array\n"];
+
+        foreach ($batch as $candidate) {
+            $stock    = $candidate->stock;
+            $symbol   = $stock->symbol;
+            $name     = $stock->name;
+            $industry = $stock->industry ?? '-';
+
+            // 近 5 日 K 線（緊湊格式）
+            $quotes = DailyQuote::where('stock_id', $candidate->stock_id)
+                ->where('date', '<', $tradeDate)
+                ->orderByDesc('date')
+                ->limit(5)
+                ->get();
+
+            $kParts = [];
+            foreach ($quotes as $q) {
+                $kParts[] = sprintf(
+                    '%s 收%.1f 量%dk 漲%s%%',
+                    \Carbon\Carbon::parse($q->date)->format('m/d'),
+                    (float) $q->close,
+                    round($q->volume / 1000),
+                    (float) $q->change_percent
+                );
+            }
+            $kline = implode(' | ', $kParts) ?: '無K線';
+
+            // 近 2 日法人
+            $inst = InstitutionalTrade::where('stock_id', $candidate->stock_id)
+                ->orderByDesc('date')
+                ->limit(2)
+                ->get();
+
+            $instParts = [];
+            foreach ($inst as $t) {
+                $fNet = $t->foreign_net >= 0 ? '+' . round($t->foreign_net / 1000) : round($t->foreign_net / 1000);
+                $tNet = $t->trust_net >= 0 ? '+' . round($t->trust_net / 1000) : round($t->trust_net / 1000);
+                $instParts[] = sprintf('%s 外資%s張 投信%s張',
+                    \Carbon\Carbon::parse($t->date)->format('m/d'),
+                    $fNet, $tNet
+                );
+            }
+            $instStr = implode(' | ', $instParts) ?: '無法人資料';
+
+            // 事實標籤
+            $tags = implode(',', is_array($candidate->reasons) ? $candidate->reasons : []);
+
+            $lines[] = "{$symbol} {$name}（{$industry}）標籤:{$tags}";
+            $lines[] = "  K線: {$kline}";
+            $lines[] = "  法人: {$instStr}";
+            $lines[] = "  參考買入:{$candidate->suggested_buy} 目標:{$candidate->target_price} 停損:{$candidate->stop_loss} RR:{$candidate->risk_reward_ratio}";
+            $lines[] = '';
+        }
+
+        return implode("\n", $lines);
+    }
+
+    // -------------------------------------------------------------------------
+    // Haiku API call（含 prompt caching）
+    // -------------------------------------------------------------------------
+
+    private function callApi(string $systemPrompt, string $userMessage): array
+    {
+        $response = Http::timeout(90)
+            ->withHeaders([
+                'x-api-key'         => $this->apiKey,
+                'anthropic-version' => '2023-06-01',
+                'anthropic-beta'    => 'prompt-caching-2024-07-31',
+                'content-type'      => 'application/json',
+            ])
+            ->post('https://api.anthropic.com/v1/messages', [
+                'model'      => $this->model,
+                'max_tokens' => 1024,
+                'system'     => [
+                    [
+                        'type'          => 'text',
+                        'text'          => $systemPrompt,
+                        'cache_control' => ['type' => 'ephemeral'],
+                    ],
+                ],
+                'messages' => [
+                    ['role' => 'user', 'content' => $userMessage],
+                ],
+            ]);
+
+        if (!$response->successful()) {
+            throw new \RuntimeException('Haiku API ' . $response->status() . ': ' . $response->body());
+        }
+
+        $text   = $response->json('content.0.text', '');
+        $parsed = $this->parseBatchResponse($text);
+
+        if ($parsed === null) {
+            throw new \RuntimeException('無法解析 Haiku 批次回應：' . mb_substr($text, 0, 300));
+        }
+
+        return $parsed;
+    }
+
+    private function parseBatchResponse(string $text): ?array
+    {
+        $text = trim($text);
+        $text = preg_replace('/^```json?\s*/i', '', $text);
+        $text = preg_replace('/\s*```$/', '', $text);
+
+        $data = json_decode($text, true);
+
+        if (!is_array($data)) {
+            return null;
+        }
+
+        // 確認是 array of objects
+        foreach ($data as $item) {
+            if (!isset($item['symbol'], $item['keep'])) {
+                return null;
+            }
+        }
+
+        return $data;
+    }
+
+    // -------------------------------------------------------------------------
+    // 將批次結果寫入 DB
+    // -------------------------------------------------------------------------
+
+    private function applyBatchResults(Collection $batch, array $results): void
+    {
+        // 建立 symbol → result 的索引
+        $resultMap = [];
+        foreach ($results as $r) {
+            $resultMap[$r['symbol']] = $r;
+        }
+
+        foreach ($batch as $candidate) {
+            $symbol = $candidate->stock->symbol;
+            $r      = $resultMap[$symbol] ?? null;
+
+            if ($r === null) {
+                // Haiku 沒有回覆這檔（異常），預設通過
+                $candidate->update([
+                    'haiku_selected'  => true,
+                    'haiku_reasoning' => 'Haiku 未回覆此標的，預設通過',
+                    'score'           => 50,
+                ]);
+                Log::warning("HaikuPreFilterService: {$symbol} 未在批次回應中，預設通過");
+                continue;
+            }
+
+            $confidence = max(0, min(100, (int) ($r['confidence'] ?? 50)));
+            $keep       = (bool) ($r['keep'] ?? false);
+            $reason     = $r['reason'] ?? '';
+
+            $candidate->update([
+                'haiku_selected'  => $keep,
+                'haiku_reasoning' => $reason,
+                'score'           => $confidence,
+            ]);
+
+            Log::info("HaikuPreFilterService {$symbol}: " . ($keep ? '通過' : '排除') . " (信度{$confidence}) {$reason}");
+        }
+    }
+
+    /**
+     * Fallback：API 不可用時，全部標記 haiku_selected=true 讓 Opus 自行判斷
+     */
+    private function fallbackAll(Collection $candidates): Collection
+    {
+        foreach ($candidates as $candidate) {
+            $candidate->update([
+                'haiku_selected'  => true,
+                'haiku_reasoning' => 'Haiku 不可用，預設通過（Opus 自行判斷）',
+                'score'           => 50,
+            ]);
+        }
+        return $candidates->fresh();
+    }
+}

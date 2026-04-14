@@ -24,14 +24,13 @@ class ScreenCandidates extends Command
         foreach ($candidates as $c) {
             $stock = \App\Models\Stock::find($c['stock_id']);
             $this->line(sprintf(
-                "  %s %s | 買入: %.2f | 目標: %.2f | 停損: %.2f | 風報比: %.2f | 分數: %d | %s",
+                "  %s %s | 買入: %.2f | 目標: %.2f | 停損: %.2f | RR: %.2f | %s",
                 $stock->symbol,
                 $stock->name,
                 $c['suggested_buy'],
                 $c['target_price'],
                 $c['stop_loss'],
                 $c['risk_reward_ratio'],
-                $c['score'],
                 implode(', ', $c['reasons'])
             ));
         }

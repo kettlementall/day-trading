@@ -6,24 +6,15 @@
     <template v-else>
       <el-tabs v-model="activeTab" stretch>
 
-        <!-- ==================== Tab 1: 策略與評分 ==================== -->
-        <el-tab-pane label="策略與評分" name="scoring">
-
-          <!-- 策略分類 -->
+        <!-- ==================== Tab 1: 策略分類 ==================== -->
+        <el-tab-pane label="策略分類" name="scoring">
           <div v-if="formulas.strategy" class="tab-section">
-            <div class="section-title">策略分類</div>
-
             <div class="stock-card">
               <div class="formula-header">
                 <span class="formula-title">跌深反彈</span>
                 <el-switch v-model="formulas.strategy.config.bounce.enabled" size="small" />
               </div>
               <div v-if="formulas.strategy.config.bounce.enabled" class="formula-body">
-                <div class="param-row">
-                  <span>加分</span>
-                  <el-input-number v-model="formulas.strategy.config.bounce.score" :min="-15" :max="30" size="small" />
-                  <span class="unit">分</span>
-                </div>
                 <div class="param-row">
                   <span>單日急跌門檻</span>
                   <el-input-number v-model="formulas.strategy.config.bounce.washout_drop_pct" :min="-20" :max="0" :step="1" size="small" />
@@ -54,11 +45,6 @@
               </div>
               <div v-if="formulas.strategy.config.breakout.enabled" class="formula-body">
                 <div class="param-row">
-                  <span>加分</span>
-                  <el-input-number v-model="formulas.strategy.config.breakout.score" :min="-15" :max="30" size="small" />
-                  <span class="unit">分</span>
-                </div>
-                <div class="param-row">
                   <span>前高回溯天數</span>
                   <el-input-number v-model="formulas.strategy.config.breakout.prev_high_days" :min="1" :max="20" size="small" />
                   <span class="unit">日</span>
@@ -73,50 +59,6 @@
 
             <el-button type="primary" size="small" @click="saveFormula('strategy')" :loading="formulaSaving === 'strategy'">
               儲存策略設定
-            </el-button>
-          </div>
-
-          <!-- 評分項目 -->
-          <div v-if="formulas.scoring" class="tab-section">
-            <div class="section-title">評分項目</div>
-
-            <el-collapse v-model="openGroups">
-              <el-collapse-item v-for="group in scoringGroups" :key="group.key" :name="group.key">
-                <template #title>
-                  <span class="group-title">{{ group.label }}</span>
-                  <span class="group-count">{{ group.items.length }} 項</span>
-                </template>
-                <div v-for="item in group.items" :key="item.key" class="scoring-card">
-                  <div class="formula-header">
-                    <span class="scoring-name">{{ item.label }}</span>
-                    <div class="scoring-right">
-                      <el-input-number
-                        v-model="formulas.scoring.config[item.key].score"
-                        :min="-15" :max="30" size="small"
-                        :disabled="!formulas.scoring.config[item.key].enabled"
-                        style="width: 80px"
-                      />
-                      <span class="unit">分</span>
-                      <el-switch v-model="formulas.scoring.config[item.key].enabled" size="small" />
-                    </div>
-                  </div>
-                  <div v-if="formulas.scoring.config[item.key].enabled && item.params.length > 0" class="scoring-params">
-                    <div v-for="p in item.params" :key="p.field" class="param-row">
-                      <span>{{ p.label }}</span>
-                      <el-input-number
-                        v-model="formulas.scoring.config[item.key][p.field]"
-                        :min="p.min" :max="p.max" :step="p.step || 1" :precision="p.precision || 0"
-                        size="small"
-                      />
-                      <span class="unit">{{ p.unit }}</span>
-                    </div>
-                  </div>
-                </div>
-              </el-collapse-item>
-            </el-collapse>
-
-            <el-button type="primary" size="small" style="margin-top: 12px" @click="saveFormula('scoring')" :loading="formulaSaving === 'scoring'">
-              儲存評分設定
             </el-button>
           </div>
         </el-tab-pane>
@@ -379,69 +321,6 @@ const syncTasks = ref(['daily', 'institutional', 'margin'])
 const syncing = ref(false)
 const syncResults = ref([])
 
-// 評分 collapse 預設展開技術面
-const openGroups = ref(['technical'])
-
-// 評分項目（分組）
-const scoringGroups = [
-  {
-    key: 'technical',
-    label: '技術面',
-    items: [
-      { key: 'volume_surge', label: '量能放大', params: [{ field: 'ratio', label: '爆量倍數', min: 1, max: 5, step: 0.1, precision: 1, unit: '倍' }] },
-      { key: 'ma_bullish', label: '均線多頭排列', params: [] },
-      { key: 'above_ma5', label: '站上 5MA', params: [] },
-      { key: 'kd_golden_cross', label: 'KD 黃金交叉', params: [] },
-      { key: 'rsi_moderate', label: 'RSI 適中', params: [
-        { field: 'min', label: '最低', min: 0, max: 100, unit: '' },
-        { field: 'max', label: '最高', min: 0, max: 100, unit: '' },
-      ] },
-      { key: 'amplitude_moderate', label: '振幅適中', params: [
-        { field: 'min', label: '最低', min: 0, max: 20, step: 0.5, precision: 1, unit: '%' },
-        { field: 'max', label: '最高', min: 0, max: 20, step: 0.5, precision: 1, unit: '%' },
-      ] },
-      { key: 'break_prev_high', label: '突破前高', params: [] },
-      { key: 'bollinger_position', label: '布林中軌上方', params: [] },
-    ],
-  },
-  {
-    key: 'institutional',
-    label: '籌碼面',
-    items: [
-      { key: 'foreign_buy', label: '外資買超', params: [] },
-      { key: 'consecutive_buy', label: '法人連續買超', params: [{ field: 'min_days', label: '最少天數', min: 1, max: 10, unit: '日' }] },
-      { key: 'trust_buy', label: '投信買超', params: [] },
-      { key: 'margin_decrease', label: '融資減少', params: [] },
-      { key: 'foreign_big_buy', label: '外資大買', params: [{ field: 'volume_ratio', label: '佔成交量比', min: 0.01, max: 0.50, step: 0.01, precision: 2, unit: '' }] },
-      { key: 'dealer_big_buy', label: '自營大買', params: [{ field: 'volume_ratio', label: '佔成交量比', min: 0.01, max: 0.50, step: 0.01, precision: 2, unit: '' }] },
-    ],
-  },
-  {
-    key: 'momentum',
-    label: '動能面',
-    items: [
-      { key: 'high_volatility', label: '高波動', params: [
-        { field: 'lookback_days', label: '回溯天數', min: 1, max: 30, unit: '日' },
-        { field: 'min_amplitude', label: '振幅門檻', min: 1, max: 20, step: 0.5, precision: 1, unit: '%' },
-      ] },
-      { key: 'strong_trend', label: '近月強勢', params: [
-        { field: 'lookback_days', label: '回溯天數', min: 5, max: 60, unit: '日' },
-        { field: 'min_gain_pct', label: '漲幅門檻', min: 1, max: 100, step: 1, unit: '%' },
-      ] },
-      { key: 'high_volume', label: '萬張量能', params: [{ field: 'min_lots', label: '最低張數', min: 1000, max: 100000, step: 1000, unit: '張' }] },
-    ],
-  },
-  {
-    key: 'penalty',
-    label: '負面因子（扣分）',
-    items: [
-      { key: 'volume_shrink', label: '量能萎縮', params: [] },
-      { key: 'extended_rally', label: '連漲過度延伸', params: [{ field: 'min_days', label: '連漲天數', min: 3, max: 10, unit: '日' }] },
-      { key: 'low_rr', label: '風報比偏低', params: [{ field: 'threshold', label: 'RR 門檻', min: 1.0, max: 2.0, step: 0.1, precision: 1, unit: '' }] },
-    ],
-  },
-]
-
 onMounted(async () => {
   loading.value = true
   formulaLoading.value = true
@@ -575,50 +454,6 @@ function formatCondition(cond) {
   align-items: center;
   gap: 8px;
   font-size: 14px;
-}
-
-/* 評分 collapse */
-.group-title {
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.group-count {
-  margin-left: 6px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.scoring-card {
-  padding: 10px 0;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-}
-
-.scoring-card:last-child {
-  border-bottom: none;
-}
-
-.scoring-card .formula-header {
-  margin-bottom: 0;
-}
-
-.scoring-name {
-  font-size: 14px;
-}
-
-.scoring-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.scoring-params {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--el-border-color-lighter);
 }
 
 /* 價格公式 */

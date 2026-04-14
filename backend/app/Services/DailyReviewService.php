@@ -117,7 +117,7 @@ class DailyReviewService
         $newsIndustries
     ): string {
         // 候選標的明細（TSV 格式）
-        $lines = ["symbol\tname\tind\tstrat\tscore\treasons\tbuy\ttarget\tstop\trr\topen\thigh\tlow\tclose\tbuy?\ttgt?\tstop?\tprofit%\tmorning_grade\tmorning_score"];
+        $lines = ["symbol\tname\tind\tstrat\thaiku_reason\ttags\tbuy\ttarget\tstop\trr\topen\thigh\tlow\tclose\tbuy?\ttgt?\tstop?\tprofit%\tmorning_grade\tmorning_score"];
         foreach ($candidates as $c) {
             $r = $c->result;
             $suggestedBuy = (float) $c->suggested_buy;
@@ -133,14 +133,14 @@ class DailyReviewService
                 }
             }
 
-            $reasons = implode('|', is_array($c->reasons) ? $c->reasons : []);
+            $tags = implode(',', is_array($c->reasons) ? $c->reasons : []);
             $lines[] = implode("\t", [
                 $c->stock->symbol,
                 $c->stock->name,
                 $c->stock->industry ?? '-',
-                $c->strategy_type ?? '-',
-                $c->score,
-                $reasons,
+                $c->intraday_strategy ?? '-',
+                $c->haiku_reasoning ?? '-',
+                $tags,
                 $suggestedBuy,
                 (float) $c->target_price,
                 (float) $c->stop_loss,

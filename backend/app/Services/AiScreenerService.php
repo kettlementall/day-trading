@@ -240,7 +240,7 @@ SYSTEM;
         return <<<MSG
 ## 待評估標的：{$stock->symbol} {$stock->name}（{$stock->industry}）
 
-規則式分數：{$candidate->score}　策略分類：{$candidate->strategy_type}
+Haiku 信度：{$candidate->score}　Haiku 理由：{$candidate->haiku_reasoning}
 建議買入：{$candidate->suggested_buy}　目標：{$candidate->target_price}　停損：{$candidate->stop_loss}　RR：{$candidate->risk_reward_ratio}
 評分理由：{$reasons}
 
@@ -350,15 +350,8 @@ MSG;
         $candidate->update($updates);
     }
 
-    /**
-     * 根據現有 strategy_type 給預設盤中策略
-     */
     private function defaultStrategy(Candidate $candidate): string
     {
-        return match ($candidate->strategy_type) {
-            'bounce'   => 'bounce',
-            'breakout' => 'breakout_fresh',
-            default    => 'momentum',
-        };
+        return 'momentum';
     }
 }

@@ -144,9 +144,15 @@
             <span class="stock-symbol">{{ item.stock.symbol }}</span>
             <span class="stock-name">{{ item.stock.name }}</span>
           </div>
-          <el-tag size="small" :type="scoreType(item.score)">
-            {{ item.score }} 分
-          </el-tag>
+          <el-tooltip
+            :content="item.haiku_reasoning || ''"
+            placement="top"
+            :disabled="!item.haiku_reasoning"
+          >
+            <el-tag size="small" :type="scoreType(item.score)">
+              Haiku {{ item.score }}
+            </el-tag>
+          </el-tooltip>
         </div>
 
         <div class="card-prices">
@@ -369,9 +375,9 @@ function formatTime(dt) {
 }
 
 function scoreType(score) {
-  if (score >= 80) return 'danger'
-  if (score >= 60) return 'warning'
-  return 'info'
+  if (score >= 65) return 'success'
+  if (score >= 40) return 'warning'
+  return 'danger'
 }
 
 function monitorStatusType(status) {

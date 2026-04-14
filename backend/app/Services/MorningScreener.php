@@ -89,8 +89,8 @@ class MorningScreener
                 $confirmed = false;
             }
 
-            // 支撐回測未通過 → 降級為不確認（僅針對突破型）
-            if ($confirmed && !$supportResult['passed'] && $candidate->strategy_type === 'breakout') {
+            // 支撐回測未通過 → 降級為不確認
+            if ($confirmed && !$supportResult['passed']) {
                 $confirmed = false;
             }
 
