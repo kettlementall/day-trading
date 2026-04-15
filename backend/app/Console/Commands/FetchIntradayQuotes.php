@@ -6,7 +6,7 @@ use App\Models\Candidate;
 use App\Models\DailyQuote;
 use App\Models\IntradayQuote;
 use App\Models\Stock;
-use App\Services\TwseRealtimeClient;
+use App\Services\FugleRealtimeClient;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
@@ -15,7 +15,7 @@ class FetchIntradayQuotes extends Command
     protected $signature = 'stock:fetch-intraday {date?}';
     protected $description = '抓取盤中即時行情（針對當日候選標的）';
 
-    public function __construct(private TwseRealtimeClient $client)
+    public function __construct(private FugleRealtimeClient $client)
     {
         parent::__construct();
     }

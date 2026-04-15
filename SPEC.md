@@ -19,7 +19,7 @@
 | 08:15 | `news:compute-indices`      | 計算新聞指數                                                    |
 | 09:05 | `stock:fetch-intraday`      | 盤中即時行情（5分K）                                               |
 | 09:30 | `stock:fetch-intraday`      | 盤中即時行情（30分鐘後狀態）                                           |
-| 09:00-13:30 | `stock:monitor-intraday` | 盤中即時監控（每分鐘觸發，內部依時段動態控頻）                                   |
+| 09:00-13:30 | `stock:monitor-intraday` | 盤中即時監控（每 30 秒快照；command 內部 loop，scheduler 每分鐘觸發作為當機重啟保底） |
 | 12:00 | `news:fetch`                | 午間新聞抓取                                                    |
 | 12:15 | `news:compute-indices`      | 計算新聞指數                                                    |
 | 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情                                                 |
@@ -360,7 +360,7 @@ API 失敗時，取 Haiku 信度前 15 名，預設 `intraday_strategy = 'moment
 |------|---------|-----------|------|
 | Haiku 批量預篩 | `ANTHROPIC_HAIKU_MODEL` | claude-haiku-4-5-20251001 | 每批 15 檔，速度/成本優先 |
 | Opus 精審 | `ANTHROPIC_SCREENING_MODEL` | claude-opus-4-6 | 深度推理，每檔獨立 call，最多 30 檔 |
-| 盤中校準/滾動 | `ANTHROPIC_INTRADAY_MODEL` | claude-sonnet-4-6 | 每 1-3 分鐘觸發，速度優先 |
+| 盤中校準/滾動 | `ANTHROPIC_INTRADAY_MODEL` | claude-sonnet-4-6 | 快照每 30 秒，AI 建議每 10-20 分鐘，速度優先 |
 | 新聞情緒分析 | `ANTHROPIC_SENTIMENT_MODEL` | claude-haiku-4-5 | 高頻量大，簡單分類任務 |
 | 每日檢討 | `ANTHROPIC_MODEL` | claude-opus-4-6 | 深度分析，一天一次 |
 
@@ -418,18 +418,17 @@ API 失敗時，取 Haiku 信度前 15 名，預設 `intraday_strategy = 'moment
 
 ### 快照資料層
 
-`backend/app/Services/TwseRealtimeClient.php` 負責 TWSE/TPEX MIS API 即時報價，20 股一批、500ms 間隔。
+`backend/app/Services/FugleRealtimeClient.php` 負責 Fugle MarketData API 即時報價（每支股票獨立 REST call，150ms 間隔，使用 `FUGLE_API_KEY`）。
 
-`stock:monitor-intraday` 每分鐘由排程觸發，內部依時段動態控頻：
-
-| 時段 | 頻率 | 說明 |
-|------|------|------|
-| 09:00-09:30 | 每 1 分鐘 | 開盤初期高頻 |
-| 09:30-10:30 | 每 2 分鐘 | 早盤 |
-| 10:30-13:00 | 每 3 分鐘 | 盤中低頻 |
-| 13:00-13:30 | 每 1 分鐘 | 尾盤高頻 |
+`stock:monitor-intraday` 為長駐 loop 進程，自 09:00 啟動直到 13:30 自行結束，**每 30 秒**執行一次快照週期。Scheduler 保留每分鐘觸發，搭配 `withoutOverlapping(60)` 確保：
+- 進程存活時：scheduler 每分鐘觸發被擋掉，不產生重複執行
+- 進程異常中斷時：最多 1 分鐘內 scheduler 自動重啟
 
 快照寫入 `intraday_snapshots` 表（時序資料，always insert）。
+
+#### 漲跌停現價判定規則
+
+以 **昨日收盤 × 1.10 / 0.90** 為標準漲跌停價，優先使用 Fugle 回傳的 `isLimitUp` / `isLimitDown` 旗標。`closePrice` 為空時，漲停用 `limitUpPrice`、跌停用 `limitDownPrice`、一般用 bid/ask 中間價補齊現價。
 
 ### 狀態機
 

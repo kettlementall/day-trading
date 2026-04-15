@@ -146,15 +146,19 @@ class TwseRealtimeClient
             $current = $bestAsk;
         } elseif ($bestAsk <= 0 && $bestBid <= 0 && $prevClose > 0 && $high > 0) {
             // 情境 2: 雙邊都沒掛單，用 high/low 判斷是否鎖漲停/跌停
-            $highPct = ($high - $prevClose) / $prevClose;
-            $lowPct = ($prevClose - ($low > 0 ? $low : $prevClose)) / $prevClose;
+            // 漲跌停以昨收為基準（±10%），並要求 low 仍在 high 的 98% 以內，
+            // 避免股票曾達漲停後回落時，把歷史最高誤認為現價。
+            $limitUpPrice  = $prevClose * 1.10;
+            $limitDownPrice = $prevClose * 0.90;
 
-            if ($highPct >= 0.09) {
+            if ($high >= $limitUpPrice * 0.999 && $low > 0 && $low >= $high * 0.98) {
+                // high 在漲停價附近，且 low 未大幅低於 high → 股價仍鎖定在漲停
                 $limitUp = true;
-                $current = $high;   // 漲停價 = 今日最高
-            } elseif ($lowPct >= 0.09) {
+                $current = $high;
+            } elseif ($low > 0 && $low <= $limitDownPrice * 1.001 && $high <= $low * 1.02) {
+                // low 在跌停價附近，且 high 未大幅高於 low → 股價仍鎖定在跌停
                 $limitDown = true;
-                $current = $low;    // 跌停價 = 今日最低
+                $current = $low;
             }
         }
 
@@ -162,6 +166,17 @@ class TwseRealtimeClient
             $high = max($high, $current);
         } elseif ($limitDown && $low > 0) {
             $low = min($low, $current);
+        }
+
+        // z='-' 但有掛單時，用買賣中間價取代 open 作為現價估計
+        if ($current <= 0 && !$limitUp && !$limitDown) {
+            if ($bestAsk > 0 && $bestBid > 0) {
+                $current = round(($bestAsk + $bestBid) / 2, 2);
+            } elseif ($bestBid > 0) {
+                $current = $bestBid;
+            } elseif ($bestAsk > 0) {
+                $current = $bestAsk;
+            }
         }
 
         return [

@@ -11,7 +11,7 @@ use App\Models\Stock;
 use App\Services\IntradayAiAdvisor;
 use App\Services\MonitorService;
 use App\Services\TelegramService;
-use App\Services\TwseRealtimeClient;
+use App\Services\FugleRealtimeClient;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -19,10 +19,12 @@ use Illuminate\Support\Facades\Log;
 class MonitorStocks extends Command
 {
     protected $signature = 'stock:monitor-intraday {date?}';
-    protected $description = '盤中即時監控：動態頻率快照 + AI 校準 + 規則式監控（09:00-13:30）';
+    protected $description = '盤中即時監控：每 30 秒快照 + AI 校準 + 規則式監控（09:00-13:30）';
+
+    private ?\Carbon\Carbon $lastAiAdviceAt = null;
 
     public function __construct(
-        private TwseRealtimeClient $client,
+        private FugleRealtimeClient $client,
         private MonitorService $monitorService,
         private IntradayAiAdvisor $aiAdvisor,
         private TelegramService $telegram,
@@ -39,35 +41,57 @@ class MonitorStocks extends Command
             return self::SUCCESS;
         }
 
+        // 時段外（scheduler 重啟保底用，正常由 between() 濾掉）
         $now = now();
-        $hour = (int) $now->format('H');
-        $minute = (int) $now->format('i');
-        $timeStr = $now->format('H:i');
-
-        // 時段外不執行
-        if ($hour < 9 || ($hour >= 13 && $minute > 30) || $hour >= 14) {
+        if ($now->format('H:i') > '13:30' || $now->format('H') < 9) {
             $this->line("非交易時段，跳過");
             return self::SUCCESS;
         }
 
-        // 動態頻率控制
-        $interval = $this->getInterval($hour, $minute);
-        if ($minute % $interval !== 0) {
-            return self::SUCCESS;
+        $this->info("盤中監控啟動（{$date}），每 30 秒快照");
+
+        while (true) {
+            $now = now();
+            $timeStr = $now->format('H:i');
+
+            if ($timeStr > '13:30') {
+                $this->info("已過 13:30，監控結束");
+                break;
+            }
+
+            $this->runCycle($date, $now);
+
+            // 最後一個 cycle 做完直接結束，不再 sleep
+            if (now()->format('H:i') >= '13:30') {
+                break;
+            }
+
+            sleep(30);
         }
 
-        // 取得當日候選標的
+        return self::SUCCESS;
+    }
+
+    /**
+     * 單次監控週期（每 30 秒執行一次）
+     */
+    private function runCycle(string $date, \Carbon\Carbon $now): void
+    {
+        $hour    = (int) $now->format('H');
+        $minute  = (int) $now->format('i');
+        $timeStr = $now->format('H:i');
+
         $candidates = Candidate::with('stock')
             ->where('trade_date', $date)
             ->get();
 
         if ($candidates->isEmpty()) {
-            $this->warn("無 {$date} 的候選標的，跳過監控");
-            return self::SUCCESS;
+            $this->warn("[{$timeStr}] 無 {$date} 候選標的");
+            return;
         }
 
         $stocks = $candidates->pluck('stock')->unique('id')->values()->all();
-        $this->info("[{$timeStr}] 快照 " . count($stocks) . " 檔（間隔 {$interval} 分鐘）");
+        $this->info("[{$timeStr}] 快照 " . count($stocks) . " 檔");
 
         // ===== Step 1: 抓取即時報價並寫入快照 =====
         $quotes = $this->client->fetchQuotes($stocks);
@@ -77,27 +101,28 @@ class MonitorStocks extends Command
         // ===== Step 1.5: 漲停/跌停通知 =====
         $this->notifyLimitHits($quotes, $date);
 
-        // ===== Step 2: 09:05 AI 開盤校準（需有快照資料才執行） =====
-        if ($written > 0 && !$this->hasCalibrated($date) && $hour === 9 && $minute >= 1 && $minute <= 10) {
+        // ===== Step 2: 09:01–09:10 AI 開盤校準（只做一次） =====
+        if ($written > 0 && !$this->hasCalibrated($date) && $timeStr >= '09:01' && $timeStr <= '09:10') {
             $this->performOpeningCalibration($date, $candidates);
         }
 
         // ===== Step 3: 規則式監控（每次快照後） =====
         $emergencyMonitors = $this->monitorService->processSnapshot($date);
 
-        // ===== Step 4: AI 滾動判斷（依時段動態頻率） =====
-        // 09:05-09:30 每10分 / 09:30-10:30 每15分 / 10:30-13:00 每20分 / 13:00-13:25 每10分
+        // ===== Step 4: AI 滾動判斷（以上次執行時間控制間隔） =====
         $aiInterval = $this->getAiInterval($hour, $minute);
-        if ($aiInterval > 0 && $minute % $aiInterval === 5 && $timeStr >= '09:15') {
-            $this->performRollingAdvice($date);
+        if ($aiInterval > 0 && $timeStr >= '09:15') {
+            $elapsed = $this->lastAiAdviceAt ? $this->lastAiAdviceAt->diffInMinutes($now) : PHP_INT_MAX;
+            if ($elapsed >= $aiInterval) {
+                $this->performRollingAdvice($date);
+                $this->lastAiAdviceAt = $now->copy();
+            }
         }
 
-        // ===== Step 5: 緊急 AI 觸發（不等下一個排程週期）=====
+        // ===== Step 5: 緊急 AI 觸發 =====
         if (!empty($emergencyMonitors)) {
             $this->performEmergencyAdvice($date, $emergencyMonitors);
         }
-
-        return self::SUCCESS;
     }
 
     /**
@@ -298,16 +323,6 @@ class MonitorStocks extends Command
         }
 
         return $written;
-    }
-
-    private function getInterval(int $hour, int $minute): int
-    {
-        return match (true) {
-            $hour === 9 && $minute < 30 => 1,
-            $hour === 9 || ($hour === 10 && $minute < 30) => 2,
-            $hour >= 13 => 1,
-            default => 3,
-        };
     }
 
     private function getAiInterval(int $hour, int $minute): int

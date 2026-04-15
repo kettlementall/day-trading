@@ -64,12 +64,13 @@ scheduledCommand('news:compute-indices', '新聞指數(12:15)')->dailyAt('12:15'
 scheduledCommand('news:fetch', '新聞抓取(18:00)')->dailyAt('18:00');
 scheduledCommand('news:compute-indices', '新聞指數(18:15)')->dailyAt('18:15');
 
-// 盤中即時監控：每 1 分鐘觸發，指令內部依時段控制實際頻率
-// 09:00-09:30 每 1 分 / 09:30-10:30 每 2 分 / 10:30-13:00 每 3 分 / 13:00-13:30 每 1 分
+// 盤中即時監控：command 內部每 30 秒 loop，scheduler 每分鐘觸發作為當機重啟保底
+// withoutOverlapping(60)：若 process 存活中，新觸發直接跳過；異常中斷後最多 60 分鐘內重啟
 Schedule::command('stock:monitor-intraday')
     ->everyMinute()
     ->between('9:00', '13:30')
     ->weekdays()
+    ->withoutOverlapping(60)
     ->appendOutputTo($scheduleLog);
 
 // 每日 22:00 健康檢查（健康檢查自己會發通知，不重複）

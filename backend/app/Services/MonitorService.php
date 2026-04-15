@@ -207,8 +207,10 @@ class MonitorService
         $price = (float) $latest->current_price;
         $prevClose = (float) $latest->prev_close;
 
-        // 漲停價附近（≥9.5%）不進場 — 買不到或追高風險極大
-        if ($prevClose > 0 && ($price - $prevClose) / $prevClose >= 0.095) {
+        // 漲停價附近不進場 — 買不到或追高風險極大
+        // 漲停以昨收 ×1.10 為準，現價達漲停的 99.5% 即視為接近漲停
+        $limitUpPrice = $prevClose * 1.10;
+        if ($limitUpPrice > 0 && $price >= $limitUpPrice * 0.995) {
             return;
         }
 
