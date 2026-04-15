@@ -529,32 +529,33 @@ MSG;
 - **stop_loss**：明日（{$tradeDate}，出場日 T+1）停損賣出價（技術支撐位跌破則出）
 - **key_levels**：明日（{$tradeDate}）盤中重要支撐/壓力位，含理由，供盤中決策參考
 
+## 各欄位填寫規則
+- **reasoning**：技術面一句話摘要（選入或排除原因）
+- **news_theme_reason**：**只能**引用下方 per-stock 訊息中「個股相關新聞與題材」及「類股強弱」兩個區塊的內容，說明有哪些利多新聞、題材或類股強勢加持此標的（1–2句）；若無相關新聞或類股落後則填 null
+- **fundamental_reason**：**只能**引用「基本面估值」區塊的本益比、殖利率、股價淨值比具體數字，說明估值偏低/合理/偏高及對隔日沖的影響（1句）；若無估值資料則填 null
+- **overnight_strategy**：操作須知，含何時建倉、明日關鍵觀察點、預期走勢（2–3句）
+- **entry_type**：gap_up_open（跳空高開）｜pullback_entry（拉回建倉）｜open_follow_through（延續開盤）｜limit_up_chase（漲停追強）
+
 ## 回覆格式
 請直接回覆 JSON（不要加 markdown 標記），格式：
 {
   "selected": true,
-  "reasoning": "一句話選入/排除理由（技術面摘要）",
-  "news_theme_reason": "僅引用「個股相關新聞與題材」及「類股強弱」區塊：說明有哪些利多新聞、題材或類股強勢加持此標的，若無相關新聞或類股落後則填 null",
-  "fundamental_reason": "僅引用「基本面估值」區塊的本益比、殖利率、股價淨值比數字，說明估值是否合理（偏低/合理/偏高）及對隔日沖的影響，若無估值資料則填 null",
-  "overnight_strategy": "操作須知：何時建倉、明日關鍵觀察點、預期走勢（2–3句）",
+  "reasoning": "技術面選入/排除一句話",
+  "news_theme_reason": "新聞題材/類股強勢說明，或 null",
+  "fundamental_reason": "本益比/殖利率/淨值比說明，或 null",
+  "overnight_strategy": "操作須知2–3句",
   "entry_type": "gap_up_open|pullback_entry|open_follow_through|limit_up_chase",
   "gap_potential_percent": 1.5,
   "suggested_buy": 788.0,
   "target_price": 802.0,
   "stop_loss": 776.0,
-  "price_reasoning": "一句話解釋三個價格設定依據（含技術位說明）",
+  "price_reasoning": "三個價格設定依據",
   "key_levels": [
     {"price": 780.0, "type": "support", "reason": "MA20 支撐"},
     {"price": 800.0, "type": "resistance", "reason": "近期高點壓力"}
   ],
   "warnings": ["注意事項，可為空陣列"]
 }
-
-entry_type 說明：
-- gap_up_open：明日預期跳空高開後追強
-- pullback_entry：今日盤中拉回整理，尾盤回升
-- open_follow_through：今日收盤強勢，明日延續開盤動能
-- limit_up_chase：今日漲停收盤，明日開盤追強
 
 若不選入，news_theme_reason/fundamental_reason/overnight_strategy/entry_type/gap_potential_percent/suggested_buy/target_price/stop_loss/price_reasoning/key_levels/warnings 均可為 null。
 SYSTEM;
