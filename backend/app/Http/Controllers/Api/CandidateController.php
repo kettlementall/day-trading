@@ -29,9 +29,10 @@ class CandidateController extends Controller
             ->where('trade_date', $date)
             ->where('mode', $mode);
 
-        // 隔日沖：只顯示 Opus 已審核過的標的（ai_selected 非 null）
+        // 隔日沖：只顯示 Opus 已審核過的標的（ai_reasoning 有內容代表 Opus 留過評語）
+        // ai_selected 預設值為 false，無法靠它判斷是否有被 Opus 看過
         if ($mode === 'overnight') {
-            $query->whereNotNull('ai_selected');
+            $query->where('ai_reasoning', '!=', '')->whereNotNull('ai_reasoning');
         }
 
         $candidates = $query
