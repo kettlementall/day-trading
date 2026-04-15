@@ -533,9 +533,9 @@ MSG;
 請直接回覆 JSON（不要加 markdown 標記），格式：
 {
   "selected": true,
-  "reasoning": "一句話選入/排除理由",
-  "news_theme_reason": "消息面／題材面／籌碼面（法人動向）選入理由（1–2句，無則 null）",
-  "fundamental_reason": "基本面／估值面選入理由（本益比、殖利率、股價淨值比等，無則 null）",
+  "reasoning": "一句話選入/排除理由（技術面摘要）",
+  "news_theme_reason": "僅引用「個股相關新聞與題材」及「類股強弱」區塊：說明有哪些利多新聞、題材或類股強勢加持此標的，若無相關新聞或類股落後則填 null",
+  "fundamental_reason": "僅引用「基本面估值」區塊的本益比、殖利率、股價淨值比數字，說明估值是否合理（偏低/合理/偏高）及對隔日沖的影響，若無估值資料則填 null",
   "overnight_strategy": "操作須知：何時建倉、明日關鍵觀察點、預期走勢（2–3句）",
   "entry_type": "gap_up_open|pullback_entry|open_follow_through|limit_up_chase",
   "gap_potential_percent": 1.5,
