@@ -25,9 +25,16 @@ class CandidateController extends Controller
 
         $relations = $mode === 'overnight' ? ['stock', 'result', 'monitor'] : ['stock', 'result'];
 
-        $candidates = Candidate::with($relations)
+        $query = Candidate::with($relations)
             ->where('trade_date', $date)
-            ->where('mode', $mode)
+            ->where('mode', $mode);
+
+        // 隔日沖：只顯示 Opus 已審核過的標的（ai_selected 非 null）
+        if ($mode === 'overnight') {
+            $query->whereNotNull('ai_selected');
+        }
+
+        $candidates = $query
             ->orderByDesc('ai_selected')
             ->orderByDesc('score')
             ->get();
