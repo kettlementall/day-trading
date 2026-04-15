@@ -10,7 +10,11 @@ backend/storage/*.key
 backend/storage/framework/cache/data/*
 backend/storage/framework/sessions/*
 backend/storage/framework/views/*
+backend/storage/logs/
 backend/.phpunit.result.cache
+
+# IDE
+.idea/
 
 # Frontend build
 frontend/dist/

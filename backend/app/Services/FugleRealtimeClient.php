@@ -115,7 +115,7 @@ class FugleRealtimeClient
             }
         }
 
-        // totalVolume 單位為「股」(shares)，與舊版 TwseRealtimeClient 轉換後一致
+        // totalVolume 單位為「股」(shares)，非張（1 張 = 1000 股）
         $accVolume = (int) ($data['totalVolume'] ?? 0);
 
         // lastUpdated: ISO-8601 字串（"2026-04-15T09:30:00.000+08:00"）→ ms

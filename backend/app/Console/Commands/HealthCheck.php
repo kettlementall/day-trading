@@ -147,22 +147,26 @@ class HealthCheck extends Command
             $checks[] = ['name' => '美股指數', 'status' => 'ok', 'detail' => "{$usIndexCount} 筆"];
         }
 
-        // 6. TWSE API
-        try {
-            $response = Http::timeout(10)
-                ->get('https://www.twse.com.tw/exchangeReport/MI_INDEX', [
-                    'response' => 'json',
-                    'date' => now()->format('Ymd'),
-                    'type' => 'ALLBUT0999',
-                ]);
-            $json = $response->json();
-            if (isset($json['stat'])) {
-                $checks[] = ['name' => 'TWSE API', 'status' => 'ok', 'detail' => "可連線 (stat={$json['stat']})"];
-            } else {
-                $checks[] = ['name' => 'TWSE API', 'status' => 'warn', 'detail' => '回傳格式異常（無 stat 欄位）'];
+        // 6. Fugle MarketData API
+        $fugleKey = config('services.fugle.api_key', '');
+        if (!$fugleKey) {
+            $checks[] = ['name' => 'Fugle API', 'status' => 'error', 'detail' => 'FUGLE_API_KEY 未設定'];
+        } else {
+            try {
+                $response = Http::timeout(10)
+                    ->withHeaders(['X-API-KEY' => $fugleKey])
+                    ->get('https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/2330');
+                if ($response->successful() && !empty($response->json('symbol'))) {
+                    $price = $response->json('closePrice') ?? $response->json('openPrice') ?? '-';
+                    $checks[] = ['name' => 'Fugle API', 'status' => 'ok', 'detail' => "可連線，2330 現價 {$price}"];
+                } elseif ($response->status() === 401) {
+                    $checks[] = ['name' => 'Fugle API', 'status' => 'error', 'detail' => 'API KEY 無效或已過期'];
+                } else {
+                    $checks[] = ['name' => 'Fugle API', 'status' => 'warn', 'detail' => "HTTP {$response->status()}: " . $response->body()];
+                }
+            } catch (\Exception $e) {
+                $checks[] = ['name' => 'Fugle API', 'status' => 'error', 'detail' => '無法連線: ' . $e->getMessage()];
             }
-        } catch (\Exception $e) {
-            $checks[] = ['name' => 'TWSE API', 'status' => 'error', 'detail' => '無法連線: ' . $e->getMessage()];
         }
 
         // 6. Anthropic API (AI)
