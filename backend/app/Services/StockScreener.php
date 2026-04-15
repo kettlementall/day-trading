@@ -243,6 +243,7 @@ class StockScreener
         $candidates = $candidates->sortByDesc('_avg_vol5')->take($maxCandidates);
 
         // 寫入資料庫
+        $stockIds = [];
         foreach ($candidates as $data) {
             $dbData = $data;
             unset($dbData['_avg_vol5']);
@@ -250,9 +251,15 @@ class StockScreener
                 ['stock_id' => $dbData['stock_id'], 'trade_date' => $dbData['trade_date']],
                 $dbData
             );
+            $stockIds[] = $dbData['stock_id'];
         }
 
-        return $candidates;
+        // 回傳 Eloquent 模型（HaikuPreFilterService 需要 ->update() 方法）
+        return Candidate::with('stock')
+            ->where('trade_date', $tradeDate)
+            ->where('mode', $mode)
+            ->whereIn('stock_id', $stockIds)
+            ->get();
     }
 
     /**
