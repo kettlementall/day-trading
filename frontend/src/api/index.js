@@ -78,20 +78,20 @@ export const getNewsFetchStatus = (date) =>
   api.get('/news/fetch-status', { params: { date } })
 
 // 回測系統
-export const getDailyReviewUrl = (date) => {
+export const getDailyReviewUrl = (date, mode = 'intraday') => {
   const base = api.defaults.baseURL || '/api'
-  return `${base}/backtest/daily-review?date=${date}`
+  return `${base}/backtest/daily-review?date=${date}&mode=${mode}`
 }
 
-export const getDailyReviewShow = (date) =>
-  api.get('/backtest/daily-review-show', { params: { date } })
+export const getDailyReviewShow = (date, mode = 'intraday') =>
+  api.get('/backtest/daily-review-show', { params: { date, mode } })
 
-export const getDailyReviewDates = () =>
-  api.get('/backtest/daily-review-dates')
+export const getDailyReviewDates = (mode = 'intraday') =>
+  api.get('/backtest/daily-review-dates', { params: { mode } })
 
-export const getAnalyzeTipUrl = (date, symbol, notes) => {
+export const getAnalyzeTipUrl = (date, symbol, notes, mode = 'intraday') => {
   const base = api.defaults.baseURL || '/api'
-  const params = new URLSearchParams({ date, symbol, notes: notes || '' })
+  const params = new URLSearchParams({ date, symbol, notes: notes || '', mode })
   return `${base}/backtest/analyze-tip?${params}`
 }
 

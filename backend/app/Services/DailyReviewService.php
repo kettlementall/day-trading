@@ -723,7 +723,8 @@ PROMPT;
         string $symbol,
         string $notes = '',
         ?\Closure $logger = null,
-        ?\Closure $onChunk = null
+        ?\Closure $onChunk = null,
+        string $mode = 'intraday'
     ): array {
         $log = $logger ?? function (string $msg) { Log::info($msg); };
 
@@ -783,6 +784,7 @@ PROMPT;
 
             AiLesson::create([
                 'trade_date' => $date,
+                'mode'       => $mode,
                 'type'       => $type,
                 'category'   => $lesson['category'] ?? null,
                 'content'    => $lesson['content'],

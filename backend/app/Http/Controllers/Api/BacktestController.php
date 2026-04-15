@@ -91,27 +91,32 @@ class BacktestController extends Controller
     public function dailyReviewShow(Request $request): JsonResponse
     {
         $date = $request->input('date', now()->subDay()->toDateString());
+        $mode = $request->input('mode', 'intraday');
 
-        $review = DailyReview::where('trade_date', $date)->first();
+        $review = DailyReview::where('trade_date', $date)->where('mode', $mode)->first();
 
         if (!$review) {
             return response()->json(['exists' => false]);
         }
 
         return response()->json([
-            'exists' => true,
-            'date' => $review->trade_date->format('Y-m-d'),
+            'exists'           => true,
+            'date'             => $review->trade_date->format('Y-m-d'),
+            'mode'             => $review->mode,
             'candidates_count' => $review->candidates_count,
-            'report' => $review->report,
+            'report'           => $review->report,
         ]);
     }
 
     /**
      * 取得所有有報告的日期列表
      */
-    public function dailyReviewDates(): JsonResponse
+    public function dailyReviewDates(Request $request): JsonResponse
     {
-        $dates = DailyReview::orderByDesc('trade_date')
+        $mode = $request->input('mode', 'intraday');
+
+        $dates = DailyReview::where('mode', $mode)
+            ->orderByDesc('trade_date')
             ->pluck('trade_date')
             ->map(fn($d) => $d->format('Y-m-d'));
 
@@ -126,8 +131,9 @@ class BacktestController extends Controller
         $date   = $request->input('date', now()->toDateString());
         $symbol = strtoupper(trim($request->input('symbol', '')));
         $notes  = $request->input('notes') ?? '';
+        $mode   = $request->input('mode', 'intraday');
 
-        return response()->stream(function () use ($date, $symbol, $notes) {
+        return response()->stream(function () use ($date, $symbol, $notes, $mode) {
             while (ob_get_level()) ob_end_clean();
 
             $sendEvent = function (string $event, array $data) {
@@ -152,7 +158,8 @@ class BacktestController extends Controller
                 },
                 function (string $chunk) use ($sendEvent) {
                     $sendEvent('chunk', ['text' => $chunk]);
-                }
+                },
+                $mode
             );
 
             $sendEvent('done', $result);
@@ -170,8 +177,9 @@ class BacktestController extends Controller
     public function dailyReview(Request $request): StreamedResponse
     {
         $date = $request->input('date', now()->toDateString());
+        $mode = $request->input('mode', 'intraday');
 
-        return response()->stream(function () use ($date) {
+        return response()->stream(function () use ($date, $mode) {
             while (ob_get_level()) ob_end_clean();
 
             $sendEvent = function (string $event, array $data) {
@@ -189,7 +197,8 @@ class BacktestController extends Controller
                 },
                 function (string $chunk) use ($sendEvent) {
                     $sendEvent('chunk', ['text' => $chunk]);
-                }
+                },
+                $mode
             );
 
             $sendEvent('done', $result);

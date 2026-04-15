@@ -6,6 +6,10 @@
         <el-icon><TrendCharts /></el-icon>
         <span>候選標的</span>
       </router-link>
+      <router-link to="/overnight" class="nav-item" active-class="active">
+        <el-icon><Moon /></el-icon>
+        <span>隔日沖</span>
+      </router-link>
       <router-link to="/history" class="nav-item" active-class="active">
         <el-icon><Calendar /></el-icon>
         <span>歷史紀錄</span>

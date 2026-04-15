@@ -32,6 +32,11 @@ const routes = [
     component: () => import('../views/SpecView.vue'),
   },
   {
+    path: '/overnight',
+    name: 'overnight',
+    component: () => import('../views/OvernightView.vue'),
+  },
+  {
     path: '/stock/:id',
     name: 'stock-detail',
     component: () => import('../views/StockDetailView.vue'),
