@@ -2,19 +2,23 @@
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">隔日沖候選標的</h1>
-      <div class="header-actions">
-        <el-date-picker
-          v-model="store.currentDate"
-          type="date"
-          format="MM/DD (dd)"
-          value-format="YYYY-MM-DD"
-          :clearable="false"
-          size="small"
-          style="width: 140px"
-          @change="onDateChange"
-        />
-        <span v-if="store.lastUpdatedAt" class="last-updated">{{ formatTime(store.lastUpdatedAt) }}</span>
-      </div>
+      <span v-if="store.lastUpdatedAt" class="last-updated">{{ formatTime(store.lastUpdatedAt) }}</span>
+    </div>
+
+    <div class="date-bar">
+      <span class="date-label">建倉</span>
+      <el-date-picker
+        v-model="entryDate"
+        type="date"
+        format="MM/DD (dd)"
+        value-format="YYYY-MM-DD"
+        :clearable="false"
+        size="small"
+        style="width: 130px"
+        @change="onEntryDateChange"
+      />
+      <span class="date-arrow">→ 出場</span>
+      <span class="date-exit">{{ formatDate(store.currentDate) }}</span>
     </div>
 
     <div v-if="store.loading" class="loading-wrap">
@@ -149,19 +153,43 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useOvernightStore } from '../stores/overnight'
+import dayjs from 'dayjs'
 
 const store = useOvernightStore()
 const router = useRouter()
+
+// 建倉日（T+0）= store.currentDate（出場日 T+1）往前一個交易日
+const entryDate = ref(prevTradingDay(store.currentDate))
 
 onMounted(() => {
   store.fetchCandidates()
 })
 
-function onDateChange() {
+function onEntryDateChange() {
+  store.currentDate = nextTradingDay(entryDate.value)
   store.fetchCandidates(store.currentDate)
+}
+
+/** 下一個交易日（略過週末） */
+function nextTradingDay(dateStr) {
+  let d = dayjs(dateStr).add(1, 'day')
+  while (d.day() === 0 || d.day() === 6) d = d.add(1, 'day')
+  return d.format('YYYY-MM-DD')
+}
+
+/** 前一個交易日（略過週末） */
+function prevTradingDay(dateStr) {
+  let d = dayjs(dateStr).subtract(1, 'day')
+  while (d.day() === 0 || d.day() === 6) d = d.subtract(1, 'day')
+  return d.format('YYYY-MM-DD')
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return ''
+  return dayjs(dateStr).format('MM/DD (dd)')
 }
 
 function goDetail(item) {
@@ -218,19 +246,41 @@ function outcomeClass(outcome) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
-}
-
-.header-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
+  margin-bottom: 8px;
 }
 
 .last-updated {
   font-size: 11px;
   color: #909399;
   white-space: nowrap;
+}
+
+.date-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.date-label {
+  font-size: 12px;
+  color: #606266;
+  font-weight: 500;
+}
+
+.date-arrow {
+  font-size: 12px;
+  color: #909399;
+}
+
+.date-exit {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
 }
 
 .loading-wrap,
