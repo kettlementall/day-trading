@@ -17,13 +17,20 @@ class StockScreener
     /**
      * 執行選股篩選：只做物理不可能門檻 + 技術資料計算，交由 AI 判斷品質
      */
-    public function screen(string $tradeDate, ?int $minScoreOverride = null, ?int $maxCandidatesOverride = null): Collection
-    {
+    public function screen(
+        string $tradeDate,
+        ?int $minScoreOverride = null,
+        ?int $maxCandidatesOverride = null,
+        string $mode = 'intraday'
+    ): Collection {
         $stocks = Stock::where('is_day_trading', true)->get();
         $buyConfig = FormulaSetting::getConfig('suggested_buy');
         $targetConfig = FormulaSetting::getConfig('target_price');
         $stopConfig = FormulaSetting::getConfig('stop_loss');
-        $screenConfig = FormulaSetting::getConfig('screen_thresholds');
+        // overnight 模式使用獨立設定 key，不存在時 fallback 到 intraday 設定
+        $screenConfigKey = $mode === 'overnight' ? 'screen_thresholds_overnight' : 'screen_thresholds';
+        $screenConfig = FormulaSetting::getConfig($screenConfigKey)
+            ?: FormulaSetting::getConfig('screen_thresholds');
         $newsConfig = FormulaSetting::getConfig('news_sentiment');
         $labelConfig = FormulaSetting::getConfig('signal_labels');
         $candidates = collect();
@@ -107,6 +114,30 @@ class StockScreener
             // =========================================
             $reasons = [];
 
+            // overnight 專用標籤（法人連買3日、蓄勢整理、強勢排列）
+            if ($mode === 'overnight') {
+                // 法人連買3日：最近 3 日外資淨買均 > 0
+                if ($inst->count() >= 3) {
+                    $recentInst = $inst->take(3);
+                    if ($recentInst->every(fn($i) => (float)$i->foreign_net > 0)) {
+                        $reasons[] = '法人連買3日';
+                    }
+                }
+
+                // 蓄勢整理：近 3 日振幅均 < 2%，且收盤在 MA5 ±1% 範圍內
+                $recent3Amp = array_slice($amplitudes, 0, 3);
+                $allLowAmp = !empty($recent3Amp) && max($recent3Amp) < 2.0;
+                $nearMa5   = $ma5 && abs($closes[0] - $ma5) / $ma5 < 0.01;
+                if ($allLowAmp && $nearMa5) {
+                    $reasons[] = '蓄勢整理';
+                }
+
+                // 強勢排列：MA5 > MA10 > MA20 且收盤 > MA5
+                if ($ma5 && $ma10 && $ma20 && $ma5 > $ma10 && $ma10 > $ma20 && $closes[0] > $ma5) {
+                    $reasons[] = '強勢排列';
+                }
+            }
+
             // 量放大
             $cfg = $labelConfig['volume_surge'] ?? [];
             if ($cfg['enabled'] ?? true) {
@@ -148,58 +179,62 @@ class StockScreener
 
             // =========================================
             // 參考價格計算（AI 可覆寫）
+            // overnight 模式：Opus 全責設定三個價格，此處不計算
             // =========================================
 
-            // 消息面修正係數（只影響價格空間，不做評分）
-            $newsFactor = $this->calcNewsSentimentFactor(
-                $newsOverall, $newsIndustries, $stock, $newsConfig
-            );
-            $priceFactor = $newsFactor['price_factor'];
+            if ($mode === 'overnight') {
+                // overnight：價格全部留 null，等 Opus 精審時覆寫
+                $suggestedBuy = null;
+                $targetPrice  = null;
+                $stopLoss     = null;
+                $riskReward   = null;
+            } else {
+                // intraday：維持原有公式計算邏輯
+                $newsFactor = $this->calcNewsSentimentFactor(
+                    $newsOverall, $newsIndustries, $stock, $newsConfig
+                );
+                $priceFactor = $newsFactor['price_factor'];
 
-            // 漲跌停限制
-            $prevClose = $closes[0];
-            $limitUp = $this->tickRound($prevClose * 1.10, $prevClose, 'down');
-            $limitDown = $this->tickRound($prevClose * 0.90, $prevClose, 'up');
+                $prevClose = $closes[0];
+                $limitUp   = $this->tickRound($prevClose * 1.10, $prevClose, 'down');
+                $limitDown = $this->tickRound($prevClose * 0.90, $prevClose, 'up');
 
-            $suggestedBuy = $this->calcSuggestedBuy(
-                $closes, $lows, $highs, $indicators, $buyConfig
-            );
-            $targetPrice = $this->calcTargetPrice($closes, $highs, $atr, $bollinger, $targetConfig, $suggestedBuy);
-            $stopLoss = $this->calcStopLoss($closes, $lows, $atr, $stopConfig);
+                $suggestedBuy = $this->calcSuggestedBuy($closes, $lows, $highs, $indicators, $buyConfig);
+                $targetPrice  = $this->calcTargetPrice($closes, $highs, $atr, $bollinger, $targetConfig, $suggestedBuy);
+                $stopLoss     = $this->calcStopLoss($closes, $lows, $atr, $stopConfig);
 
-            // 消息面修正
-            if ($priceFactor !== 1.0) {
-                $targetPrice = round($suggestedBuy + ($targetPrice - $suggestedBuy) * $priceFactor, 2);
-                if ($priceFactor < 1.0) {
-                    $stopLoss = round($suggestedBuy - ($suggestedBuy - $stopLoss) * (2.0 - $priceFactor), 2);
+                if ($priceFactor !== 1.0) {
+                    $targetPrice = round($suggestedBuy + ($targetPrice - $suggestedBuy) * $priceFactor, 2);
+                    if ($priceFactor < 1.0) {
+                        $stopLoss = round($suggestedBuy - ($suggestedBuy - $stopLoss) * (2.0 - $priceFactor), 2);
+                    }
                 }
+
+                $suggestedBuy = max($limitDown, min($limitUp, $suggestedBuy));
+                $targetPrice  = max($limitDown, min($limitUp, $targetPrice));
+                $stopLoss     = max($limitDown, min($limitUp, $stopLoss));
+
+                $profitSpace = $targetPrice - $suggestedBuy;
+                $lossSpace   = $suggestedBuy - $stopLoss;
+                $riskReward  = $lossSpace > 0 ? round($profitSpace / $lossSpace, 2) : 0;
+
+                // 風報比絕對底線（overnight 模式跳過此篩選）
+                $minRR = $screenConfig['min_risk_reward'] ?? 0.8;
+                if ($riskReward < $minRR) continue;
             }
 
-            // 限價約束
-            $suggestedBuy = max($limitDown, min($limitUp, $suggestedBuy));
-            $targetPrice = max($limitDown, min($limitUp, $targetPrice));
-            $stopLoss = max($limitDown, min($limitUp, $stopLoss));
-
-            $profitSpace = $targetPrice - $suggestedBuy;
-            $lossSpace = $suggestedBuy - $stopLoss;
-            $riskReward = $lossSpace > 0 ? round($profitSpace / $lossSpace, 2) : 0;
-
-            // 風報比絕對底線（< 0.8 代表停損空間比獲利還大，不合理）
-            $minRR = $screenConfig['min_risk_reward'] ?? 0.8;
-            if ($riskReward < $minRR) continue;
-
             $candidates->push([
-                'stock_id'        => $stock->id,
-                'trade_date'      => $tradeDate,
-                'suggested_buy'   => $suggestedBuy,
-                'target_price'    => $targetPrice,
-                'stop_loss'       => $stopLoss,
+                'stock_id'          => $stock->id,
+                'trade_date'        => $tradeDate,
+                'mode'              => $mode,
+                'suggested_buy'     => $suggestedBuy,
+                'target_price'      => $targetPrice,
+                'stop_loss'         => $stopLoss,
                 'risk_reward_ratio' => $riskReward,
-                'score'           => 0,  // 由 Haiku 預篩後填入信度分數
-                'reasons'         => $reasons,
-                'indicators'      => $indicators,
-                // 5 日均量（用於排序，數字越大流動性越好）
-                '_avg_vol5'       => $avgVolume5,
+                'score'             => 0,
+                'reasons'           => $reasons,
+                'indicators'        => $indicators,
+                '_avg_vol5'         => $avgVolume5,
             ]);
         }
 

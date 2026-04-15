@@ -73,6 +73,27 @@ Schedule::command('stock:monitor-intraday')
     ->withoutOverlapping(60)
     ->appendOutputTo($scheduleLog);
 
+// ---- 隔日沖選股流程（每個交易日執行）----
+// 12:25 抓取類股指數（供 12:30 Haiku/Opus 選股使用）
+scheduledCommand('stock:fetch-sector-indices', '類股指數抓取')
+    ->dailyAt('12:25')->weekdays();
+
+// 12:30 隔日沖 AI 選股（Screener → Haiku → Opus，完成後可於 13:00-13:25 下單）
+scheduledCommand('stock:ai-screen-overnight', '隔日沖 AI 選股')
+    ->dailyAt('12:30')->weekdays();
+
+// 15:05 隔日沖結果回填（T+1 收盤後記錄實際開高低收 + 跳空數據）
+scheduledCommand('stock:update-overnight-results', '隔日沖結果回填')
+    ->dailyAt('15:05')->weekdays();
+
+// 15:35 隔日沖 AI 檢討報告（依賴 15:05 結果回填）
+scheduledCommand('stock:daily-review --mode=overnight', '隔日沖 AI 檢討')
+    ->dailyAt('15:35')->weekdays();
+
+// 每週日 22:00 計算策略量化績效統計（30/60 天窗口）
+scheduledCommand('stock:compute-strategy-stats', '策略績效統計')
+    ->weeklyOn(0, '22:00');
+
 // 每日 22:00 健康檢查（健康檢查自己會發通知，不重複）
 // 含：卡住 monitor 強制收尾 + 候選結果未回填重跑
 Schedule::command('stock:health-check')->dailyAt('22:00')->appendOutputTo($scheduleLog);

@@ -6,8 +6,8 @@ const api = axios.create({
 })
 
 // 候選標的
-export const getCandidates = (date) =>
-  api.get('/candidates', { params: { date } })
+export const getCandidates = (date, mode = 'intraday') =>
+  api.get('/candidates', { params: { date, mode } })
 
 export const getCandidateDates = () =>
   api.get('/candidates/dates')

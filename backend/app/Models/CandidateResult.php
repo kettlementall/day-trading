@@ -14,6 +14,7 @@ class CandidateResult extends Model
         'entry_time', 'exit_time', 'entry_price_actual', 'exit_price_actual',
         'entry_type',
         'mfe_percent', 'mae_percent', 'valid_entry', 'monitor_status',
+        'open_gap_percent', 'gap_predicted_correctly', 'overnight_outcome',
     ];
 
     protected $casts = [
@@ -36,6 +37,8 @@ class CandidateResult extends Model
         'mfe_percent' => 'decimal:2',
         'mae_percent' => 'decimal:2',
         'valid_entry' => 'boolean',
+        'open_gap_percent' => 'decimal:2',
+        'gap_predicted_correctly' => 'boolean',
     ];
 
     public function candidate(): BelongsTo

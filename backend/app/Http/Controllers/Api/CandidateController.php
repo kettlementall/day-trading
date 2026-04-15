@@ -17,9 +17,15 @@ class CandidateController extends Controller
     public function index(Request $request): JsonResponse
     {
         $date = $request->get('date', now()->toDateString());
+        $mode = $request->get('mode', 'intraday');
+
+        if (!in_array($mode, ['intraday', 'overnight'])) {
+            $mode = 'intraday';
+        }
 
         $candidates = Candidate::with(['stock', 'result'])
             ->where('trade_date', $date)
+            ->where('mode', $mode)
             ->orderByDesc('ai_selected')
             ->orderByDesc('score')
             ->get();
@@ -38,6 +44,7 @@ class CandidateController extends Controller
 
         return response()->json([
             'date' => $date,
+            'mode' => $mode,
             'count' => $candidates->count(),
             'data' => $candidates,
             'last_updated_at' => $lastUpdatedAt,

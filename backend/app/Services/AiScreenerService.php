@@ -6,10 +6,14 @@ use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\DailyQuote;
 use App\Models\InstitutionalTrade;
+use App\Models\IntradaySnapshot;
 use App\Models\MarginTrade;
 use App\Models\NewsArticle;
 use App\Models\NewsIndex;
+use App\Models\SectorIndex;
+use App\Models\StrategyPerformanceStat;
 use App\Models\UsMarketIndex;
+use App\Services\TechnicalIndicator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -34,8 +38,12 @@ class AiScreenerService
      * @param  Collection  $candidates  已載入 stock 關聯的候選集合
      * @return Collection  更新後的候選集合
      */
-    public function screen(string $tradeDate, Collection $candidates): Collection
-    {
+    public function screen(
+        string $tradeDate,
+        Collection $candidates,
+        string $mode = 'intraday',
+        ?string $snapshotDate = null
+    ): Collection {
         if ($candidates->isEmpty()) {
             return $candidates;
         }
@@ -45,40 +53,47 @@ class AiScreenerService
             return $this->fallbackScreen($candidates);
         }
 
-        // 市場背景 system prompt — Anthropic 快取，所有股票共用
-        $systemPrompt      = $this->buildSystemPrompt($tradeDate);
-        $systemPromptShort = $this->buildSystemPrompt($tradeDate, short: true);
+        if ($mode === 'overnight') {
+            $systemPrompt = $this->buildSystemPromptOvernight($tradeDate, $snapshotDate);
+        } else {
+            $systemPrompt      = $this->buildSystemPrompt($tradeDate);
+            $systemPromptShort = $this->buildSystemPrompt($tradeDate, short: true);
+        }
 
         foreach ($candidates as $candidate) {
             $symbol = $candidate->stock->symbol;
             try {
-                $userMessage = $this->buildStockMessage($tradeDate, $candidate);
+                $userMessage = $mode === 'overnight'
+                    ? $this->buildStockMessageOvernight($tradeDate, $candidate, $snapshotDate)
+                    : $this->buildStockMessage($tradeDate, $candidate);
                 $result = $this->callApiWithRetry($systemPrompt, $userMessage, $symbol);
-                $this->applyResult($candidate, $result);
-                Log::info("AiScreenerService {$symbol}: " . ($result['selected'] ? '選入' : '排除'));
+                $mode === 'overnight'
+                    ? $this->applyResultOvernight($candidate, $result)
+                    : $this->applyResult($candidate, $result);
+                Log::info("AiScreenerService [{$mode}] {$symbol}: " . ($result['selected'] ? '選入' : '排除'));
             } catch (ContextTooLargeException $e) {
-                // 422 context too large：改用精簡 system prompt 重試一次
-                Log::warning("AiScreenerService {$symbol}: context 過大，改用精簡 prompt 重試");
-                try {
-                    $userMessage = $this->buildStockMessage($tradeDate, $candidate, short: true);
-                    $result = $this->callApiWithRetry($systemPromptShort, $userMessage, $symbol);
-                    $this->applyResult($candidate, $result);
-                    Log::info("AiScreenerService {$symbol}(short): " . ($result['selected'] ? '選入' : '排除'));
-                } catch (\Exception $e2) {
-                    Log::error("AiScreenerService {$symbol}(short): " . $e2->getMessage());
-                    $candidate->update([
-                        'ai_selected'  => false,
-                        'ai_reasoning' => 'AI 評估失敗（context 過大）',
-                    ]);
+                if ($mode === 'overnight') {
+                    Log::error("AiScreenerService overnight {$symbol}: context 過大，跳過");
+                    $candidate->update(['ai_selected' => false, 'ai_reasoning' => 'AI 評估失敗（context 過大）']);
+                } else {
+                    Log::warning("AiScreenerService {$symbol}: context 過大，改用精簡 prompt 重試");
+                    try {
+                        $userMessage = $this->buildStockMessage($tradeDate, $candidate, short: true);
+                        $result = $this->callApiWithRetry($systemPromptShort, $userMessage, $symbol);
+                        $this->applyResult($candidate, $result);
+                    } catch (\Exception $e2) {
+                        Log::error("AiScreenerService {$symbol}(short): " . $e2->getMessage());
+                        $candidate->update(['ai_selected' => false, 'ai_reasoning' => 'AI 評估失敗（context 過大）']);
+                    }
                 }
             } catch (\Exception $e) {
-                Log::error("AiScreenerService {$symbol}: " . $e->getMessage());
+                Log::error("AiScreenerService [{$mode}] {$symbol}: " . $e->getMessage());
                 $candidate->update([
                     'ai_selected'  => false,
                     'ai_reasoning' => 'AI 評估失敗：' . mb_substr($e->getMessage(), 0, 80),
                 ]);
             }
-            usleep(150_000); // 150ms，避免觸發 rate limit
+            usleep(150_000);
         }
 
         return $candidates->fresh();
@@ -424,5 +439,339 @@ MSG;
     private function defaultStrategy(Candidate $candidate): string
     {
         return 'momentum';
+    }
+
+    // -------------------------------------------------------------------------
+    // Overnight: system prompt
+    // -------------------------------------------------------------------------
+
+    private function buildSystemPromptOvernight(string $tradeDate, ?string $snapshotDate): string
+    {
+        $today           = $snapshotDate ?? now()->format('Y-m-d');
+        $usMarketSection = UsMarketIndex::getSummary($tradeDate);
+        $lessonsSection  = AiLesson::getOvernightLessons();
+        $sectorSection   = SectorIndex::getSectorSummary($today);
+        $statsSection    = StrategyPerformanceStat::getPromptSummary('overnight');
+
+        return <<<SYSTEM
+你是台股隔日沖選股 AI 助手。現在是 {$today} 午盤收盤前（12:30）。
+任務：對每檔 Haiku 預篩通過的候選，進行深度分析，判斷今日收盤前建倉、明日（{$tradeDate}）持有的隔日沖機會。
+
+你需要設定三個關鍵價格：
+- **建議買入價（suggested_buy）**：今日 13:00 附近的合理建倉價位（勿離現價太遠）
+- **目標價（target_price）**：明日技術面阻力位或延續高點
+- **停損價（stop_loss）**：明日技術面支撐位，跌破即出
+
+{$usMarketSection}
+
+## 類股強弱（今日 {$today}）
+{$sectorSection}
+
+{$lessonsSection}
+
+{$statsSection}
+
+## 評估原則（隔日沖視角）
+1. 今日盤中走勢：尾盤走強（13:00 附近維持高點）> 高檔整理 > 盤中拉回
+2. 量能確認：爆量收紅（今日量 > 5日均量 1.5 倍）代表大資金進駐
+3. 技術指標：RSI 50–80 適合隔日沖（不超漲也不弱勢）；K > D 且上升代表動能持續
+4. 型態確認：突破近期高點 + 量配合 = 強烈看多；長上影線 + 大量 = 上方賣壓重
+5. 類股動能：所屬類股今日漲幅前段加分，領頭羊個股隔日延續機率較高
+6. 籌碼面：外資/投信近日淨買超加分；法人連續賣超警戒
+7. 風報比要求：(目標-買入)/(買入-停損) >= 1.5
+
+## 回覆格式
+請直接回覆 JSON（不要加 markdown 標記），格式：
+{
+  "selected": true,
+  "reasoning": "一句話選入/排除理由",
+  "overnight_strategy": "完整進場策略說明（含為何現在建倉、明日預期走勢、關鍵觀察點）",
+  "entry_type": "gap_up_open|pullback_entry|open_follow_through|limit_up_chase",
+  "gap_potential_percent": 1.5,
+  "suggested_buy": 788.0,
+  "target_price": 802.0,
+  "stop_loss": 776.0,
+  "price_reasoning": "一句話解釋三個價格設定依據（含技術位說明）",
+  "warnings": ["注意事項，可為空陣列"]
+}
+
+entry_type 說明：
+- gap_up_open：明日預期跳空高開後追強
+- pullback_entry：今日盤中拉回整理，尾盤回升
+- open_follow_through：今日收盤強勢，明日延續開盤動能
+- limit_up_chase：今日漲停收盤，明日開盤追強
+
+若不選入，overnight_strategy/entry_type/gap_potential_percent/suggested_buy/target_price/stop_loss/price_reasoning/warnings 均可為 null。
+SYSTEM;
+    }
+
+    // -------------------------------------------------------------------------
+    // Overnight: per-stock user message
+    // -------------------------------------------------------------------------
+
+    private function buildStockMessageOvernight(
+        string $tradeDate,
+        Candidate $candidate,
+        ?string $snapshotDate
+    ): string {
+        $today   = $snapshotDate ?? now()->format('Y-m-d');
+        $stock   = $candidate->stock;
+        $reasons = is_array($candidate->reasons)
+            ? implode('；', $candidate->reasons)
+            : ($candidate->reasons ?? '');
+
+        // 近 10 日 K 線（tradeDate = T+1，date < tradeDate 即 T+0 以前）
+        $quotes = DailyQuote::where('stock_id', $candidate->stock_id)
+            ->where('date', '<', $tradeDate)
+            ->orderByDesc('date')
+            ->limit(10)
+            ->get();
+
+        $klineLines = ['日期  開  高  低  收  量(張)  漲%  振幅%'];
+        foreach ($quotes as $q) {
+            $klineLines[] = implode('  ', [
+                \Carbon\Carbon::parse($q->date)->format('m/d'),
+                (float) $q->open,
+                (float) $q->high,
+                (float) $q->low,
+                (float) $q->close,
+                round($q->volume / 1000),
+                (float) $q->change_percent . '%',
+                (float) $q->amplitude . '%',
+            ]);
+        }
+        $klineTsv = implode("\n", $klineLines);
+
+        // 技術指標
+        $closes = $quotes->pluck('close')->map(fn($v) => (float) $v)->toArray();
+        $highs  = $quotes->pluck('high')->map(fn($v) => (float) $v)->toArray();
+        $lows   = $quotes->pluck('low')->map(fn($v) => (float) $v)->toArray();
+
+        $rsi  = TechnicalIndicator::rsi($closes, 14);
+        $kd   = TechnicalIndicator::kd($highs, $lows, $closes, 9);
+        $ma5  = TechnicalIndicator::sma($closes, 5);
+        $ma10 = TechnicalIndicator::sma($closes, 10);
+        $atr  = TechnicalIndicator::atr($highs, $lows, $closes, 10);
+        $boll = TechnicalIndicator::bollinger($closes, min(count($closes), 20));
+
+        $indicatorParts = array_filter([
+            $rsi  !== null ? "RSI(14)={$rsi}" : null,
+            $kd   !== null ? "K={$kd['k']} D={$kd['d']}" : null,
+            $ma5  !== null ? "MA5={$ma5}" : null,
+            $ma10 !== null ? "MA10={$ma10}" : null,
+            $atr  !== null ? "ATR(10)={$atr}" : null,
+        ]);
+        $indicatorLine = implode('　', $indicatorParts) ?: 'N/A';
+        $bollLine      = $boll !== null
+            ? "布林(20) 上:{$boll['upper']} 中:{$boll['middle']} 下:{$boll['lower']}"
+            : '';
+
+        // 今日盤中快照（按時間排序）
+        $allSnapshots = IntradaySnapshot::where('stock_id', $candidate->stock_id)
+            ->where('trade_date', $today)
+            ->orderBy('snapshot_time')
+            ->get();
+
+        $intradaySection = '（無盤中快照資料）';
+        $snapSummary     = '';
+        $todayVolume     = 0;
+        $dayHighSnap     = 0.0;
+        $dayLowSnap      = 0.0;
+        $currentPrice    = 0.0;
+
+        if ($allSnapshots->isNotEmpty()) {
+            $dayHighSnap  = (float) $allSnapshots->max('high');
+            $dayLowSnap   = (float) $allSnapshots->min('low');
+            $lastSnap     = $allSnapshots->last();
+            $currentPrice = (float) $lastSnap->current_price;
+            $todayVolume  = (int) $lastSnap->accumulated_volume;
+
+            // 每小時整點快照 + 最新
+            $targetTimes = ['09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '13:00'];
+            $intradayLines = ['時間  現價  漲%  外盤%  量比'];
+            foreach ($targetTimes as $timeStr) {
+                $targetDt = \Carbon\Carbon::parse("{$today} {$timeStr}");
+                $snap = $allSnapshots->first(fn($s) =>
+                    abs(\Carbon\Carbon::parse($s->snapshot_time)->diffInSeconds($targetDt)) <= 150
+                );
+                if ($snap) {
+                    $intradayLines[] = sprintf('%s  %.2f  %+.2f%%  %.1f%%  %.2fx',
+                        \Carbon\Carbon::parse($snap->snapshot_time)->format('H:i'),
+                        (float) $snap->current_price,
+                        (float) $snap->change_percent,
+                        (float) $snap->external_ratio,
+                        (float) $snap->estimated_volume_ratio
+                    );
+                }
+            }
+            $intradayLines[] = sprintf('%s(最新)  %.2f  %+.2f%%  %.1f%%  %.2fx',
+                \Carbon\Carbon::parse($lastSnap->snapshot_time)->format('H:i'),
+                $currentPrice,
+                (float) $lastSnap->change_percent,
+                (float) $lastSnap->external_ratio,
+                (float) $lastSnap->estimated_volume_ratio
+            );
+            $intradaySection = implode("\n", $intradayLines);
+
+            // 走勢標籤
+            $changePct  = (float) $lastSnap->change_percent;
+            $midPrice   = ($dayHighSnap + $dayLowSnap) / 2;
+            $trendLabel = match(true) {
+                $changePct > 2.0 && $currentPrice >= $dayHighSnap * 0.99 => '強勢衝高',
+                $changePct > 0.5 && $currentPrice >= $midPrice            => '高檔整理',
+                $changePct > 0 && $currentPrice < $midPrice               => '盤中拉回',
+                $changePct < -2.0                                          => '明顯弱勢',
+                default                                                    => '盤整',
+            };
+            $openChg    = (float) $lastSnap->open_change_percent;
+            $snapSummary = sprintf(
+                '現況摘要: 現價%.2f(%+.2f%%) 開盤%+.2f%% 日高%.2f/日低%.2f 走勢:%s',
+                $currentPrice, $changePct, $openChg, $dayHighSnap, $dayLowSnap, $trendLabel
+            );
+        }
+
+        // 衍生特徵：連漲天數
+        $allChgPcts    = $quotes->pluck('change_percent')->map(fn($v) => (float) $v)->toArray();
+        $consecutiveUp = 0;
+        foreach ($allChgPcts as $chg) {
+            if ($chg > 0) $consecutiveUp++;
+            else break;
+        }
+
+        // 爆量判斷
+        $avg5Vol  = $quotes->take(5)->avg(fn($q) => (float) $q->volume) ?: 1;
+        $volMult  = $avg5Vol > 0 ? round($todayVolume / $avg5Vol, 1) : 0;
+        $volLabel = match(true) {
+            $volMult >= 2.0 => "超級爆量({$volMult}倍均量)",
+            $volMult >= 1.5 => "爆量({$volMult}倍均量)",
+            $volMult >= 1.0 => "量平({$volMult}倍均量)",
+            default         => "縮量({$volMult}倍均量)",
+        };
+
+        // 今日 K 線型態（依盤中最新狀態判斷）
+        $kPatternLabel = '無法判斷';
+        if ($allSnapshots->isNotEmpty()) {
+            $lastSnap  = $allSnapshots->last();
+            $dayOpen   = (float) $lastSnap->open;
+            $bodyAbs   = abs($currentPrice - $dayOpen);
+            $range     = $dayHighSnap - $dayLowSnap;
+            if ($range > 0) {
+                $upperShadow = $dayHighSnap - max($dayOpen, $currentPrice);
+                $lowerShadow = min($dayOpen, $currentPrice) - $dayLowSnap;
+                $bodyRatio   = $bodyAbs / $range;
+                $kPatternLabel = match(true) {
+                    $currentPrice > $dayOpen && $bodyRatio > 0.6                    => '強勢長紅',
+                    $currentPrice > $dayOpen && $bodyRatio > 0.3                    => '小紅',
+                    $currentPrice < $dayOpen && $bodyRatio > 0.6                    => '長黑（注意）',
+                    $upperShadow > $bodyAbs * 2 && $upperShadow > $range * 0.3      => '長上影線（上方賣壓）',
+                    $lowerShadow > $bodyAbs * 2 && $lowerShadow > $range * 0.3      => '長下影線（下方撐盤）',
+                    $bodyRatio < 0.1                                                 => '十字星（方向不明）',
+                    default                                                          => '普通K棒',
+                };
+            }
+        }
+
+        // 類股強弱
+        $industry   = $stock->industry ?? '';
+        $sectorChg  = SectorIndex::getChangeForIndustry($today, $industry);
+        $sectorRank = SectorIndex::getRankForIndustry($today, $industry);
+        $sectorStr  = $sectorChg !== null
+            ? "[{$industry}] 今日" . ($sectorChg >= 0 ? '+' : '') . "{$sectorChg}%"
+              . ($sectorRank !== null ? "（類股排名第{$sectorRank}強）" : '')
+            : "[{$industry}] 無類股資料";
+
+        // 近 5 日法人籌碼
+        $instTrades = InstitutionalTrade::where('stock_id', $candidate->stock_id)
+            ->where('date', '<', $tradeDate)
+            ->orderByDesc('date')
+            ->limit(5)
+            ->get();
+
+        $fmtLots    = fn($v) => ($v >= 0 ? '+' : '') . round($v / 1000) . '張';
+        $instLines  = $instTrades->map(fn($t) =>
+            \Carbon\Carbon::parse($t->date)->format('m/d') . '  ' .
+            '外資' . $fmtLots($t->foreign_net) . '  ' .
+            '投信' . $fmtLots($t->trust_net) . '  ' .
+            '自營' . $fmtLots($t->dealer_net)
+        )->implode("\n");
+        $instSection = $instLines ?: '（無法人資料）';
+
+        return <<<MSG
+## 待評估標的：{$stock->symbol} {$stock->name}（{$stock->industry}）
+
+Haiku 信度：{$candidate->score}　Haiku 理由：{$candidate->haiku_reasoning}
+選股理由標籤：{$reasons}
+
+### 類股強弱
+{$sectorStr}
+
+### 近 10 日 K 線
+{$klineTsv}
+
+### 技術指標
+{$indicatorLine}
+{$bollLine}
+
+### 衍生特徵
+連漲 {$consecutiveUp} 天　今日量能：{$volLabel}　今日K型：{$kPatternLabel}
+
+### 今日盤中走勢
+{$intradaySection}
+{$snapSummary}
+
+### 近 5 日法人籌碼
+{$instSection}
+
+請依上述資料，設定合理的建議買入/目標/停損三個價格，並回覆此標的的隔日沖 JSON 評估結果。
+MSG;
+    }
+
+    // -------------------------------------------------------------------------
+    // Overnight: 將評估結果寫入 DB
+    // -------------------------------------------------------------------------
+
+    private function applyResultOvernight(Candidate $candidate, array $result): void
+    {
+        $selected = (bool) ($result['selected'] ?? false);
+        $symbol   = $candidate->stock->symbol;
+
+        $updates = [
+            'ai_selected'          => $selected,
+            'ai_reasoning'         => $result['reasoning'] ?? '',
+            'overnight_reasoning'  => $selected ? ($result['overnight_strategy'] ?? null) : null,
+            'overnight_strategy'   => $selected ? ($result['entry_type'] ?? null) : null,
+            'gap_potential_percent'=> $selected ? ($result['gap_potential_percent'] ?? null) : null,
+            'ai_price_reasoning'   => $selected ? ($result['price_reasoning'] ?? null) : null,
+            'ai_warnings'          => $result['warnings'] ?? null,
+            'intraday_strategy'    => null, // 隔日沖不設當沖策略
+        ];
+
+        if ($selected) {
+            $buy  = (float) ($result['suggested_buy'] ?? 0);
+            $tgt  = (float) ($result['target_price'] ?? 0);
+            $stop = (float) ($result['stop_loss'] ?? 0);
+
+            if ($buy > 0) {
+                // 邊界保護：target > buy > stop
+                if ($tgt <= $buy) {
+                    $tgt = round($buy * 1.03, 2);
+                    Log::warning("AiScreenerService overnight {$symbol}: target <= buy，修正為 {$tgt}");
+                }
+                if ($stop >= $buy) {
+                    $stop = round($buy * 0.97, 2);
+                    Log::warning("AiScreenerService overnight {$symbol}: stop >= buy，修正為 {$stop}");
+                }
+
+                $updates['suggested_buy'] = $buy;
+                $updates['target_price']  = $tgt;
+                $updates['stop_loss']     = $stop;
+
+                if ($buy > $stop) {
+                    $updates['risk_reward_ratio'] = round(($tgt - $buy) / ($buy - $stop), 2);
+                }
+            }
+        }
+
+        $candidate->update($updates);
     }
 }

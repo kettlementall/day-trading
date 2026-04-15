@@ -6,8 +6,10 @@ use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\DailyQuote;
 use App\Models\InstitutionalTrade;
+use App\Models\IntradaySnapshot;
 use App\Models\NewsArticle;
 use App\Models\NewsIndex;
+use App\Models\SectorIndex;
 use App\Models\UsMarketIndex;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
@@ -34,8 +36,13 @@ class HaikuPreFilterService
      *
      * @param int|null $maxPassThrough 最多放行幾檔給 Opus（取信度最高的 N 檔，null = 不限制）
      */
-    public function filter(string $tradeDate, Collection $candidates, ?int $maxPassThrough = null): Collection
-    {
+    public function filter(
+        string $tradeDate,
+        Collection $candidates,
+        ?int $maxPassThrough = null,
+        string $mode = 'intraday',
+        ?string $snapshotDate = null
+    ): Collection {
         if ($candidates->isEmpty()) {
             return $candidates;
         }
@@ -45,13 +52,17 @@ class HaikuPreFilterService
             return $this->fallbackAll($candidates);
         }
 
-        $systemPrompt = $this->buildSystemPrompt($tradeDate);
+        $systemPrompt = $mode === 'overnight'
+            ? $this->buildSystemPromptOvernight($tradeDate, $snapshotDate)
+            : $this->buildSystemPrompt($tradeDate);
 
         // 分批處理
         $batches = $candidates->chunk($this->batchSize);
         foreach ($batches as $batch) {
             try {
-                $userMessage = $this->buildBatchMessage($tradeDate, $batch);
+                $userMessage = $mode === 'overnight'
+                    ? $this->buildBatchMessageOvernight($tradeDate, $batch, $snapshotDate)
+                    : $this->buildBatchMessage($tradeDate, $batch);
                 $results     = $this->callApi($systemPrompt, $userMessage);
                 $this->applyBatchResults($batch, $results);
             } catch (\Exception $e) {
@@ -71,6 +82,7 @@ class HaikuPreFilterService
         // 若設定了最多放行數，將信度不足的降為 haiku_selected=false
         if ($maxPassThrough !== null) {
             $passed = Candidate::where('trade_date', $tradeDate)
+                ->where('mode', $mode)
                 ->where('haiku_selected', true)
                 ->orderByDesc('score')
                 ->pluck('id');
@@ -324,6 +336,202 @@ SYSTEM;
 
             Log::info("HaikuPreFilterService {$symbol}: " . ($keep ? '通過' : '排除') . " (信度{$confidence}) {$reason}");
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Overnight system prompt
+    // -------------------------------------------------------------------------
+
+    private function buildSystemPromptOvernight(string $tradeDate, ?string $snapshotDate): string
+    {
+        $today         = $snapshotDate ?? now()->format('Y-m-d');
+        $usMarketSection = UsMarketIndex::getSummary($tradeDate);
+        $lessonsSection  = AiLesson::getOvernightLessons();
+
+        $news = NewsArticle::where('fetched_date', '>=', now()->subDays(2)->toDateString())
+            ->whereNotNull('industry')
+            ->orderByDesc('published_at')
+            ->limit(20)
+            ->get();
+        $newsSection = $news->map(fn($n) => "- [{$n->industry}] {$n->title}")->implode("\n") ?: '（無近期新聞）';
+
+        $latestNewsDate = NewsIndex::where('scope', 'overall')
+            ->where('date', '<=', $tradeDate)
+            ->orderByDesc('date')
+            ->value('date');
+        $newsIndexLines = [];
+        if ($latestNewsDate) {
+            $overall = NewsIndex::where('scope', 'overall')->where('date', $latestNewsDate)->first();
+            if ($overall) {
+                $newsIndexLines[] = "整體情緒:{$overall->sentiment} 熱度:{$overall->heatmap} 恐慌:{$overall->panic}";
+            }
+            NewsIndex::where('scope', 'industry')->where('date', $latestNewsDate)
+                ->orderByDesc('sentiment')->limit(5)->get()
+                ->each(fn($idx) => $newsIndexLines[] = "{$idx->scope_value}:情緒{$idx->sentiment}");
+        }
+        $newsIndexSection = $newsIndexLines ? implode("\n", $newsIndexLines) : '（無消息面指數）';
+
+        $sectorSection = SectorIndex::getSectorSummary($today);
+
+        return <<<SYSTEM
+你是台股隔日沖選股 AI 助手（快速預篩模式）。現在是 {$today} 午盤前（12:30）。
+任務：判斷這些股票在今日收盤前建倉，明日（{$tradeDate}）是否有上漲延續潛力。
+
+{$usMarketSection}
+
+## 近期新聞
+{$newsSection}
+
+## 消息面指數
+{$newsIndexSection}
+
+## 類股強弱（今日 {$today}）
+{$sectorSection}
+
+{$lessonsSection}
+
+## 快速評估標準（隔日沖視角）
+- 今日盤中走勢：收盤強（尾盤拉高、收在高點附近）優先
+- 量能特徵：今日爆量（> 5日均量 1.5 倍）+ 收紅 = 強烈買盤進駐
+- 趨勢延續性：連漲 2 日以上 + 強勢排列（MA5 > MA10 > MA20）加分
+- 類股動能：所屬類股今日強於大盤，個股明日延續機率更高
+- 排除條件：今日跌幅 > 2%、今日爆量長黑、法人連續賣超、融資大幅增加
+
+## 回覆格式
+請直接回覆 JSON array（不要加 markdown），格式：
+[
+  {"symbol":"2330","keep":true,"confidence":75,"reason":"一句話理由"},
+  {"symbol":"2317","keep":false,"confidence":20,"reason":"一句話理由"}
+]
+
+- keep: true = 今日收盤前值得建倉，明日有上漲機會
+- confidence: 0–100，代表隔日上漲的把握度
+- reason: 一句話（強調今日盤中走勢 + 籌碼判斷，10–30 字）
+
+每檔都必須回覆，不可省略。
+SYSTEM;
+    }
+
+    // -------------------------------------------------------------------------
+    // Overnight per-batch user message
+    // -------------------------------------------------------------------------
+
+    private function buildBatchMessageOvernight(string $tradeDate, Collection $batch, ?string $snapshotDate): string
+    {
+        $today = $snapshotDate ?? now()->format('Y-m-d');
+        $lines = ["## 批量預篩（{$batch->count()} 檔，隔日沖模式）：請依序回覆 JSON array\n"];
+
+        foreach ($batch as $candidate) {
+            $stock    = $candidate->stock;
+            $symbol   = $stock->symbol;
+            $name     = $stock->name;
+            $industry = $stock->industry ?? '-';
+
+            // 近 5 日 K 線
+            $quotes = DailyQuote::where('stock_id', $candidate->stock_id)
+                ->where('date', '<', $tradeDate)
+                ->orderByDesc('date')
+                ->limit(5)
+                ->get();
+
+            $kParts = [];
+            foreach ($quotes as $q) {
+                $kParts[] = sprintf('%s 收%.1f 量%dk 漲%s%%',
+                    \Carbon\Carbon::parse($q->date)->format('m/d'),
+                    (float) $q->close,
+                    round($q->volume / 1000),
+                    (float) $q->change_percent
+                );
+            }
+            $kline = implode(' | ', $kParts) ?: '無K線';
+
+            // 近 2 日法人
+            $inst = InstitutionalTrade::where('stock_id', $candidate->stock_id)
+                ->orderByDesc('date')->limit(2)->get();
+            $instParts = [];
+            foreach ($inst as $t) {
+                $fNet = $t->foreign_net >= 0 ? '+' . round($t->foreign_net / 1000) : round($t->foreign_net / 1000);
+                $tNet = $t->trust_net >= 0 ? '+' . round($t->trust_net / 1000) : round($t->trust_net / 1000);
+                $instParts[] = sprintf('%s 外資%s張 投信%s張',
+                    \Carbon\Carbon::parse($t->date)->format('m/d'), $fNet, $tNet);
+            }
+            $instStr = implode(' | ', $instParts) ?: '無法人資料';
+
+            // 今日盤中摘要（最新快照）
+            $latestSnap = IntradaySnapshot::where('stock_id', $candidate->stock_id)
+                ->where('trade_date', $today)
+                ->orderByDesc('snapshot_time')
+                ->first();
+
+            if ($latestSnap) {
+                $dayHigh = IntradaySnapshot::where('stock_id', $candidate->stock_id)
+                    ->where('trade_date', $today)
+                    ->max('high');
+                $dayLow = IntradaySnapshot::where('stock_id', $candidate->stock_id)
+                    ->where('trade_date', $today)
+                    ->min('low');
+
+                $changePct    = (float) $latestSnap->change_percent;
+                $currentPrice = (float) $latestSnap->current_price;
+                $volRatio     = (float) $latestSnap->estimated_volume_ratio;
+                $extRatio     = (float) $latestSnap->external_ratio;
+                $openChg      = (float) $latestSnap->open_change_percent;
+
+                $midPrice  = ($dayHigh + $dayLow) / 2;
+                $trendLabel = match(true) {
+                    $changePct > 2.0 && $currentPrice >= $dayHigh * 0.99            => '強勢衝高',
+                    $changePct > 0.5 && $currentPrice >= $midPrice                  => '高檔整理',
+                    $changePct > 0 && $currentPrice < $midPrice                     => '盤中拉回',
+                    $changePct < -2.0                                                => '明顯弱勢',
+                    default                                                          => '盤整',
+                };
+
+                $sign = $changePct >= 0 ? '+' : '';
+                $openSign = $openChg >= 0 ? '+' : '';
+                $intradaySummary = "今日盤中: 開盤{$openSign}{$openChg}% 現價{$currentPrice}({$sign}{$changePct}%) "
+                    . "日高{$dayHigh}/日低{$dayLow} 量比{$volRatio}x 外盤{$extRatio}% 走勢:{$trendLabel}";
+            } else {
+                $intradaySummary = '今日盤中: 無快照資料';
+            }
+
+            // 類股強弱
+            $sectorChange = SectorIndex::getChangeForIndustry($today, $industry);
+            $sectorStr = $sectorChange !== null
+                ? "類股[{$industry}]: 今日" . ($sectorChange >= 0 ? '+' : '') . "{$sectorChange}%"
+                : "類股[{$industry}]: 無資料";
+
+            // 衍生 feature：連漲天數
+            $allQuotes = DailyQuote::where('stock_id', $candidate->stock_id)
+                ->where('date', '<', $tradeDate)
+                ->orderByDesc('date')
+                ->limit(10)
+                ->pluck('change_percent')
+                ->map(fn($v) => (float) $v)
+                ->toArray();
+            $consecutiveUp = 0;
+            foreach ($allQuotes as $chg) {
+                if ($chg > 0) $consecutiveUp++;
+                else break;
+            }
+
+            // 爆量判斷
+            $avg5Vol = $quotes->take(5)->avg(fn($q) => $q->volume / 1000) ?: 1;
+            $todayVol = $latestSnap ? $latestSnap->accumulated_volume / 1000 : 0;
+            $volMult  = $avg5Vol > 0 ? round($todayVol / $avg5Vol, 1) : 0;
+            $volLabel = $volMult >= 1.5 ? "爆量({$volMult}倍均量)" : "量比{$volMult}x";
+
+            $tags = implode(',', is_array($candidate->reasons) ? $candidate->reasons : []);
+
+            $lines[] = "{$symbol} {$name}（{$industry}）標籤:{$tags}";
+            $lines[] = "  K線: {$kline}";
+            $lines[] = "  法人: {$instStr}";
+            $lines[] = "  {$intradaySummary}";
+            $lines[] = "  {$sectorStr}";
+            $lines[] = "  衍生: 連漲{$consecutiveUp}天 {$volLabel}";
+            $lines[] = '';
+        }
+
+        return implode("\n", $lines);
     }
 
     /**

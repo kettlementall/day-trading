@@ -17,6 +17,14 @@
       </div>
     </div>
 
+    <!-- 當沖模式切換 -->
+    <div class="mode-tabs">
+      <el-radio-group :model-value="store.currentMode" size="small" @change="onModeChange">
+        <el-radio-button value="intraday">當日沖</el-radio-button>
+        <el-radio-button value="overnight">隔日沖</el-radio-button>
+      </el-radio-group>
+    </div>
+
     <!-- 市場指數 -->
     <div v-if="store.usIndices.length" class="us-indices-bar">
       <span
@@ -172,6 +180,17 @@
             <span class="label">風報比</span>
             <span class="value">{{ item.risk_reward_ratio }}</span>
           </div>
+          <!-- 隔日沖額外欄位 -->
+          <div v-if="store.currentMode === 'overnight' && item.gap_potential_percent" class="price-item">
+            <span class="label">預測跳空</span>
+            <span class="value price-up">+{{ item.gap_potential_percent }}%</span>
+          </div>
+        </div>
+
+        <!-- 隔日沖進場策略說明 -->
+        <div v-if="store.currentMode === 'overnight' && item.overnight_reasoning" class="card-overnight-strategy">
+          <span class="overnight-strategy-label">{{ overnightEntryLabel(item.overnight_strategy) }}</span>
+          <span class="overnight-strategy-text">{{ item.overnight_reasoning }}</span>
         </div>
 
         <div class="card-tags">
@@ -190,6 +209,14 @@
             round
           >
             {{ item.intraday_strategy }}
+          </el-tag>
+          <el-tag
+            v-if="store.currentMode === 'overnight' && item.overnight_strategy"
+            size="small"
+            type="primary"
+            round
+          >
+            {{ overnightEntryLabel(item.overnight_strategy) }}
           </el-tag>
           <el-tag
             v-if="item.ai_selected"
@@ -362,6 +389,20 @@ function onDateChange() {
   store.fetchMonitors(store.currentDate)
 }
 
+function onModeChange(mode) {
+  store.switchMode(mode)
+}
+
+function overnightEntryLabel(entryType) {
+  const map = {
+    gap_up_open: '跳空高開',
+    pullback_entry: '拉回建倉',
+    open_follow_through: '延續開盤',
+    limit_up_chase: '漲停追強',
+  }
+  return map[entryType] || entryType || ''
+}
+
 function goDetail(item) {
   const route = router.resolve(`/stock/${item.stock_id}`)
   window.open(route.href, '_blank')
@@ -417,6 +458,32 @@ function gradeLabel(grade) {
 </script>
 
 <style scoped>
+.mode-tabs {
+  margin-bottom: 8px;
+}
+
+.card-overnight-strategy {
+  margin: 4px 0;
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.4;
+}
+
+.overnight-strategy-label {
+  display: inline-block;
+  background: #ecf5ff;
+  color: #409eff;
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-right: 5px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.overnight-strategy-text {
+  color: #606266;
+}
+
 .page-header {
   display: flex;
   justify-content: space-between;

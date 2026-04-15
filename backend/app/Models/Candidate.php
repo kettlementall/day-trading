@@ -9,13 +9,14 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 class Candidate extends Model
 {
     protected $fillable = [
-        'stock_id', 'trade_date', 'suggested_buy', 'target_price',
-        'stop_loss', 'risk_reward_ratio', 'score', 'strategy_type', 'strategy_detail',
-        'reasons', 'indicators',
+        'stock_id', 'trade_date', 'mode',
+        'suggested_buy', 'target_price', 'stop_loss', 'risk_reward_ratio',
+        'score', 'strategy_type', 'strategy_detail', 'reasons', 'indicators',
         'haiku_selected', 'haiku_reasoning',
         'morning_score', 'morning_signals', 'morning_confirmed', 'morning_grade',
         'ai_selected', 'ai_score_adjustment', 'ai_reasoning', 'ai_price_reasoning',
         'intraday_strategy', 'reference_support', 'reference_resistance', 'ai_warnings',
+        'overnight_strategy', 'overnight_reasoning', 'gap_potential_percent',
     ];
 
     protected $casts = [
@@ -38,6 +39,7 @@ class Candidate extends Model
         'reference_support' => 'decimal:2',
         'reference_resistance' => 'decimal:2',
         'ai_warnings' => 'array',
+        'gap_potential_percent' => 'decimal:2',
     ];
 
     public function stock(): BelongsTo

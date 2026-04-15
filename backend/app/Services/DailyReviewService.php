@@ -27,8 +27,12 @@ class DailyReviewService
     /**
      * 產出單日候選標的 AI 檢討報告
      */
-    public function review(string $date, ?\Closure $logger = null, ?\Closure $onChunk = null): array
+    public function review(string $date, ?\Closure $logger = null, ?\Closure $onChunk = null, string $mode = 'intraday'): array
     {
+        if ($mode === 'overnight') {
+            return $this->reviewOvernight($date, $logger, $onChunk);
+        }
+
         $log = $logger ?? function (string $msg) { Log::info($msg); };
 
         $log("開始分析 {$date} 的候選標的...");
@@ -36,6 +40,7 @@ class DailyReviewService
         // 1. 收集候選標的 + 盤後結果
         $candidates = Candidate::with(['stock', 'result'])
             ->where('trade_date', $date)
+            ->where('mode', 'intraday')
             ->orderByDesc('score')
             ->get();
 
@@ -89,7 +94,7 @@ class DailyReviewService
 
         // 存入 DB（同日覆蓋）
         DailyReview::updateOrCreate(
-            ['trade_date' => $date],
+            ['trade_date' => $date, 'mode' => 'intraday'],
             ['candidates_count' => $candidates->count(), 'report' => $report]
         );
 
@@ -107,6 +112,267 @@ class DailyReviewService
             'candidates_count' => $candidates->count(),
             'report' => $report,
         ];
+    }
+
+    /**
+     * 隔日沖模式：產出單日 AI 檢討報告
+     */
+    public function reviewOvernight(string $date, ?\Closure $logger = null, ?\Closure $onChunk = null): array
+    {
+        $log = $logger ?? function (string $msg) { Log::info($msg); };
+
+        $log("開始分析 {$date} 的隔日沖候選標的...");
+
+        $candidates = Candidate::with(['stock', 'result'])
+            ->where('trade_date', $date)
+            ->where('mode', 'overnight')
+            ->orderByDesc('score')
+            ->get();
+
+        if ($candidates->isEmpty()) {
+            return ['error' => "無 {$date} 隔日沖候選標的資料"];
+        }
+
+        $log("找到 {$candidates->count()} 檔隔日沖候選標的");
+
+        // 近 10 日 K 線
+        $klineData = [];
+        foreach ($candidates as $c) {
+            $klineData[$c->stock_id] = DailyQuote::where('stock_id', $c->stock_id)
+                ->where('date', '<=', $date)
+                ->orderByDesc('date')
+                ->limit(10)
+                ->get()
+                ->reverse()
+                ->values();
+        }
+
+        $log("已收集 K 線資料，呼叫 AI 分析中...");
+
+        $prompt = $this->buildOvernightReviewPrompt($date, $candidates, $klineData);
+        $report = $this->callApiStreaming($prompt, $onChunk);
+
+        $log("分析完成");
+
+        DailyReview::updateOrCreate(
+            ['trade_date' => $date, 'mode' => 'overnight'],
+            ['candidates_count' => $candidates->count(), 'report' => $report]
+        );
+
+        // 萃取隔日沖教訓
+        try {
+            $count = $this->extractOvernightLessons($date, $report);
+            $log("隔日沖教訓萃取完成（新增 {$count} 條）");
+        } catch (\Exception $e) {
+            Log::error("DailyReviewService extractOvernightLessons: " . $e->getMessage());
+            $log("教訓萃取失敗：{$e->getMessage()}");
+        }
+
+        return [
+            'date'             => $date,
+            'mode'             => 'overnight',
+            'candidates_count' => $candidates->count(),
+            'report'           => $report,
+        ];
+    }
+
+    private function buildOvernightReviewPrompt(string $date, $candidates, array $klineData): string
+    {
+        $lines = ["symbol\tname\tind\tentry_type\thaiku_reason\thaiku_conf\tbuy\ttarget\tstop\trr\tgap_potential%\topen\thigh\tlow\tclose\topen_gap%\tgap_ok?\toutcome\tprofit%"];
+
+        foreach ($candidates as $c) {
+            $r = $c->result;
+            $suggestedBuy = (float) $c->suggested_buy;
+
+            $profit = '-';
+            if ($r && $suggestedBuy > 0) {
+                if ($r->hit_target) {
+                    $profit = round(((float) $c->target_price - $suggestedBuy) / $suggestedBuy * 100, 2);
+                } elseif ($r->hit_stop_loss) {
+                    $profit = round(-($suggestedBuy - (float) $c->stop_loss) / $suggestedBuy * 100, 2);
+                } elseif ($r->actual_close) {
+                    $profit = round(((float) $r->actual_close - $suggestedBuy) / $suggestedBuy * 100, 2);
+                }
+            }
+
+            $lines[] = implode("\t", [
+                $c->stock->symbol,
+                $c->stock->name,
+                $c->stock->industry ?? '-',
+                $c->overnight_strategy ?? '-',
+                $c->haiku_reasoning ?? '-',
+                $c->score ?? 0,
+                $suggestedBuy,
+                (float) $c->target_price,
+                (float) $c->stop_loss,
+                (float) $c->risk_reward_ratio,
+                (float) $c->gap_potential_percent,
+                $r ? (float) $r->actual_open : '-',
+                $r ? (float) $r->actual_high : '-',
+                $r ? (float) $r->actual_low : '-',
+                $r ? (float) $r->actual_close : '-',
+                $r ? (float) $r->open_gap_percent : '-',
+                $r ? ($r->gap_predicted_correctly ? 'Y' : 'N') : '-',
+                $r ? ($r->overnight_outcome ?? '-') : '-',
+                $profit,
+            ]);
+        }
+        $candidatesTsv = implode("\n", $lines);
+
+        // K 線摘要（每檔取最近 5 日 + 今日）
+        $klineLines = ["symbol\tdate\topen\thigh\tlow\tclose\tvol(張)\tchange%"];
+        foreach ($candidates as $c) {
+            $quotes = $klineData[$c->stock_id] ?? collect();
+            foreach ($quotes->slice(-6) as $q) {
+                $klineLines[] = implode("\t", [
+                    $c->stock->symbol,
+                    $q->date->format('m/d'),
+                    (float) $q->open,
+                    (float) $q->high,
+                    (float) $q->low,
+                    (float) $q->close,
+                    round($q->volume / 1000),
+                    (float) $q->change_percent,
+                ]);
+            }
+        }
+        $klineTsv = implode("\n", $klineLines);
+
+        return <<<PROMPT
+你是台股隔日沖交易檢討分析師。請針對 {$date} 隔日沖候選標的做全面檢討分析。
+
+## 分析目標
+1. 隔日沖選股的邏輯是否正確：選擇今日收盤前建倉、明日（{$date}）持有的標的
+2. 跳空預測是否準確（gap_potential% 是否與實際 open_gap% 相符）
+3. 進場策略（entry_type）與實際開盤表現的匹配度
+4. 找出共通的成功/失敗模式
+
+## 候選標的明細
+{$candidatesTsv}
+
+### 欄位說明
+symbol=股票代號, name=名稱, ind=產業, entry_type=進場策略(gap_up_open/pullback_entry/open_follow_through/limit_up_chase), haiku_conf=Haiku信度, buy/target/stop=建議價, rr=風報比, gap_potential%=預測跳空幅度, open/high/low/close=實際T+1 OHLC, open_gap%=實際開盤跳空%, gap_ok?=跳空方向預測正確(Y/N), outcome=最終結果, profit%=報酬率
+
+## 近 5 日 K 線（含今日）
+{$klineTsv}
+
+## 輸出格式
+請用繁體中文輸出，Markdown 格式：
+
+### 一、整體表現
+簡述所有隔日沖標的的整體成效，跳空預測準確率，以及整體策略的有效性。
+
+### 二、逐檔分析
+先用一個摘要表格列出所有標的（代號、策略、跳空預測 vs 實際、結果、一句話評語），
+然後挑出最具討論價值的標的（最多 8 檔）深入分析：
+- 選股邏輯是否合理（為何前一日選擇建倉？）
+- 明日實際走勢是否符合預期？
+- 三個價格設定（買入/目標/停損）是否合理？
+
+### 三、跳空分析
+- 跳空方向預測準確率（gap_ok? = Y 的比例）
+- 哪類型的標的跳空預測較準確？
+- 跳空預測有什麼系統性偏差？
+
+### 四、策略改善建議
+具體可改善的選股條件或進場策略調整。
+PROMPT;
+    }
+
+    private function extractOvernightLessons(string $date, string $report): int
+    {
+        if (!$this->apiKey || strlen($report) < 100) {
+            return 0;
+        }
+
+        AiLesson::where('trade_date', $date)
+            ->where('mode', 'overnight')
+            ->where('source', '!=', 'tip')
+            ->delete();
+
+        $prompt = <<<PROMPT
+以下是 {$date} 的台股隔日沖交易檢討報告。請從中萃取結構化教訓，供未來 AI 隔日沖選股參考。
+
+## 檢討報告
+{$report}
+
+## 萃取規則
+- 只萃取具體、可操作的教訓（針對隔日沖場景）
+- 忽略籠統的建議
+- 每條教訓 type 分類：
+  - `screening`：選股階段的教訓
+  - `entry`：進場策略的教訓（建議買入價、進場條件）
+  - `exit`：出場策略的教訓（目標價、停損設定）
+  - `market`：大盤/產業面對隔日延續的影響
+
+## 回覆格式（JSON array，不要加 markdown 標記）
+[
+  {
+    "type": "screening",
+    "category": "volume",
+    "content": "一句具體可操作的規則"
+  }
+]
+PROMPT;
+
+        try {
+            $response = Http::timeout(60)
+                ->withHeaders([
+                    'x-api-key'         => $this->apiKey,
+                    'anthropic-version' => '2023-06-01',
+                    'content-type'      => 'application/json',
+                ])
+                ->post('https://api.anthropic.com/v1/messages', [
+                    'model'      => $this->model,
+                    'max_tokens' => 2048,
+                    'messages'   => [
+                        ['role' => 'user', 'content' => $prompt],
+                    ],
+                ]);
+
+            if (!$response->successful()) {
+                return 0;
+            }
+
+            $text    = trim($response->json('content.0.text', ''));
+            $cleaned = preg_replace('/^```json?\s*/i', '', $text);
+            $cleaned = preg_replace('/\s*```$/', '', $cleaned);
+            $lessons = json_decode(trim($cleaned), true);
+
+            if (!is_array($lessons)) {
+                if (preg_match('/\[[\s\S]*\]/u', $text, $m)) {
+                    $lessons = json_decode($m[0], true);
+                }
+            }
+
+            if (!is_array($lessons)) {
+                return 0;
+            }
+
+            $expiresAt   = now()->addDays(14)->toDateString();
+            $validTypes  = ['screening', 'entry', 'exit', 'market'];
+            $count       = 0;
+
+            foreach ($lessons as $lesson) {
+                if (empty($lesson['content']) || empty($lesson['type'])) continue;
+                if (!in_array($lesson['type'], $validTypes)) continue;
+
+                AiLesson::create([
+                    'trade_date' => $date,
+                    'mode'       => 'overnight',
+                    'type'       => $lesson['type'],
+                    'category'   => $lesson['category'] ?? null,
+                    'content'    => $lesson['content'],
+                    'expires_at' => $expiresAt,
+                ]);
+                $count++;
+            }
+
+            return $count;
+        } catch (\Exception $e) {
+            Log::error('DailyReviewService extractOvernightLessons: ' . $e->getMessage());
+            return 0;
+        }
     }
 
     private function buildReviewPrompt(

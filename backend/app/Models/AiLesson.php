@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class AiLesson extends Model
 {
     protected $fillable = [
-        'trade_date', 'type', 'category', 'content', 'expires_at', 'source', 'priority',
+        'trade_date', 'type', 'category', 'content', 'expires_at', 'source', 'priority', 'mode',
     ];
 
     protected $casts = [
@@ -54,6 +54,31 @@ class AiLesson extends Model
         });
 
         return "## 近期教訓（從每日檢討萃取）\n" . $lines->implode("\n");
+    }
+
+    /**
+     * 取得隔日沖教訓（overnight + both），tip 優先
+     */
+    public static function getOvernightLessons(int $limit = 15): string
+    {
+        $lessons = static::active()
+            ->whereIn('type', ['screening', 'market', 'entry'])
+            ->whereIn('mode', ['overnight', 'both'])
+            ->orderByDesc('priority')
+            ->orderByDesc('trade_date')
+            ->limit($limit)
+            ->get();
+
+        if ($lessons->isEmpty()) {
+            return '';
+        }
+
+        $lines = $lessons->map(function ($l) {
+            $tag = $l->source === 'tip' ? '★明牌' : $l->type;
+            return "- [{$l->trade_date->format('m/d')}][{$tag}] {$l->content}";
+        });
+
+        return "## 近期隔日沖教訓\n" . $lines->implode("\n");
     }
 
     /**

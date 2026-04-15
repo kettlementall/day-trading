@@ -22,15 +22,20 @@
 | 09:00-13:30 | `stock:monitor-intraday` | 盤中即時監控（每 30 秒快照；command 內部 loop，scheduler 每分鐘觸發作為當機重啟保底） |
 | 12:00 | `news:fetch`                | 午間新聞抓取                                                    |
 | 12:15 | `news:compute-indices`      | 計算新聞指數                                                    |
+| **12:25** | **`stock:fetch-sector-indices`** | **抓取 TWSE 類股指數（供隔日沖選股使用）** |
+| **12:30** | **`stock:ai-screen-overnight`** | **隔日沖三階段 AI 選股（用今日盤中資料選明日建倉標的）** |
 | 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情                                                 |
-| 15:00 | `stock:update-results`      | 更新前日候選標的的盤後結果                                             |
-| 15:30 | `stock:daily-review`        | 自動產出前日 AI 檢討報告 + 萃取教訓（依賴 15:00 結果回填）                      |
+| 15:00 | `stock:update-results`      | 更新當日當沖候選標的的盤後結果                                           |
+| **15:05** | **`stock:update-overnight-results`** | **更新隔日沖候選標的盤後實際結果（T+1 收盤後）** |
+| 15:30 | `stock:daily-review`        | 自動產出當日 AI 檢討報告 + 萃取教訓（依賴 15:00 結果回填）                     |
+| **15:35** | **`stock:daily-review --mode=overnight`** | **自動產出隔日沖 AI 檢討報告 + 萃取教訓** |
 | 16:00 | `stock:fetch-institutional` | 抓取三大法人買賣超                                                 |
 | 16:30 | `stock:fetch-margin`        | 抓取融資融券                                                    |
 | 18:00 | `news:fetch`                | 盤後新聞抓取                                                    |
 | 18:15 | `news:compute-indices`      | 計算新聞指數                                                    |
 | 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 結果未回填重跑）                   |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
+| **週日 22:00** | **`stock:compute-strategy-stats`** | **計算隔日沖/當沖策略量化績效統計（30/60 天窗口）** |
 
 > `stock:backtest --validated` 已停用自動排程。指令保留可手動執行回測指標檢視。
 
@@ -731,3 +736,186 @@ expected_value = avg(所有 buy_reachable 為 true 的 profit)
 #### 日別趨勢
 
 回傳 `daily` 陣列，每日包含 `buy_reach_rate`、`target_reach_rate`、`dual_reach_rate`，供前端繪製趨勢圖。
+
+---
+
+## 6. 隔日沖選股系統
+
+### 6.1 概覽
+
+隔日沖（Overnight）選股是獨立於當沖的第二條選股流水線，目的是在今日收盤前（13:00–13:25）建倉，持有至明日（T+1）收盤前平倉。
+
+**關鍵時序：**
+
+```
+12:25  抓取類股指數（stock:fetch-sector-indices）
+         │
+12:30  三階段 AI 選股（stock:ai-screen-overnight）
+         │
+         ├─ Step 1: StockScreener overnight 模式（物理門檻）
+         ├─ Step 2: HaikuPreFilterService overnight 模式（→ 最多 20 檔）
+         └─ Step 3: AiScreenerService overnight 模式（Opus 精審 → 設定三個價格）
+         │
+13:00-13:25  使用者下單（今日收盤前建倉）
+         │
+T+1 15:05  stock:update-overnight-results（記錄實際開高低收 + 跳空數據）
+T+1 15:35  stock:daily-review --mode=overnight（AI 檢討報告 + 萃取教訓）
+週日 22:00  stock:compute-strategy-stats（策略績效統計更新）
+```
+
+### 6.2 雙日期設計
+
+隔日沖流程中有兩個關鍵日期：
+
+| 變數 | 值 | 用途 |
+|------|----|------|
+| `$snapshotDate` | T+0（今日） | 查詢 `IntradaySnapshot`、`SectorIndex` |
+| `$tradeDate` | T+1（明日） | 寫入 `candidates.trade_date`、查詢 `DailyQuote` |
+
+`candidates` 表的唯一鍵為 `[stock_id, trade_date]`，因此隔日沖（trade_date = T+1）與當沖（trade_date = T）自然不衝突。
+
+### 6.3 StockScreener overnight 模式
+
+讀取 `screen_thresholds_overnight` FormulaSetting（若不存在則 fallback 至 `screen_thresholds`）。
+
+**overnight 模式與 intraday 的主要差異：**
+- 跳過所有價格公式計算（`suggested_buy`、`target_price`、`stop_loss` 均為 null）
+- 跳過風報比過濾（Opus 負責設定三個價格）
+- 新增三個 overnight 專用事實標籤：
+
+| 標籤 | 觸發條件 |
+|------|---------|
+| `法人連買3日` | 近3日外資淨買均 > 0 |
+| `蓄勢整理` | 近3日振幅合計 < 2% 且收盤 > MA5 × 0.99 |
+| `強勢排列` | MA5 > MA10 > MA20 且收盤 > MA5 |
+
+`candidates.mode` 欄位設為 `'overnight'`。
+
+### 6.4 HaikuPreFilterService overnight 模式
+
+批次快速預篩，最多放行 **20 檔** 給 Opus 精審。
+
+**System Prompt 額外資訊：**
+- 類股強弱（`SectorIndex::getSectorSummary($snapshotDate)`）
+- 隔日沖教訓（`AiLesson::getOvernightLessons()`）
+
+**每檔 User Message 包含：**
+- 近5日 K 線
+- 近2日法人籌碼
+- 今日盤中摘要（最新快照：現價、漲幅、量比、外盤比、走勢標籤）
+- 類股今日漲跌幅（`SectorIndex::getChangeForIndustry()`）
+- 衍生特徵：連漲天數、今日量能倍數
+
+**評估基準（隔日沖）：** 今日收盤強 + 爆量 + 類股領先 → 優先；今日弱勢/法人賣超/融資大增 → 排除。
+
+### 6.5 AiScreenerService overnight 模式（Opus 深度審核）
+
+每檔獨立 1 次 Opus API call，**Opus 全權負責設定三個關鍵價格**。
+
+**System Prompt 額外資訊：**
+- 類股強弱（`SectorIndex::getSectorSummary($snapshotDate)`）
+- 隔日沖教訓（`AiLesson::getOvernightLessons()`）
+- 策略績效統計（`StrategyPerformanceStat::getPromptSummary('overnight')`）
+
+**每檔 User Message 包含：**
+- 近10日 K 線（OHLCV + 漲幅 + 振幅）
+- 技術指標：RSI(14)、KD(9)、MA5/MA10、ATR(10)、布林通道(20)
+- 今日盤中走勢（每30分鐘一筆快照：時間/現價/漲幅/外盤比/量比）
+- 現況摘要（現價、開盤漲幅、日高低、走勢標籤）
+- 今日K線型態（強勢長紅/長黑/長上影線/長下影線/十字星等）
+- 衍生特徵：連漲天數、今日量能倍數
+- 類股強弱 + 排名（`SectorIndex::getChangeForIndustry()` + `getRankForIndustry()`）
+- 近5日法人籌碼
+
+**Opus 回應 JSON 格式：**
+
+```json
+{
+  "selected": true,
+  "reasoning": "一句話選入/排除理由",
+  "overnight_strategy": "完整進場策略說明",
+  "entry_type": "gap_up_open|pullback_entry|open_follow_through|limit_up_chase",
+  "gap_potential_percent": 1.5,
+  "suggested_buy": 788.0,
+  "target_price": 802.0,
+  "stop_loss": 776.0,
+  "price_reasoning": "三個價格設定依據（含技術位說明）",
+  "warnings": ["注意事項"]
+}
+```
+
+**entry_type 說明：**
+
+| entry_type | 說明 |
+|-----------|------|
+| `gap_up_open` | 明日預期跳空高開後追強 |
+| `pullback_entry` | 今日拉回整理，明日回升 |
+| `open_follow_through` | 今日收盤強勢，明日延續開盤動能 |
+| `limit_up_chase` | 今日漲停收盤，明日開盤追強 |
+
+**DB 寫入欄位（`applyResultOvernight`）：**
+- `overnight_strategy` ← `entry_type`（枚舉）
+- `overnight_reasoning` ← `overnight_strategy`（完整說明文字）
+- `gap_potential_percent`、`suggested_buy`、`target_price`、`stop_loss`
+- `risk_reward_ratio`（自動計算）
+- `intraday_strategy` 強制設為 null（隔日沖不設當沖策略）
+- 邊界保護：若 target ≤ buy，修正為 buy × 1.03；若 stop ≥ buy，修正為 buy × 0.97
+
+### 6.6 盤後結果回填（`stock:update-overnight-results`）
+
+每日 **15:05** 在 T+1 收盤後執行。
+
+查詢 `candidates.trade_date = T+1, mode = 'overnight'` 的候選，寫入 `candidate_results`：
+
+| 欄位 | 說明 |
+|------|------|
+| `actual_open/high/low/close` | T+1 實際 OHLC |
+| `hit_target` / `hit_stop_loss` | 當日高點 >= 目標 / 低點 <= 停損 |
+| `open_gap_percent` | (T+1 開盤 - T+0 收盤) / T+0 收盤 × 100 |
+| `gap_predicted_correctly` | 跳空方向與 `entry_type` 預測是否一致 |
+| `overnight_outcome` | hit_target / hit_stop / gap_up_strong / gap_up / gap_down / up / down / neutral |
+
+### 6.7 AI 每日檢討（overnight 模式）
+
+`stock:daily-review --mode=overnight` 在 T+1 15:35 執行。
+
+- 比較 `gap_potential_percent` vs 實際 `open_gap_percent` 的預測準確率
+- 分析 `entry_type` 策略與實際開盤表現的匹配度
+- 萃取教訓存入 `ai_lessons`（`mode = 'overnight'`），供下次選股 Prompt 使用
+
+### 6.8 策略績效統計
+
+`stock:compute-strategy-stats` 每週日 22:00 計算近 30/60 天的量化統計，存入 `strategy_performance_stats`：
+
+| 維度 | 說明 |
+|------|------|
+| `strategy`（dimension_type） | 依 `overnight_strategy`（entry_type）分組 |
+| `feature`（dimension_type） | 依 `reasons` 標籤組合分組（爆量+法人買超等） |
+| `market_condition`（dimension_type） | 依當日台指期漲跌幅分組（大盤>+1%、-1~+1%、<-1%）|
+
+統計欄位：`target_reach_rate`（達標率）、`expected_value`（期望報酬%）、`avg_risk_reward`（平均風報比）。
+
+這些統計資料會注入 Opus overnight 選股的 System Prompt，提供量化基準。
+
+### 6.9 類股指數（SectorIndex）
+
+資料來源：TWSE OpenAPI `https://openapi.twse.com.tw/v1/indicesReport/MI_5MINS`
+
+每日 **12:25** 由 `stock:fetch-sector-indices` 抓取並存入 `sector_indices` 表。
+
+涵蓋25個類股（IX0007–IX0056），包含：電子工業、半導體業、金融保險、鋼鐵工業等主要類股。
+
+`SectorIndex` 模型提供三個便利方法：
+- `getSectorSummary(string $date): string` — 所有類股漲跌幅（格式化供 AI prompt 使用）
+- `getChangeForIndustry(string $date, string $industry): ?float` — 取特定類股今日漲跌幅
+- `getRankForIndustry(string $date, string $industry): ?int` — 取類股強弱排名
+
+### 6.10 前端顯示
+
+候選頁（`CandidatesView.vue`）新增當日沖/隔日沖切換 Tab：
+- 切換後呼叫 `GET /api/candidates?date=...&mode=overnight`
+- 隔日沖卡片額外顯示：`gap_potential_percent`（預測跳空幅度）、`overnight_reasoning`（完整策略說明）、`overnight_strategy` 進場類型標籤
+
+### 6.11 Phase 2（未來規劃）
+
+分點/主力資料整合（需開通第三方資料服務）。

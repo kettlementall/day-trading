@@ -6,6 +6,7 @@ import dayjs from 'dayjs'
 export const useCandidateStore = defineStore('candidates', () => {
   const candidates = ref([])
   const currentDate = ref(dayjs().format('YYYY-MM-DD'))
+  const currentMode = ref('intraday') // 'intraday' | 'overnight'
   const dates = ref([])
   const stats = ref(null)
   const loading = ref(false)
@@ -79,12 +80,14 @@ export const useCandidateStore = defineStore('candidates', () => {
     }
   }
 
-  async function fetchCandidates(date) {
+  async function fetchCandidates(date, mode) {
     loading.value = true
+    const targetMode = mode || currentMode.value
     try {
-      const { data } = await getCandidates(date || currentDate.value)
+      const { data } = await getCandidates(date || currentDate.value, targetMode)
       candidates.value = data.data
       currentDate.value = data.date
+      currentMode.value = data.mode || targetMode
       lastUpdatedAt.value = data.last_updated_at || ''
       isHoliday.value = data.is_holiday || false
       holidayName.value = data.holiday_name || ''
@@ -92,6 +95,11 @@ export const useCandidateStore = defineStore('candidates', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  async function switchMode(mode) {
+    currentMode.value = mode
+    await fetchCandidates(currentDate.value, mode)
   }
 
   async function fetchDates() {
@@ -230,13 +238,13 @@ export const useCandidateStore = defineStore('candidates', () => {
   }
 
   return {
-    candidates, currentDate, dates, stats, loading,
+    candidates, currentDate, currentMode, dates, stats, loading,
     morningFilter, filteredCandidates, morningSummary, lastUpdatedAt,
     isHoliday, holidayName, usIndices,
     monitors, monitorLoading, activeMonitors, completedMonitors,
     reviewing, reviewLogs, reviewResult, reviewStreamText, reviewDates,
     tipAnalyzing, tipLogs, tipStreamText, tipResult,
-    fetchCandidates, fetchDates, fetchStats,
+    fetchCandidates, fetchDates, fetchStats, switchMode,
     fetchMonitors, startMonitorPolling, stopMonitorPolling,
     fetchReviewDates, fetchDailyReview, dailyReview, analyzeTip,
   }
