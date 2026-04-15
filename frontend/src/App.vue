@@ -10,10 +10,6 @@
         <el-icon><Moon /></el-icon>
         <span>隔日沖</span>
       </router-link>
-      <router-link to="/history" class="nav-item" active-class="active">
-        <el-icon><Calendar /></el-icon>
-        <span>歷史紀錄</span>
-      </router-link>
       <router-link to="/stats" class="nav-item" active-class="active">
         <el-icon><DataAnalysis /></el-icon>
         <span>績效統計</span>

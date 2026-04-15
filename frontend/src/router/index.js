@@ -7,11 +7,6 @@ const routes = [
     component: () => import('../views/CandidatesView.vue'),
   },
   {
-    path: '/history',
-    name: 'history',
-    component: () => import('../views/HistoryView.vue'),
-  },
-  {
     path: '/stats',
     name: 'stats',
     component: () => import('../views/StatsView.vue'),
@@ -35,6 +30,16 @@ const routes = [
     path: '/overnight',
     name: 'overnight',
     component: () => import('../views/OvernightView.vue'),
+  },
+  {
+    path: '/overnight/review',
+    name: 'overnight-review',
+    component: () => import('../views/OvernightReviewView.vue'),
+  },
+  {
+    path: '/overnight/tip',
+    name: 'overnight-tip',
+    component: () => import('../views/OvernightTipView.vue'),
   },
   {
     path: '/stock/:id',
