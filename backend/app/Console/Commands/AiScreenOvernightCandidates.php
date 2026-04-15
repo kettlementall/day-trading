@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\CandidateMonitor;
 use App\Services\AiScreenerService;
 use App\Services\HaikuPreFilterService;
 use App\Services\StockScreener;
@@ -53,9 +54,36 @@ class AiScreenOvernightCandidates extends Command
         $selected = $candidates->where('ai_selected', true)->count();
         $this->info("Opus 審核完成：{$selected} 檔選入隔日沖清單");
 
+        // Step 4: 為 AI 選入的候選初始化隔日監控（status=holding）
+        $this->initOvernightMonitors($candidates->where('ai_selected', true)->values());
+        $this->info("已建立 {$selected} 筆隔日監控記錄");
+
         Log::info("AiScreenOvernightCandidates：{$snapshotDate} → {$tradeDate}，選入 {$selected} 檔");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * 為 AI 選入的候選建立/重置 CandidateMonitor（status=holding）
+     */
+    private function initOvernightMonitors(\Illuminate\Support\Collection $candidates): void
+    {
+        foreach ($candidates as $candidate) {
+            CandidateMonitor::updateOrCreate(
+                ['candidate_id' => $candidate->id],
+                [
+                    'status'          => CandidateMonitor::STATUS_HOLDING,
+                    'current_target'  => $candidate->target_price,
+                    'current_stop'    => $candidate->stop_loss,
+                    'ai_advice_log'   => null,
+                    'state_log'       => null,
+                    'entry_price'     => null,
+                    'entry_time'      => null,
+                    'exit_price'      => null,
+                    'exit_time'       => null,
+                ]
+            );
+        }
     }
 
     /**

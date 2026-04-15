@@ -764,7 +764,7 @@ PROMPT;
 
         $log("已收集資料，呼叫 AI 分析中...");
 
-        $prompt = $this->buildTipPrompt($date, $stock, $klines, $intraday, $intradayKlines, $notes);
+        $prompt = $this->buildTipPrompt($date, $stock, $klines, $intraday, $intradayKlines, $notes, $mode);
         $report = $this->callApiStreaming($prompt, $onChunk);
 
         $log("AI 分析完成");
@@ -813,7 +813,8 @@ PROMPT;
         $klines,
         ?IntradayQuote $intraday,
         array $intradayKlines,
-        string $notes
+        string $notes,
+        string $mode = 'intraday'
     ): string {
         // K 線表
         $klineLines = ["date\topen\thigh\tlow\tclose\tvol(張)\tchange%\tamplitude%"];
@@ -854,6 +855,39 @@ PROMPT;
         }
 
         $notesSection = $notes ? "## 使用者備註\n{$notes}" : '';
+
+        if ($mode === 'overnight') {
+            // K 線最後一筆為出場日（T+1=$date），倒數第二筆為建倉日（T+0）
+            $lastKline   = $klines->last();
+            $entryKline  = $klines->count() >= 2 ? $klines[$klines->count() - 2] : null;
+            $entryDate   = $entryKline ? $entryKline->date->format('Y-m-d') : '（建倉日未知）';
+
+            return <<<PROMPT
+你是台股隔日沖交易分析師。使用者於 {$entryDate} 收盤前建倉 {$stock->symbol} {$stock->name}（產業：{$industry}），並於 {$date} 出場，而且有賺錢。
+
+請透過以下數值資料，找出最有可能解釋這筆隔日沖交易成功的技術面理由，
+並在分析後萃取一條具體可操作的教訓，供未來 AI 隔日沖選股或出場判斷參考。
+
+## 近期 K 線（最後兩筆依序為建倉日 {$entryDate}、出場日 {$date}）
+{$klineTsv}
+
+## 出場日盤中快照（{$date} 開盤 30 分鐘）
+{$intradaySection}
+
+{$intradayKlineSection}
+
+{$notesSection}
+
+## 分析要求
+1. 從建倉日（{$entryDate}）的 K 線形態、量能、收盤位置，解釋為何當天尾盤適合建倉隔日沖
+2. 出場日（{$date}）的跳空開盤幅度、量能、盤中走勢是否符合預期？關鍵訊號為何？
+3. 這個建倉條件（強勢收盤 / 量增 / 突破 / 其他）是通用規律，還是當天特殊情況？
+4. 如果要改善 AI 的隔日沖選股或出場設定，這個案例最重要的一條教訓是什麼？
+
+請用繁體中文分析，最後**單獨**輸出一個 JSON 教訓（包在 {} 內，無其他標記）：
+{"type": "screening|calibration|entry|exit|market", "category": "breakout|bounce|gap|volume|momentum|timing|price_setting|sector", "content": "一句具體可操作的規則（隔日沖視角）"}
+PROMPT;
+        }
 
         return <<<PROMPT
 你是台股當沖交易分析師。使用者今天跟著外部訊號買了 {$stock->symbol} {$stock->name}（產業：{$industry}），而且有賺錢。

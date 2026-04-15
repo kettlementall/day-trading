@@ -12,6 +12,7 @@ use App\Models\NewsArticle;
 use App\Models\NewsIndex;
 use App\Models\SectorIndex;
 use App\Models\StrategyPerformanceStat;
+use App\Models\StockValuation;
 use App\Models\UsMarketIndex;
 use App\Services\TechnicalIndicator;
 use Illuminate\Support\Collection;
@@ -66,7 +67,8 @@ class AiScreenerService
                 $userMessage = $mode === 'overnight'
                     ? $this->buildStockMessageOvernight($tradeDate, $candidate, $snapshotDate)
                     : $this->buildStockMessage($tradeDate, $candidate);
-                $result = $this->callApiWithRetry($systemPrompt, $userMessage, $symbol);
+                $maxTokens = $mode === 'overnight' ? 1800 : 1024;
+                $result = $this->callApiWithRetry($systemPrompt, $userMessage, $symbol, $maxTokens);
                 $mode === 'overnight'
                     ? $this->applyResultOvernight($candidate, $result)
                     : $this->applyResult($candidate, $result);
@@ -302,7 +304,7 @@ MSG;
      *  - 連線 timeout：最多 2 次，間隔 3s
      *  - 422 context too large：直接丟 ContextTooLargeException 讓上層換精簡 prompt
      */
-    private function callApiWithRetry(string $systemPrompt, string $userMessage, string $symbol = ''): array
+    private function callApiWithRetry(string $systemPrompt, string $userMessage, string $symbol = '', int $maxTokens = 1024): array
     {
         $maxAttempts = 3;
         $attempt     = 0;
@@ -310,7 +312,7 @@ MSG;
         while (true) {
             $attempt++;
             try {
-                return $this->callApi($systemPrompt, $userMessage);
+                return $this->callApi($systemPrompt, $userMessage, $maxTokens);
             } catch (ContextTooLargeException $e) {
                 throw $e; // 直接往上傳，不 retry
             } catch (\RuntimeException $e) {
@@ -328,7 +330,14 @@ MSG;
                     continue;
                 }
 
-                // 其他 RuntimeException（parse 失敗、422 以外的 API 錯誤）
+                // JSON 解析失敗：最多重試 2 次（AI 偶爾回傳 markdown 或截斷）
+                if (str_contains($msg, '無法解析') && $attempt < $maxAttempts) {
+                    Log::warning("AiScreenerService {$symbol}: JSON 解析失敗，2s 後重試（第 {$attempt} 次）：" . mb_substr($msg, 0, 100));
+                    sleep(2);
+                    continue;
+                }
+
+                // 其他 RuntimeException（422 以外的 API 錯誤，或重試耗盡）
                 throw $e;
             } catch (\Illuminate\Http\Client\ConnectionException $e) {
                 if ($attempt >= 2) {
@@ -340,7 +349,7 @@ MSG;
         }
     }
 
-    private function callApi(string $systemPrompt, string $userMessage): array
+    private function callApi(string $systemPrompt, string $userMessage, int $maxTokens = 1024): array
     {
         $response = Http::timeout(60)
             ->withHeaders([
@@ -351,7 +360,7 @@ MSG;
             ])
             ->post('https://api.anthropic.com/v1/messages', [
                 'model'      => $this->model,
-                'max_tokens' => 1024,
+                'max_tokens' => $maxTokens,
                 'system'     => [
                     [
                         'type'          => 'text',
@@ -453,6 +462,34 @@ MSG;
         $sectorSection   = SectorIndex::getSectorSummary($today);
         $statsSection    = StrategyPerformanceStat::getPromptSummary('overnight');
 
+        // 近 3 日新聞（同當沖，供題材面判斷）
+        $news = NewsArticle::where('fetched_date', '>=', now()->subDays(3)->toDateString())
+            ->whereNotNull('industry')
+            ->orderByDesc('published_at')
+            ->limit(40)
+            ->get();
+        $newsLines = $news->map(fn($n) =>
+            "- [{$n->industry}] {$n->title}" . ($n->sentiment_label ? "（{$n->sentiment_label}）" : '')
+        )->implode("\n");
+        $newsSection = $newsLines ?: '（無近期新聞）';
+
+        // 消息面指數
+        $latestNewsDate = NewsIndex::where('scope', 'overall')
+            ->where('date', '<=', $today)
+            ->orderByDesc('date')
+            ->value('date');
+        $newsIndexLines = [];
+        if ($latestNewsDate) {
+            $overall = NewsIndex::where('scope', 'overall')->where('date', $latestNewsDate)->first();
+            if ($overall) {
+                $newsIndexLines[] = "整體情緒: {$overall->sentiment} | 熱度: {$overall->heatmap} | 恐慌: {$overall->panic} | 國際: {$overall->international}";
+            }
+            NewsIndex::where('scope', 'industry')->where('date', $latestNewsDate)
+                ->orderByDesc('sentiment')->get()
+                ->each(fn($idx) => $newsIndexLines[] = "{$idx->scope_value}: 情緒 {$idx->sentiment} | 熱度 {$idx->heatmap} (文章數: {$idx->article_count})");
+        }
+        $newsIndexSection = $newsIndexLines ? implode("\n", $newsIndexLines) : '（無消息面指數）';
+
         return <<<SYSTEM
 你是台股隔日沖選股 AI 助手。現在是 {$today} 午盤收盤前（12:30）。
 任務：對每檔 Haiku 預篩通過的候選，進行深度分析，判斷今日收盤前建倉、明日（{$tradeDate}）持有的隔日沖機會。
@@ -464,7 +501,13 @@ MSG;
 
 {$usMarketSection}
 
-## 類股強弱（今日 {$today}）
+## 近期新聞與題材面（{$today}）
+{$newsSection}
+
+## 消息面指數
+{$newsIndexSection}
+
+## 類股強弱（前一交易日收盤）
 {$sectorSection}
 
 {$lessonsSection}
@@ -480,6 +523,12 @@ MSG;
 6. 籌碼面：外資/投信近日淨買超加分；法人連續賣超警戒
 7. 風報比要求：(目標-買入)/(買入-停損) >= 1.5
 
+## 價格日期對應說明
+- **suggested_buy**：今日（{$today}，建倉日 T+0）13:00 附近合理建倉價
+- **target_price**：明日（{$tradeDate}，出場日 T+1）目標賣出價（技術阻力位）
+- **stop_loss**：明日（{$tradeDate}，出場日 T+1）停損賣出價（技術支撐位跌破則出）
+- **key_levels**：明日（{$tradeDate}）盤中重要支撐/壓力位，含理由，供盤中決策參考
+
 ## 回覆格式
 請直接回覆 JSON（不要加 markdown 標記），格式：
 {
@@ -492,6 +541,10 @@ MSG;
   "target_price": 802.0,
   "stop_loss": 776.0,
   "price_reasoning": "一句話解釋三個價格設定依據（含技術位說明）",
+  "key_levels": [
+    {"price": 780.0, "type": "support", "reason": "MA20 支撐"},
+    {"price": 800.0, "type": "resistance", "reason": "近期高點壓力"}
+  ],
   "warnings": ["注意事項，可為空陣列"]
 }
 
@@ -501,7 +554,7 @@ entry_type 說明：
 - open_follow_through：今日收盤強勢，明日延續開盤動能
 - limit_up_chase：今日漲停收盤，明日開盤追強
 
-若不選入，overnight_strategy/entry_type/gap_potential_percent/suggested_buy/target_price/stop_loss/price_reasoning/warnings 均可為 null。
+若不選入，overnight_strategy/entry_type/gap_potential_percent/suggested_buy/target_price/stop_loss/price_reasoning/key_levels/warnings 均可為 null。
 SYSTEM;
     }
 
@@ -696,6 +749,39 @@ SYSTEM;
         )->implode("\n");
         $instSection = $instLines ?: '（無法人資料）';
 
+        // 近 5 日融資融券
+        $margins = MarginTrade::where('stock_id', $candidate->stock_id)
+            ->where('date', '<', $tradeDate)
+            ->orderByDesc('date')
+            ->limit(5)
+            ->get();
+        $marginLines = $margins->map(fn($m) =>
+            \Carbon\Carbon::parse($m->date)->format('m/d') . '  ' .
+            '融資增減' . $fmtLots($m->margin_change) . '  餘額' . round($m->margin_balance / 1000) . '張  ' .
+            '融券增減' . $fmtLots($m->short_change) . '  餘額' . round($m->short_balance / 1000) . '張'
+        )->implode("\n");
+        $marginSection = $marginLines ?: '（無融資券資料）';
+
+        // 基本面估值（本益比/殖利率/股價淨值比）
+        $valuationSection = StockValuation::getSummaryForStock($candidate->stock_id, $today);
+
+        // 個股相關新聞（近 5 日，依類股 + 股票名稱/代號）
+        $stockNews = NewsArticle::where('fetched_date', '>=', now()->subDays(5)->toDateString())
+            ->where(fn($q) =>
+                $q->where('industry', $stock->industry)
+                  ->orWhere('title', 'like', "%{$stock->name}%")
+                  ->orWhere('title', 'like', "%{$stock->symbol}%")
+            )
+            ->orderByDesc('published_at')
+            ->limit(6)
+            ->get();
+        $stockNewsLines = $stockNews->map(fn($n) =>
+            '- [' . \Carbon\Carbon::parse($n->published_at)->format('m/d') . '] ' .
+            $n->title .
+            ($n->sentiment_label ? "（{$n->sentiment_label}）" : '')
+        )->implode("\n");
+        $stockNewsSection = $stockNewsLines ?: '（近期無相關新聞）';
+
         return <<<MSG
 ## 待評估標的：{$stock->symbol} {$stock->name}（{$stock->industry}）
 
@@ -722,7 +808,16 @@ Haiku 信度：{$candidate->score}　Haiku 理由：{$candidate->haiku_reasoning
 ### 近 5 日法人籌碼
 {$instSection}
 
-請依上述資料，設定合理的建議買入/目標/停損三個價格，並回覆此標的的隔日沖 JSON 評估結果。
+### 近 5 日融資融券
+{$marginSection}
+
+### 基本面估值
+{$valuationSection}
+
+### 個股相關新聞與題材
+{$stockNewsSection}
+
+請依上述資料（技術面、籌碼面、基本面、題材面），設定合理的建議買入/目標/停損三個價格，並回覆此標的的隔日沖 JSON 評估結果。
 MSG;
     }
 
@@ -742,6 +837,7 @@ MSG;
             'overnight_strategy'   => $selected ? ($result['entry_type'] ?? null) : null,
             'gap_potential_percent'=> $selected ? ($result['gap_potential_percent'] ?? null) : null,
             'ai_price_reasoning'   => $selected ? ($result['price_reasoning'] ?? null) : null,
+            'overnight_key_levels' => $selected ? ($result['key_levels'] ?? null) : null,
             'ai_warnings'          => $result['warnings'] ?? null,
             'intraday_strategy'    => null, // 隔日沖不設當沖策略
         ];

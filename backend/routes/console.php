@@ -82,6 +82,20 @@ scheduledCommand('stock:fetch-sector-indices', '類股指數抓取')
 scheduledCommand('stock:ai-screen-overnight', '隔日沖 AI 選股')
     ->dailyAt('12:30')->weekdays();
 
+// T+1 盤中出場監控（9:30/10:00/10:30/11:00）：檢查目標/停損觸發 + Haiku 滾動調整
+scheduledCommand('stock:monitor-overnight-exit --slot=930',  '隔日沖出場監控 09:30')
+    ->dailyAt('09:30')->weekdays();
+scheduledCommand('stock:monitor-overnight-exit --slot=1000', '隔日沖出場監控 10:00')
+    ->dailyAt('10:00')->weekdays();
+scheduledCommand('stock:monitor-overnight-exit --slot=1030', '隔日沖出場監控 10:30')
+    ->dailyAt('10:30')->weekdays();
+scheduledCommand('stock:monitor-overnight-exit --slot=1100', '隔日沖出場監控 11:00')
+    ->dailyAt('11:00')->weekdays();
+
+// 17:00 抓取 TWSE 本益比/殖利率/股價淨值比（TWSE 每日收盤後更新）
+scheduledCommand('stock:fetch-valuations', 'TWSE 估值資料抓取')
+    ->dailyAt('17:00')->weekdays();
+
 // 15:05 隔日沖結果回填（T+1 收盤後記錄實際開高低收 + 跳空數據）
 scheduledCommand('stock:update-overnight-results', '隔日沖結果回填')
     ->dailyAt('15:05')->weekdays();

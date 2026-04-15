@@ -95,7 +95,7 @@
           </el-tag>
         </div>
 
-        <!-- 三個關鍵價格 -->
+        <!-- 三個關鍵價格 + 監控調整 -->
         <div class="card-prices">
           <div class="price-item">
             <span class="label">建議買入</span>
@@ -103,11 +103,23 @@
           </div>
           <div class="price-item">
             <span class="label">目標</span>
-            <span class="value price-up">{{ item.target_price ?? '—' }}</span>
+            <span class="value price-up">
+              <template v-if="item.monitor && item.monitor.current_target && item.monitor.current_target != item.target_price">
+                <span class="price-adjusted">{{ item.monitor.current_target }}</span>
+                <span class="price-original">{{ item.target_price }}</span>
+              </template>
+              <template v-else>{{ item.target_price ?? '—' }}</template>
+            </span>
           </div>
           <div class="price-item">
             <span class="label">停損</span>
-            <span class="value price-down">{{ item.stop_loss ?? '—' }}</span>
+            <span class="value price-down">
+              <template v-if="item.monitor && item.monitor.current_stop && item.monitor.current_stop != item.stop_loss">
+                <span class="price-adjusted">{{ item.monitor.current_stop }}</span>
+                <span class="price-original">{{ item.stop_loss }}</span>
+              </template>
+              <template v-else>{{ item.stop_loss ?? '—' }}</template>
+            </span>
           </div>
           <div class="price-item">
             <span class="label">風報比</span>
@@ -116,6 +128,37 @@
           <div v-if="item.gap_potential_percent" class="price-item">
             <span class="label">預測跳空</span>
             <span class="value price-up">+{{ item.gap_potential_percent }}%</span>
+          </div>
+        </div>
+
+        <!-- 監控狀態列（T+1 盤中） -->
+        <div v-if="item.monitor && monitorStatusVisible(item.monitor.status)" class="card-monitor">
+          <span class="monitor-badge" :class="monitorBadgeClass(item.monitor.status)">
+            {{ monitorStatusLabel(item.monitor.status) }}
+          </span>
+          <div v-if="item.monitor.ai_advice_log?.length" class="monitor-log">
+            <span
+              v-for="(log, i) in item.monitor.ai_advice_log"
+              :key="i"
+              class="monitor-log-item"
+              :class="'log-' + log.action"
+            >
+              {{ log.time }} {{ monitorActionLabel(log.action) }} {{ log.notes }}
+            </span>
+          </div>
+        </div>
+
+        <!-- 支撐/壓力位 -->
+        <div v-if="item.overnight_key_levels?.length" class="card-key-levels">
+          <div
+            v-for="(level, i) in item.overnight_key_levels"
+            :key="i"
+            class="key-level-item"
+            :class="level.type === 'support' ? 'level-support' : 'level-resistance'"
+          >
+            <span class="level-type">{{ level.type === 'support' ? '支' : '壓' }}</span>
+            <span class="level-price">{{ level.price }}</span>
+            <span class="level-reason">{{ level.reason }}</span>
           </div>
         </div>
 
@@ -232,6 +275,31 @@ function outcomeLabel(outcome) {
     neutral: '持平',
   }
   return map[outcome] || outcome || ''
+}
+
+function monitorStatusVisible(status) {
+  return ['holding', 'target_hit', 'stop_hit', 'closed'].includes(status)
+}
+
+function monitorStatusLabel(status) {
+  const map = {
+    holding: '持倉監控中',
+    target_hit: '已達目標',
+    stop_hit: '已觸停損',
+    closed: '提前出場',
+  }
+  return map[status] || status
+}
+
+function monitorBadgeClass(status) {
+  if (status === 'target_hit') return 'badge-win'
+  if (status === 'stop_hit') return 'badge-lose'
+  if (status === 'closed') return 'badge-exit'
+  return 'badge-holding'
+}
+
+function monitorActionLabel(action) {
+  return { hold: '維持', adjust: '調整', exit: '出場' }[action] || action
 }
 
 function outcomeClass(outcome) {
@@ -380,6 +448,46 @@ function outcomeClass(outcome) {
 .price-up   { color: #f56c6c; }
 .price-down { color: #67c23a; }
 
+.card-key-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.key-level-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.level-support {
+  background: #f0f9eb;
+  color: #67c23a;
+}
+
+.level-resistance {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+
+.level-type {
+  font-weight: 700;
+  font-size: 10px;
+}
+
+.level-price {
+  font-weight: 600;
+}
+
+.level-reason {
+  color: inherit;
+  opacity: 0.8;
+}
+
 .card-strategy-text {
   font-size: 12px;
   color: #606266;
@@ -420,6 +528,56 @@ function outcomeClass(outcome) {
   padding: 1px 6px;
   font-size: 11px;
 }
+
+.price-adjusted {
+  font-weight: 600;
+}
+
+.price-original {
+  font-size: 11px;
+  color: #c0c4cc;
+  text-decoration: line-through;
+  margin-left: 3px;
+}
+
+.card-monitor {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.monitor-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 4px;
+  align-self: flex-start;
+}
+
+.badge-holding { background: #ecf5ff; color: #409eff; }
+.badge-win     { background: #fef0f0; color: #f56c6c; }
+.badge-lose    { background: #f0f9eb; color: #67c23a; }
+.badge-exit    { background: #fdf6ec; color: #e6a23c; }
+
+.monitor-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.monitor-log-item {
+  font-size: 11px;
+  color: #606266;
+  line-height: 1.4;
+}
+
+.log-adjust { color: #e6a23c; }
+.log-exit   { color: #f56c6c; }
+.log-hold   { color: #909399; }
 
 .card-result {
   display: flex;

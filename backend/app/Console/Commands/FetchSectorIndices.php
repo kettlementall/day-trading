@@ -13,35 +13,39 @@ class FetchSectorIndices extends Command
     protected $description = '抓取 TWSE 類股指數即時漲跌（12:25 執行，供隔日沖選股使用）';
 
     /**
-     * TWSE 類股代號 → 系統 sector_name（對應 stocks.industry）
-     * 代號參考：https://openapi.twse.com.tw/
+     * TWSE MI_INDEX 回傳的「指數」中文名稱 → 系統 industry（對應 stocks.industry）
+     * 只取非報酬版本（不含「報酬指數」）
      */
     private const SECTOR_MAP = [
-        'IX0007' => '電子工業',
-        'IX0008' => '金融保險',
-        'IX0009' => '鋼鐵工業',
-        'IX0010' => '橡膠工業',
-        'IX0011' => '水泥工業',
-        'IX0012' => '食品工業',
-        'IX0013' => '塑膠工業',
-        'IX0014' => '紡織纖維',
-        'IX0015' => '電機機械',
-        'IX0016' => '電器電纜',
-        'IX0017' => '化學生技醫療',
-        'IX0018' => '玻璃陶瓷',
-        'IX0019' => '造紙工業',
-        'IX0020' => '建材營造',
-        'IX0021' => '航運業',
-        'IX0022' => '觀光餐旅',
-        'IX0023' => '其他',
-        'IX0049' => '半導體業',
-        'IX0050' => '電腦及週邊設備業',
-        'IX0051' => '光電業',
-        'IX0052' => '通信網路業',
-        'IX0053' => '電子零組件業',
-        'IX0054' => '電子通路業',
-        'IX0055' => '資訊服務業',
-        'IX0056' => '其他電子業',
+        '半導體類指數'         => '半導體業',
+        '電子工業類指數'       => '電子工業',
+        '電腦及週邊設備類指數' => '電腦及週邊設備業',
+        '光電類指數'           => '光電業',
+        '通信網路類指數'       => '通信網路業',
+        '電子零組件類指數'     => '電子零組件業',
+        '電子通路類指數'       => '電子通路業',
+        '資訊服務類指數'       => '資訊服務業',
+        '其他電子類指數'       => '其他電子業',
+        '金融保險類指數'       => '金融保險',
+        '鋼鐵類指數'           => '鋼鐵工業',
+        '橡膠類指數'           => '橡膠工業',
+        '水泥類指數'           => '水泥工業',
+        '食品類指數'           => '食品工業',
+        '塑膠類指數'           => '塑膠工業',
+        '紡織纖維類指數'       => '紡織纖維',
+        '電機機械類指數'       => '電機機械',
+        '電器電纜類指數'       => '電器電纜',
+        '化學生技醫療類指數'   => '化學生技醫療',
+        '玻璃陶瓷類指數'       => '玻璃陶瓷',
+        '造紙類指數'           => '造紙工業',
+        '建材營造類指數'       => '建材營造',
+        '航運類指數'           => '航運業',
+        '觀光餐旅類指數'       => '觀光餐旅',
+        '生技醫療類指數'       => '生技醫療業',
+        '油電燃氣類指數'       => '油電燃氣業',
+        '數位雲端類指數'       => '數位雲端',
+        '綠能環保類指數'       => '綠能環保',
+        '其他類指數'           => '其他',
     ];
 
     public function handle(): int
@@ -59,36 +63,27 @@ class FetchSectorIndices extends Command
 
         $saved = 0;
         foreach ($data as $item) {
-            $code = $item['Index'] ?? $item['code'] ?? '';
-            if (!isset(self::SECTOR_MAP[$code])) {
+            $indexName = trim($item['指數'] ?? '');
+            if (!isset(self::SECTOR_MAP[$indexName])) {
                 continue;
             }
 
-            $sectorName   = self::SECTOR_MAP[$code];
-            $indexValue   = $this->parseFloat($item['SI'] ?? $item['index'] ?? 0);
-            $changeStr    = $item['CHG'] ?? $item['change'] ?? '0';
-            $changePctStr = $item['CHGP'] ?? $item['change_percent'] ?? null;
+            $sectorName = self::SECTOR_MAP[$indexName];
+            $indexValue = $this->parseFloat($item['收盤指數'] ?? 0);
+            $sign       = trim($item['漲跌'] ?? '+') === '-' ? -1 : 1;
+            $changePct  = $sign * $this->parseFloat($item['漲跌百分比'] ?? 0);
 
-            // 優先用 CHGP，次選自行計算
-            if ($changePctStr !== null && $changePctStr !== '--') {
-                $changePct = $this->parseFloat($changePctStr);
-            } elseif ($indexValue > 0 && $changeStr !== '--') {
-                $change    = $this->parseFloat($changeStr);
-                $prevIndex = $indexValue - $change;
-                $changePct = $prevIndex > 0 ? round($change / $prevIndex * 100, 2) : 0;
-            } else {
-                $changePct = 0;
-            }
-
-            $volume = (int) ($this->parseFloat($item['TV'] ?? $item['volume'] ?? 0) * 1000);
+            // 民國年日期 → 西元（e.g. "1150414" → "2026-04-14"）
+            $rocDate    = $item['日期'] ?? '';
+            $dataDate   = $this->parseRocDate($rocDate) ?? $date;
 
             SectorIndex::updateOrCreate(
-                ['date' => $date, 'sector_code' => $code],
+                ['date' => $dataDate, 'sector_code' => $indexName],
                 [
                     'sector_name'    => $sectorName,
                     'index_value'    => $indexValue,
                     'change_percent' => $changePct,
-                    'volume'         => $volume,
+                    'volume'         => 0,
                 ]
             );
 
@@ -103,10 +98,10 @@ class FetchSectorIndices extends Command
 
     private function fetchFromTwse(): array
     {
-        // TWSE OpenAPI 類股指數即時行情
+        // TWSE OpenAPI 類股指數（每日收盤後更新，含各類股漲跌幅）
         $response = Http::timeout(15)
             ->withHeaders(['Accept' => 'application/json'])
-            ->get('https://openapi.twse.com.tw/v1/indicesReport/MI_5MINS');
+            ->get('https://openapi.twse.com.tw/v1/indicesReport/MI_INDEX');
 
         if (!$response->successful()) {
             throw new \RuntimeException("HTTP {$response->status()}: " . $response->body());
@@ -128,5 +123,21 @@ class FetchSectorIndices extends Command
         }
         $cleaned = str_replace([',', ' ', '--', 'X'], '', (string) $value);
         return is_numeric($cleaned) ? (float) $cleaned : 0.0;
+    }
+
+    /**
+     * 民國年日期字串轉西元（"1150414" → "2026-04-14"）
+     */
+    private function parseRocDate(string $rocStr): ?string
+    {
+        $rocStr = trim($rocStr);
+        if (strlen($rocStr) !== 7 || !ctype_digit($rocStr)) {
+            return null;
+        }
+        $rocYear = (int) substr($rocStr, 0, 3);
+        $month   = substr($rocStr, 3, 2);
+        $day     = substr($rocStr, 5, 2);
+        $year    = $rocYear + 1911;
+        return "{$year}-{$month}-{$day}";
     }
 }

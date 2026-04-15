@@ -23,7 +23,9 @@ class CandidateController extends Controller
             $mode = 'intraday';
         }
 
-        $candidates = Candidate::with(['stock', 'result'])
+        $relations = $mode === 'overnight' ? ['stock', 'result', 'monitor'] : ['stock', 'result'];
+
+        $candidates = Candidate::with($relations)
             ->where('trade_date', $date)
             ->where('mode', $mode)
             ->orderByDesc('ai_selected')

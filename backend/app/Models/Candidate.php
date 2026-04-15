@@ -17,6 +17,7 @@ class Candidate extends Model
         'ai_selected', 'ai_score_adjustment', 'ai_reasoning', 'ai_price_reasoning',
         'intraday_strategy', 'reference_support', 'reference_resistance', 'ai_warnings',
         'overnight_strategy', 'overnight_reasoning', 'gap_potential_percent',
+        'overnight_key_levels',
     ];
 
     protected $casts = [
@@ -40,6 +41,7 @@ class Candidate extends Model
         'reference_resistance' => 'decimal:2',
         'ai_warnings' => 'array',
         'gap_potential_percent' => 'decimal:2',
+        'overnight_key_levels' => 'array',
     ];
 
     public function stock(): BelongsTo
