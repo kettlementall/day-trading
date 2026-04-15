@@ -17,12 +17,6 @@
       </div>
     </div>
 
-    <div class="overnight-tabs">
-      <router-link to="/overnight" class="o-tab" :class="{ active: route.path === '/overnight' }">候選標的</router-link>
-      <router-link to="/overnight/review" class="o-tab" active-class="active">AI 檢討</router-link>
-      <router-link to="/overnight/tip" class="o-tab" active-class="active">明牌分析</router-link>
-    </div>
-
     <div v-if="store.loading" class="loading-wrap">
       <el-skeleton :rows="5" animated />
     </div>
@@ -156,12 +150,11 @@
 
 <script setup>
 import { onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { useOvernightStore } from '../stores/overnight'
 
 const store = useOvernightStore()
 const router = useRouter()
-const route = useRoute()
 
 onMounted(() => {
   store.fetchCandidates()
@@ -238,36 +231,6 @@ function outcomeClass(outcome) {
   font-size: 11px;
   color: #909399;
   white-space: nowrap;
-}
-
-.overnight-tabs {
-  display: flex;
-  background: #fff;
-  border-radius: 8px;
-  overflow: hidden;
-  margin-bottom: 12px;
-  border: 1px solid #e4e7ed;
-}
-
-.o-tab {
-  flex: 1;
-  text-align: center;
-  padding: 8px 0;
-  font-size: 13px;
-  color: #909399;
-  text-decoration: none;
-  border-right: 1px solid #e4e7ed;
-  transition: all 0.15s;
-}
-
-.o-tab:last-child {
-  border-right: none;
-}
-
-.o-tab.active {
-  color: #409eff;
-  background: #ecf5ff;
-  font-weight: 600;
 }
 
 .loading-wrap,

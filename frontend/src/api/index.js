@@ -12,8 +12,8 @@ export const getCandidates = (date, mode = 'intraday') =>
 export const getCandidateDates = () =>
   api.get('/candidates/dates')
 
-export const getCandidateStats = (days = 30) =>
-  api.get('/candidates/stats', { params: { days } })
+export const getCandidateStats = (days = 30, mode = 'intraday') =>
+  api.get('/candidates/stats', { params: { days, mode } })
 
 export const getCandidate = (id) =>
   api.get(`/candidates/${id}`)

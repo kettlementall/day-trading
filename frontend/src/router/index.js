@@ -32,14 +32,9 @@ const routes = [
     component: () => import('../views/OvernightView.vue'),
   },
   {
-    path: '/overnight/review',
-    name: 'overnight-review',
-    component: () => import('../views/OvernightReviewView.vue'),
-  },
-  {
-    path: '/overnight/tip',
-    name: 'overnight-tip',
-    component: () => import('../views/OvernightTipView.vue'),
+    path: '/overnight/stats',
+    name: 'overnight-stats',
+    component: () => import('../views/OvernightStatsView.vue'),
   },
   {
     path: '/stock/:id',

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getCandidates, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getAnalyzeTipUrl } from '../api'
+import { getCandidates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getAnalyzeTipUrl } from '../api'
 import dayjs from 'dayjs'
 
 export const useOvernightStore = defineStore('overnight', () => {
@@ -10,6 +10,9 @@ export const useOvernightStore = defineStore('overnight', () => {
   const lastUpdatedAt = ref('')
   const isHoliday = ref(false)
   const holidayName = ref('')
+
+  // 績效統計
+  const stats = ref(null)
 
   // 單日 AI 檢討
   const reviewing = ref(false)
@@ -23,6 +26,11 @@ export const useOvernightStore = defineStore('overnight', () => {
   const tipLogs = ref([])
   const tipStreamText = ref('')
   const tipResult = ref(null)
+
+  async function fetchStats(days = 30) {
+    const { data } = await getCandidateStats(days, 'overnight')
+    stats.value = data
+  }
 
   async function fetchCandidates(date) {
     loading.value = true
@@ -146,8 +154,9 @@ export const useOvernightStore = defineStore('overnight', () => {
 
   return {
     candidates, currentDate, loading, lastUpdatedAt, isHoliday, holidayName,
+    stats,
     reviewing, reviewLogs, reviewResult, reviewStreamText, reviewDates,
     tipAnalyzing, tipLogs, tipStreamText, tipResult,
-    fetchCandidates, fetchReviewDates, fetchDailyReview, dailyReview, analyzeTip,
+    fetchCandidates, fetchStats, fetchReviewDates, fetchDailyReview, dailyReview, analyzeTip,
   }
 })

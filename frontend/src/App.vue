@@ -14,6 +14,10 @@
         <el-icon><DataAnalysis /></el-icon>
         <span>績效統計</span>
       </router-link>
+      <router-link to="/overnight/stats" class="nav-item" active-class="active">
+        <el-icon><DataLine /></el-icon>
+        <span>隔日績效</span>
+      </router-link>
       <router-link to="/news" class="nav-item" active-class="active">
         <el-icon><ChatLineSquare /></el-icon>
         <span>消息面</span>

@@ -17,7 +17,8 @@ class BacktestService
      */
     public function computeMetrics(string $from, string $to, ?string $strategyType = null): array
     {
-        $query = Candidate::whereBetween('trade_date', [$from, $to])
+        $query = Candidate::where('mode', 'intraday')
+            ->whereBetween('trade_date', [$from, $to])
             ->whereHas('result');
 
         if ($strategyType) {
@@ -25,7 +26,8 @@ class BacktestService
         }
 
         $candidates = $query->with(['result', 'monitor'])->get();
-        $total = Candidate::whereBetween('trade_date', [$from, $to])
+        $total = Candidate::where('mode', 'intraday')
+            ->whereBetween('trade_date', [$from, $to])
             ->when($strategyType, fn ($q) => $q->where('intraday_strategy', $strategyType))
             ->count();
 
@@ -37,7 +39,8 @@ class BacktestService
             $metrics['by_strategy'] = [];
             foreach (['bounce', 'breakout_fresh', 'breakout_retest', 'gap_pullback', 'momentum'] as $type) {
                 $subset = $candidates->where('intraday_strategy', $type);
-                $subsetTotal = Candidate::whereBetween('trade_date', [$from, $to])
+                $subsetTotal = Candidate::where('mode', 'intraday')
+                    ->whereBetween('trade_date', [$from, $to])
                     ->where('intraday_strategy', $type)->count();
                 if ($subset->isNotEmpty()) {
                     $metrics['by_strategy'][$type] = $this->calcMetricsFromCollection($subset, $subsetTotal);
@@ -204,6 +207,112 @@ class BacktestService
     }
 
     /**
+     * 計算隔日沖回測指標
+     */
+    public function computeOvernightMetrics(string $from, string $to): array
+    {
+        $candidates = Candidate::where('mode', 'overnight')
+            ->whereBetween('trade_date', [$from, $to])
+            ->whereHas('result')
+            ->with('result')
+            ->get();
+
+        $total = Candidate::where('mode', 'overnight')
+            ->whereBetween('trade_date', [$from, $to])
+            ->count();
+
+        $metrics = $this->calcOvernightMetricsFromCollection($candidates, $total);
+        $metrics['period'] = ['from' => $from, 'to' => $to];
+
+        // 策略分類
+        $metrics['by_strategy'] = [];
+        foreach (['gap_up_open', 'pullback_entry', 'open_follow_through', 'limit_up_chase'] as $type) {
+            $subset = $candidates->where('overnight_strategy', $type);
+            $subsetTotal = Candidate::where('mode', 'overnight')
+                ->whereBetween('trade_date', [$from, $to])
+                ->where('overnight_strategy', $type)->count();
+            if ($subset->isNotEmpty()) {
+                $metrics['by_strategy'][$type] = $this->calcOvernightMetricsFromCollection($subset, $subsetTotal);
+            }
+        }
+
+        // 日別趨勢
+        $metrics['daily'] = $this->calcOvernightDailyTrend($from, $to);
+
+        return $metrics;
+    }
+
+    private function calcOvernightMetricsFromCollection(Collection $candidates, int $totalCandidates): array
+    {
+        $evaluated = $candidates->count();
+
+        if ($evaluated === 0) {
+            return [
+                'total_candidates' => $totalCandidates,
+                'evaluated' => 0,
+                'gap_accuracy_rate' => 0,
+                'hit_target_rate' => 0,
+                'win_rate' => 0,
+                'hit_stop_rate' => 0,
+                'avg_open_gap' => 0,
+                'ai_approval_rate' => 0,
+            ];
+        }
+
+        $wins = ['hit_target', 'gap_up_strong', 'gap_up', 'up'];
+        $losses = ['hit_stop', 'gap_down', 'down'];
+
+        $gapCorrect = $candidates->filter(fn ($c) => $c->result->gap_predicted_correctly)->count();
+        $hitTarget = $candidates->filter(fn ($c) => $c->result->overnight_outcome === 'hit_target')->count();
+        $winCount = $candidates->filter(fn ($c) => in_array($c->result->overnight_outcome, $wins))->count();
+        $lossCount = $candidates->filter(fn ($c) => in_array($c->result->overnight_outcome, $losses))->count();
+
+        $openGaps = $candidates
+            ->filter(fn ($c) => $c->result->open_gap_percent !== null)
+            ->map(fn ($c) => (float) $c->result->open_gap_percent);
+        $avgOpenGap = $openGaps->isNotEmpty() ? round($openGaps->avg(), 2) : 0;
+
+        $aiSelected = $candidates->filter(fn ($c) => $c->ai_selected)->count();
+
+        return [
+            'total_candidates' => $totalCandidates,
+            'evaluated' => $evaluated,
+            'gap_accuracy_rate' => round($gapCorrect / $evaluated * 100, 1),
+            'hit_target_rate' => round($hitTarget / $evaluated * 100, 1),
+            'win_rate' => round($winCount / $evaluated * 100, 1),
+            'hit_stop_rate' => round($lossCount / $evaluated * 100, 1),
+            'avg_open_gap' => $avgOpenGap,
+            'ai_approval_rate' => round($aiSelected / $evaluated * 100, 1),
+        ];
+    }
+
+    private function calcOvernightDailyTrend(string $from, string $to): array
+    {
+        $rows = DB::table('candidates as c')
+            ->join('candidate_results as cr', 'cr.candidate_id', '=', 'c.id')
+            ->where('c.mode', 'overnight')
+            ->whereBetween('c.trade_date', [$from, $to])
+            ->select(
+                'c.trade_date as date',
+                DB::raw('COUNT(*) as evaluated'),
+                DB::raw('SUM(cr.gap_predicted_correctly) as gap_correct'),
+                DB::raw("SUM(CASE WHEN cr.overnight_outcome = 'hit_target' THEN 1 ELSE 0 END) as hit_target"),
+                DB::raw("SUM(CASE WHEN cr.overnight_outcome IN ('hit_target','gap_up_strong','gap_up','up') THEN 1 ELSE 0 END) as wins"),
+            )
+            ->groupBy('c.trade_date')
+            ->orderBy('c.trade_date')
+            ->get();
+
+        return $rows->map(fn ($row) => [
+            'date' => $row->date,
+            'evaluated' => $row->evaluated,
+            'gap_accuracy_rate' => $row->evaluated > 0 ? round($row->gap_correct / $row->evaluated * 100, 1) : 0,
+            'hit_target_rate' => $row->evaluated > 0 ? round($row->hit_target / $row->evaluated * 100, 1) : 0,
+            'win_rate' => $row->evaluated > 0 ? round($row->wins / $row->evaluated * 100, 1) : 0,
+        ])->toArray();
+    }
+
+    /**
      * 重新篩選：清除候選資料，對指定期間每個交易日重跑選股 + 結果回填，回傳新指標
      */
     public function rescreen(string $from, string $to): array
@@ -240,6 +349,7 @@ class BacktestService
     {
         $rows = DB::table('candidates as c')
             ->join('candidate_results as cr', 'cr.candidate_id', '=', 'c.id')
+            ->where('c.mode', 'intraday')
             ->whereBetween('c.trade_date', [$from, $to])
             ->select(
                 'c.trade_date as date',

@@ -195,11 +195,18 @@ class CandidateController extends Controller
     public function stats(Request $request): JsonResponse
     {
         $days = $request->get('days', 30);
+        $mode = $request->get('mode', 'intraday');
         $from = now()->subDays($days)->toDateString();
         $to = now()->toDateString();
 
         $service = new BacktestService();
-        $metrics = $service->computeMetrics($from, $to);
+
+        if ($mode === 'overnight') {
+            $metrics = $service->computeOvernightMetrics($from, $to);
+        } else {
+            $metrics = $service->computeMetrics($from, $to);
+        }
+
         $metrics['period_days'] = $days;
 
         return response()->json($metrics);
