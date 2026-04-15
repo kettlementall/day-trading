@@ -80,30 +80,34 @@
       <div class="stock-card" style="margin-top: 16px;">
         <div class="ai-header">
           <h3>明牌分析</h3>
-          <span class="tip-hint">今晚買了哪支隔日沖賺到了？AI 從數值找理由存成高優先教訓</span>
+          <span class="tip-hint">隔日沖賺到了？告訴 AI 哪天買哪天賺，它幫你找出模式存成教訓</span>
         </div>
         <div class="tip-form">
           <el-input
             v-model="tipSymbol"
             placeholder="股票代號（如 2330）"
             size="small"
-            style="width: 160px"
+            style="width: 150px"
             clearable
           />
+          <span class="tip-date-label">買入</span>
           <el-date-picker
-            v-model="tipDate"
+            v-model="tipBuyDate"
             type="date"
             format="MM/DD"
             value-format="YYYY-MM-DD"
             :clearable="false"
             size="small"
-            style="width: 110px"
+            style="width: 100px"
+            @change="onTipBuyDateChange"
           />
+          <span class="tip-date-arrow">→ 出場</span>
+          <span class="tip-date-exit">{{ tipExitDisplay }}</span>
           <el-button
             type="primary"
             size="small"
             :loading="store.tipAnalyzing"
-            :disabled="!tipSymbol"
+            :disabled="!tipSymbol.trim()"
             @click="runTipAnalysis"
           >
             分析
@@ -112,7 +116,7 @@
         <el-input
           v-model="tipNotes"
           type="textarea"
-          placeholder="備註（可選）：例如「今日強勢收盤，明日預期延續」"
+          placeholder="備註（可選）：例如「尾盤急拉，隔日跳空開高出場」"
           :rows="2"
           size="small"
           style="margin-top: 8px;"
@@ -226,8 +230,20 @@ const reviewDate = ref(dayjs().format('YYYY-MM-DD'))
 const reviewLoading = ref(false)
 
 const tipSymbol = ref('')
-const tipDate = ref(dayjs().format('YYYY-MM-DD'))
+const tipBuyDate = ref(dayjs().subtract(1, 'day').format('YYYY-MM-DD')) // 建倉日（昨天買）
+const tipExitDate = ref(dayjs().format('YYYY-MM-DD'))                   // 出場日（今天賣）
+const tipExitDisplay = computed(() => dayjs(tipExitDate.value).format('MM/DD'))
 const tipNotes = ref('')
+
+function onTipBuyDateChange() {
+  tipExitDate.value = nextTradingDay(tipBuyDate.value)
+}
+
+function nextTradingDay(dateStr) {
+  let d = dayjs(dateStr).add(1, 'day')
+  while (d.day() === 0 || d.day() === 6) d = d.add(1, 'day')
+  return d.format('YYYY-MM-DD')
+}
 
 async function fetchData() {
   loading.value = true
@@ -258,7 +274,8 @@ async function runDailyReview() {
 async function runTipAnalysis() {
   if (!tipSymbol.value) return
   try {
-    await store.analyzeTip(tipDate.value, tipSymbol.value.trim(), tipNotes.value.trim())
+    // 傳出場日（trade_date）給後端，後端用這天的資料計算結果
+    await store.analyzeTip(tipExitDate.value, tipSymbol.value.trim(), tipNotes.value.trim())
   } catch (e) {
     console.error(e)
   }
@@ -443,6 +460,25 @@ onMounted(() => {
   display: flex;
   gap: 6px;
   margin-left: auto;
+}
+
+.tip-date-label {
+  font-size: 12px;
+  color: #606266;
+  white-space: nowrap;
+}
+
+.tip-date-arrow {
+  font-size: 12px;
+  color: #909399;
+  white-space: nowrap;
+}
+
+.tip-date-exit {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  white-space: nowrap;
 }
 
 .tip-form {
