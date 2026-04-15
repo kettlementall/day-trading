@@ -14,6 +14,8 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
+class ContextTooLargeException extends \RuntimeException {}
+
 class AiScreenerService
 {
     private string $apiKey;
@@ -44,20 +46,36 @@ class AiScreenerService
         }
 
         // 市場背景 system prompt — Anthropic 快取，所有股票共用
-        $systemPrompt = $this->buildSystemPrompt($tradeDate);
+        $systemPrompt      = $this->buildSystemPrompt($tradeDate);
+        $systemPromptShort = $this->buildSystemPrompt($tradeDate, short: true);
 
         foreach ($candidates as $candidate) {
             $symbol = $candidate->stock->symbol;
             try {
                 $userMessage = $this->buildStockMessage($tradeDate, $candidate);
-                $result = $this->callApi($systemPrompt, $userMessage);
+                $result = $this->callApiWithRetry($systemPrompt, $userMessage, $symbol);
                 $this->applyResult($candidate, $result);
                 Log::info("AiScreenerService {$symbol}: " . ($result['selected'] ? '選入' : '排除'));
+            } catch (ContextTooLargeException $e) {
+                // 422 context too large：改用精簡 system prompt 重試一次
+                Log::warning("AiScreenerService {$symbol}: context 過大，改用精簡 prompt 重試");
+                try {
+                    $userMessage = $this->buildStockMessage($tradeDate, $candidate, short: true);
+                    $result = $this->callApiWithRetry($systemPromptShort, $userMessage, $symbol);
+                    $this->applyResult($candidate, $result);
+                    Log::info("AiScreenerService {$symbol}(short): " . ($result['selected'] ? '選入' : '排除'));
+                } catch (\Exception $e2) {
+                    Log::error("AiScreenerService {$symbol}(short): " . $e2->getMessage());
+                    $candidate->update([
+                        'ai_selected'  => false,
+                        'ai_reasoning' => 'AI 評估失敗（context 過大）',
+                    ]);
+                }
             } catch (\Exception $e) {
                 Log::error("AiScreenerService {$symbol}: " . $e->getMessage());
                 $candidate->update([
                     'ai_selected'  => false,
-                    'ai_reasoning' => 'AI 評估失敗',
+                    'ai_reasoning' => 'AI 評估失敗：' . mb_substr($e->getMessage(), 0, 80),
                 ]);
             }
             usleep(150_000); // 150ms，避免觸發 rate limit
@@ -96,16 +114,17 @@ class AiScreenerService
     // 快取 system prompt：市場背景 + 任務說明（所有股票共用）
     // -------------------------------------------------------------------------
 
-    private function buildSystemPrompt(string $tradeDate): string
+    private function buildSystemPrompt(string $tradeDate, bool $short = false): string
     {
         $usMarketSection  = UsMarketIndex::getSummary($tradeDate);
         $lessonsSection   = AiLesson::getScreeningLessons();
 
-        // 新聞標題（近 2 日）
+        // 新聞標題（近 2 日）：精簡模式只取 15 則
+        $newsLimit = $short ? 15 : 30;
         $news = NewsArticle::where('fetched_date', '>=', now()->subDays(2)->toDateString())
             ->whereNotNull('industry')
             ->orderByDesc('published_at')
-            ->limit(30)
+            ->limit($newsLimit)
             ->get();
         $newsLines = $news->map(fn($n) => "- [{$n->industry}] {$n->title}")->implode("\n");
         $newsSection = $newsLines ?: '（無近期新聞）';
@@ -178,18 +197,19 @@ SYSTEM;
     // 個股 user message：K 線 / 籌碼 / 評分理由
     // -------------------------------------------------------------------------
 
-    private function buildStockMessage(string $tradeDate, Candidate $candidate): string
+    private function buildStockMessage(string $tradeDate, Candidate $candidate, bool $short = false): string
     {
         $stock   = $candidate->stock;
         $reasons = is_array($candidate->reasons)
             ? implode('；', $candidate->reasons)
             : ($candidate->reasons ?? '');
 
-        // 近 10 日 K 線
+        // K 線：精簡模式只取 5 日
+        $klineLimit = $short ? 5 : 10;
         $quotes = DailyQuote::where('stock_id', $candidate->stock_id)
             ->where('date', '<=', $tradeDate)
             ->orderByDesc('date')
-            ->limit(10)
+            ->limit($klineLimit)
             ->get();
 
         $klineLines = ['日期  開  高  低  收  量(張)  漲%  振幅%'];
@@ -258,8 +278,52 @@ MSG;
     }
 
     // -------------------------------------------------------------------------
-    // API call（含 prompt caching）
+    // API call（含 prompt caching + retry）
     // -------------------------------------------------------------------------
+
+    /**
+     * 帶 retry 的 API call：
+     *  - 529 Overloaded：最多 3 次，指數退避 2s/4s/8s
+     *  - 連線 timeout：最多 2 次，間隔 3s
+     *  - 422 context too large：直接丟 ContextTooLargeException 讓上層換精簡 prompt
+     */
+    private function callApiWithRetry(string $systemPrompt, string $userMessage, string $symbol = ''): array
+    {
+        $maxAttempts = 3;
+        $attempt     = 0;
+
+        while (true) {
+            $attempt++;
+            try {
+                return $this->callApi($systemPrompt, $userMessage);
+            } catch (ContextTooLargeException $e) {
+                throw $e; // 直接往上傳，不 retry
+            } catch (\RuntimeException $e) {
+                $msg = $e->getMessage();
+
+                // 529 Overloaded
+                if (str_contains($msg, 'API 529') || str_contains($msg, 'overloaded_error')) {
+                    if ($attempt >= $maxAttempts) {
+                        Log::error("AiScreenerService {$symbol}: 達最大重試次數（529），放棄");
+                        throw $e;
+                    }
+                    $sleep = (2 ** $attempt); // 2s, 4s, 8s
+                    Log::warning("AiScreenerService {$symbol}: 529 Overloaded，{$sleep}s 後重試（第 {$attempt} 次）");
+                    sleep($sleep);
+                    continue;
+                }
+
+                // 其他 RuntimeException（parse 失敗、422 以外的 API 錯誤）
+                throw $e;
+            } catch (\Illuminate\Http\Client\ConnectionException $e) {
+                if ($attempt >= 2) {
+                    throw new \RuntimeException('連線逾時（重試後仍失敗）', 0, $e);
+                }
+                Log::warning("AiScreenerService {$symbol}: 連線 timeout，3s 後重試");
+                sleep(3);
+            }
+        }
+    }
 
     private function callApi(string $systemPrompt, string $userMessage): array
     {
@@ -272,7 +336,7 @@ MSG;
             ])
             ->post('https://api.anthropic.com/v1/messages', [
                 'model'      => $this->model,
-                'max_tokens' => 512,
+                'max_tokens' => 1024,
                 'system'     => [
                     [
                         'type'          => 'text',
@@ -284,6 +348,13 @@ MSG;
                     ['role' => 'user', 'content' => $userMessage],
                 ],
             ]);
+
+        if ($response->status() === 422) {
+            $body = $response->json();
+            if (str_contains($body['error']['message'] ?? '', 'context reduction')) {
+                throw new ContextTooLargeException('422 context reduction: ' . ($body['error']['message'] ?? ''));
+            }
+        }
 
         if (!$response->successful()) {
             throw new \RuntimeException('API ' . $response->status() . ': ' . $response->body());

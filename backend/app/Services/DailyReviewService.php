@@ -95,10 +95,11 @@ class DailyReviewService
 
         // 從報告中萃取結構化教訓
         try {
-            $this->extractLessons($date, $report);
-            $log("教訓萃取完成");
+            $count = $this->extractLessons($date, $report);
+            $log("教訓萃取完成（新增 {$count} 條）");
         } catch (\Exception $e) {
             Log::error("DailyReviewService extractLessons: " . $e->getMessage());
+            $log("教訓萃取失敗：{$e->getMessage()}");
         }
 
         return [
@@ -312,16 +313,16 @@ PROMPT;
     /**
      * 從每日檢討報告中萃取結構化教訓，存入 ai_lessons
      */
-    private function extractLessons(string $date, string $report): void
+    private function extractLessons(string $date, string $report): int
     {
         if (!$this->apiKey || strlen($report) < 100) {
-            return;
+            return 0;
         }
 
-        // 如果該日已有教訓，跳過（避免重複萃取）
-        if (AiLesson::where('trade_date', $date)->exists()) {
-            Log::info("DailyReviewService: {$date} 教訓已存在，跳過萃取");
-            return;
+        // 刪除該日舊教訓，重新萃取（每次檢討都取最新版本）
+        $deleted = AiLesson::where('trade_date', $date)->where('source', '!=', 'tip')->delete();
+        if ($deleted > 0) {
+            Log::info("DailyReviewService: 刪除 {$date} 舊教訓 {$deleted} 條，重新萃取");
         }
 
         $prompt = <<<PROMPT
@@ -374,7 +375,7 @@ PROMPT;
 
             if (!$response->successful()) {
                 Log::error('DailyReviewService extractLessons API error: ' . $response->body());
-                return;
+                return 0;
             }
 
             // 檢查是否因 max_tokens 截斷
@@ -419,7 +420,7 @@ PROMPT;
 
             if (!is_array($lessons)) {
                 Log::error('DailyReviewService: 無法解析教訓 JSON', ['raw' => mb_substr($text, 0, 500)]);
-                return;
+                return 0;
             }
 
             $expiresAt = now()->addDays(14)->toDateString();
@@ -441,8 +442,10 @@ PROMPT;
             }
 
             Log::info("DailyReviewService: 從 {$date} 檢討萃取 {$count} 條教訓");
+            return $count;
         } catch (\Exception $e) {
             Log::error('DailyReviewService extractLessons: ' . $e->getMessage());
+            return 0;
         }
     }
 

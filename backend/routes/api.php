@@ -52,7 +52,7 @@ Route::get('/backtest/analyze-tip', [BacktestController::class, 'analyzeTip']);
 
 // 系統規格
 Route::get('/spec', function () {
-    $path = base_path('../SPEC.md');
+    $path = base_path('SPEC.md');
     if (!file_exists($path)) {
         return response()->json(['content' => ''], 404);
     }
