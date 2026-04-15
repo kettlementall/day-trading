@@ -16,8 +16,8 @@ class Candidate extends Model
         'morning_score', 'morning_signals', 'morning_confirmed', 'morning_grade',
         'ai_selected', 'ai_score_adjustment', 'ai_reasoning', 'ai_price_reasoning',
         'intraday_strategy', 'reference_support', 'reference_resistance', 'ai_warnings',
-        'overnight_strategy', 'overnight_reasoning', 'gap_potential_percent',
-        'overnight_key_levels',
+        'overnight_strategy', 'overnight_reasoning', 'overnight_news_reason', 'overnight_fundamental_reason',
+        'gap_potential_percent', 'overnight_key_levels',
     ];
 
     protected $casts = [

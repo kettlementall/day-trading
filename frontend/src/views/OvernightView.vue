@@ -148,34 +148,57 @@
           </div>
         </div>
 
-        <!-- 支撐/壓力位 -->
-        <div v-if="item.overnight_key_levels?.length" class="card-key-levels">
-          <div
-            v-for="(level, i) in item.overnight_key_levels"
-            :key="i"
-            class="key-level-item"
-            :class="level.type === 'support' ? 'level-support' : 'level-resistance'"
-          >
-            <span class="level-type">{{ level.type === 'support' ? '支' : '壓' }}</span>
-            <span class="level-price">{{ level.price }}</span>
-            <span class="level-reason">{{ level.reason }}</span>
-          </div>
-        </div>
+        <!-- 結構化分析區塊 -->
+        <div class="card-sections">
 
-        <!-- Opus 進場策略說明 -->
-        <div v-if="item.overnight_reasoning" class="card-strategy-text">
-          {{ item.overnight_reasoning }}
-        </div>
+          <!-- 支撐 -->
+          <div v-if="supportLevels(item).length" class="card-section">
+            <span class="section-label label-support">支撐</span>
+            <div class="section-levels">
+              <span
+                v-for="(lv, i) in supportLevels(item)"
+                :key="i"
+                class="key-level-chip level-support"
+              >{{ lv.price }}<span class="chip-reason"> {{ lv.reason }}</span></span>
+            </div>
+          </div>
 
-        <!-- AI 理由 + 警告 -->
-        <div v-if="item.ai_reasoning" class="card-ai-reasoning">
-          <div class="ai-reasoning-text">{{ item.ai_reasoning }}</div>
-          <div v-if="item.ai_price_reasoning" class="ai-price-reasoning">
-            {{ item.ai_price_reasoning }}
+          <!-- 壓力 -->
+          <div v-if="resistanceLevels(item).length" class="card-section">
+            <span class="section-label label-resistance">壓力</span>
+            <div class="section-levels">
+              <span
+                v-for="(lv, i) in resistanceLevels(item)"
+                :key="i"
+                class="key-level-chip level-resistance"
+              >{{ lv.price }}<span class="chip-reason"> {{ lv.reason }}</span></span>
+            </div>
           </div>
-          <div v-if="item.ai_warnings?.length" class="ai-warnings">
-            <span v-for="(w, i) in item.ai_warnings" :key="i" class="ai-warning-chip">{{ w }}</span>
+
+          <!-- 消息題材面選入理由 -->
+          <div v-if="item.overnight_news_reason || item.haiku_reasoning" class="card-section">
+            <span class="section-label label-news">消息題材</span>
+            <p class="section-text">{{ item.overnight_news_reason || item.haiku_reasoning }}</p>
           </div>
+
+          <!-- 基本面選入理由 -->
+          <div v-if="item.overnight_fundamental_reason || item.ai_reasoning" class="card-section">
+            <span class="section-label label-fundamental">基本面</span>
+            <p class="section-text">{{ item.overnight_fundamental_reason || item.ai_reasoning }}</p>
+          </div>
+
+          <!-- 操作須知 -->
+          <div v-if="item.overnight_reasoning || item.ai_price_reasoning || item.ai_warnings?.length" class="card-section">
+            <span class="section-label label-operation">操作須知</span>
+            <div class="section-operation">
+              <p v-if="item.overnight_reasoning" class="section-text">{{ item.overnight_reasoning }}</p>
+              <p v-if="item.ai_price_reasoning" class="section-text section-price">{{ item.ai_price_reasoning }}</p>
+              <div v-if="item.ai_warnings?.length" class="ai-warnings">
+                <span v-for="(w, i) in item.ai_warnings" :key="i" class="ai-warning-chip">⚠ {{ w }}</span>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         <!-- 盤後結果（若已回填） -->
@@ -300,6 +323,14 @@ function monitorBadgeClass(status) {
 
 function monitorActionLabel(action) {
   return { hold: '維持', adjust: '調整', exit: '出場' }[action] || action
+}
+
+function supportLevels(item) {
+  return (item.overnight_key_levels || []).filter(l => l.type === 'support')
+}
+
+function resistanceLevels(item) {
+  return (item.overnight_key_levels || []).filter(l => l.type === 'resistance')
 }
 
 function outcomeClass(outcome) {
@@ -448,77 +479,79 @@ function outcomeClass(outcome) {
 .price-up   { color: #f56c6c; }
 .price-down { color: #67c23a; }
 
-.card-key-levels {
+.card-sections {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-bottom: 6px;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
 }
 
-.key-level-item {
+.card-section {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.section-label {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-top: 1px;
+  letter-spacing: 0.5px;
+}
+
+.label-support     { background: #f0f9eb; color: #67c23a; }
+.label-resistance  { background: #fef0f0; color: #f56c6c; }
+.label-news        { background: #ecf5ff; color: #409eff; }
+.label-fundamental { background: #fdf6ec; color: #e6a23c; }
+.label-operation   { background: #f5f7fa; color: #606266; }
+
+.section-levels {
+  display: flex;
+  flex-wrap: wrap;
   gap: 4px;
+}
+
+.key-level-chip {
   font-size: 11px;
+  font-weight: 600;
   padding: 2px 7px;
   border-radius: 4px;
 }
 
-.level-support {
-  background: #f0f9eb;
-  color: #67c23a;
-}
+.level-support    { background: #f0f9eb; color: #67c23a; }
+.level-resistance { background: #fef0f0; color: #f56c6c; }
 
-.level-resistance {
-  background: #fef0f0;
-  color: #f56c6c;
-}
-
-.level-type {
-  font-weight: 700;
-  font-size: 10px;
-}
-
-.level-price {
-  font-weight: 600;
-}
-
-.level-reason {
-  color: inherit;
+.chip-reason {
+  font-weight: 400;
   opacity: 0.8;
 }
 
-.card-strategy-text {
+.section-text {
   font-size: 12px;
   color: #606266;
   line-height: 1.5;
-  margin-bottom: 6px;
-  padding: 6px 8px;
-  background: #f5f7fa;
-  border-radius: 6px;
+  margin: 0;
 }
 
-.card-ai-reasoning {
-  font-size: 12px;
-  color: #606266;
-  line-height: 1.4;
-  margin-top: 4px;
-}
-
-.ai-reasoning-text {
-  margin-bottom: 3px;
-}
-
-.ai-price-reasoning {
+.section-price {
   color: #909399;
-  margin-bottom: 3px;
+  margin-top: 3px;
+}
+
+.section-operation {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .ai-warnings {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 3px;
+  margin-top: 2px;
 }
 
 .ai-warning-chip {

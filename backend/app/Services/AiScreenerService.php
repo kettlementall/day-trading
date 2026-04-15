@@ -534,7 +534,9 @@ MSG;
 {
   "selected": true,
   "reasoning": "一句話選入/排除理由",
-  "overnight_strategy": "完整進場策略說明（含為何現在建倉、明日預期走勢、關鍵觀察點）",
+  "news_theme_reason": "消息面／題材面／籌碼面（法人動向）選入理由（1–2句，無則 null）",
+  "fundamental_reason": "基本面／估值面選入理由（本益比、殖利率、股價淨值比等，無則 null）",
+  "overnight_strategy": "操作須知：何時建倉、明日關鍵觀察點、預期走勢（2–3句）",
   "entry_type": "gap_up_open|pullback_entry|open_follow_through|limit_up_chase",
   "gap_potential_percent": 1.5,
   "suggested_buy": 788.0,
@@ -554,7 +556,7 @@ entry_type 說明：
 - open_follow_through：今日收盤強勢，明日延續開盤動能
 - limit_up_chase：今日漲停收盤，明日開盤追強
 
-若不選入，overnight_strategy/entry_type/gap_potential_percent/suggested_buy/target_price/stop_loss/price_reasoning/key_levels/warnings 均可為 null。
+若不選入，news_theme_reason/fundamental_reason/overnight_strategy/entry_type/gap_potential_percent/suggested_buy/target_price/stop_loss/price_reasoning/key_levels/warnings 均可為 null。
 SYSTEM;
     }
 
@@ -831,15 +833,17 @@ MSG;
         $symbol   = $candidate->stock->symbol;
 
         $updates = [
-            'ai_selected'          => $selected,
-            'ai_reasoning'         => $result['reasoning'] ?? '',
-            'overnight_reasoning'  => $selected ? ($result['overnight_strategy'] ?? null) : null,
-            'overnight_strategy'   => $selected ? ($result['entry_type'] ?? null) : null,
-            'gap_potential_percent'=> $selected ? ($result['gap_potential_percent'] ?? null) : null,
-            'ai_price_reasoning'   => $selected ? ($result['price_reasoning'] ?? null) : null,
-            'overnight_key_levels' => $selected ? ($result['key_levels'] ?? null) : null,
-            'ai_warnings'          => $result['warnings'] ?? null,
-            'intraday_strategy'    => null, // 隔日沖不設當沖策略
+            'ai_selected'                   => $selected,
+            'ai_reasoning'                  => $result['reasoning'] ?? '',
+            'overnight_news_reason'         => $selected ? ($result['news_theme_reason'] ?? null) : null,
+            'overnight_fundamental_reason'  => $selected ? ($result['fundamental_reason'] ?? null) : null,
+            'overnight_reasoning'           => $selected ? ($result['overnight_strategy'] ?? null) : null,
+            'overnight_strategy'            => $selected ? ($result['entry_type'] ?? null) : null,
+            'gap_potential_percent'         => $selected ? ($result['gap_potential_percent'] ?? null) : null,
+            'ai_price_reasoning'            => $selected ? ($result['price_reasoning'] ?? null) : null,
+            'overnight_key_levels'          => $selected ? ($result['key_levels'] ?? null) : null,
+            'ai_warnings'                   => $result['warnings'] ?? null,
+            'intraday_strategy'             => null, // 隔日沖不設當沖策略
         ];
 
         if ($selected) {
