@@ -133,9 +133,13 @@ class CandidateController extends Controller
     public function monitors(Request $request): JsonResponse
     {
         $date = $request->get('date', now()->toDateString());
+        $mode = $request->get('mode', 'intraday');
+        if (!in_array($mode, ['intraday', 'overnight'])) {
+            $mode = 'intraday';
+        }
 
         $monitors = CandidateMonitor::with(['candidate.stock'])
-            ->whereHas('candidate', fn($q) => $q->where('trade_date', $date))
+            ->whereHas('candidate', fn($q) => $q->where('trade_date', $date)->where('mode', $mode))
             ->get()
             ->map(function ($monitor) {
                 $candidate = $monitor->candidate;

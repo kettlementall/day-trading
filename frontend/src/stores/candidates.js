@@ -57,20 +57,20 @@ export const useCandidateStore = defineStore('candidates', () => {
     monitors.value.filter(m => ['target_hit', 'stop_hit', 'trailing_stop', 'closed', 'skipped'].includes(m.status))
   )
 
-  async function fetchMonitors(date) {
+  async function fetchMonitors(date, mode = 'intraday') {
     monitorLoading.value = true
     try {
-      const { data } = await getMonitorStatus(date || currentDate.value)
+      const { data } = await getMonitorStatus(date || currentDate.value, mode)
       monitors.value = data.data
     } finally {
       monitorLoading.value = false
     }
   }
 
-  function startMonitorPolling(date) {
+  function startMonitorPolling(date, mode = 'intraday') {
     stopMonitorPolling()
-    fetchMonitors(date)
-    monitorPollingTimer = setInterval(() => fetchMonitors(date), 30000)
+    fetchMonitors(date, mode)
+    monitorPollingTimer = setInterval(() => fetchMonitors(date, mode), 30000)
   }
 
   function stopMonitorPolling() {

@@ -24,8 +24,8 @@ export const getMorningSignals = (date) =>
 export const getCandidateSnapshots = (candidateId) =>
   api.get(`/candidates/${candidateId}/snapshots`)
 
-export const getMonitorStatus = (date) =>
-  api.get('/candidates/monitors', { params: { date } })
+export const getMonitorStatus = (date, mode = 'intraday') =>
+  api.get('/candidates/monitors', { params: { date, mode } })
 
 export const getCandidateMonitor = (candidateId) =>
   api.get(`/candidates/${candidateId}/monitor`)
