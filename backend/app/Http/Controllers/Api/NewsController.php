@@ -31,7 +31,6 @@ class NewsController extends Controller
         $articles = NewsArticle::where('fetched_date', $date)
             ->whereNotNull('sentiment_score')
             ->orderByDesc('published_at')
-            ->limit(50)
             ->get([
                 'id', 'source', 'title', 'url', 'category', 'industry',
                 'sentiment_score', 'sentiment_label', 'ai_analysis',

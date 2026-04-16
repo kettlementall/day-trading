@@ -75,7 +75,7 @@ class FetchNews extends Command
                     $newsId = $item['newsId'] ?? '';
                     $url = $newsId ? "https://news.cnyes.com/news/id/{$newsId}" : '';
                     $publishedAt = isset($item['publishAt'])
-                        ? Carbon::createFromTimestamp($item['publishAt'])
+                        ? Carbon::createFromTimestamp($item['publishAt'], 'Asia/Taipei')
                         : null;
 
                     $fullText = $title . ' ' . $summary;
