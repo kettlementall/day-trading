@@ -50,6 +50,9 @@
           <span style="font-weight: 600; color: #409eff">{{ editingId }}</span>
           <span style="font-size: 12px; color: #909399; margin-left: 8px">（登入時填此 ID）</span>
         </el-form-item>
+        <el-form-item v-else label="用戶 ID" prop="userId">
+          <el-input v-model.number="form.userId" type="number" placeholder="留空自動分配" />
+        </el-form-item>
         <el-form-item label="姓名" prop="name">
           <el-input v-model="form.name" placeholder="用戶姓名" />
         </el-form-item>
@@ -101,9 +104,23 @@ const isEditing     = ref(false)
 const editingId     = ref(null)
 const formRef       = ref(null)
 
-const form = ref({ name: '', email: '', password: '', role: 'viewer' })
+const form = ref({ userId: '', name: '', email: '', password: '', role: 'viewer' })
 
 const formRules = {
+  userId: [
+    {
+      validator: (rule, value, callback) => {
+        if (value === '' || value === null || value === undefined) {
+          callback()
+        } else if (!Number.isInteger(Number(value)) || Number(value) < 1) {
+          callback(new Error('ID 必須為正整數'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur',
+    },
+  ],
   name:  [{ required: true, message: '請輸入姓名', trigger: 'blur' }],
   email: [
     {
@@ -149,7 +166,7 @@ async function fetchUsers() {
 function openCreate() {
   isEditing.value = false
   editingId.value = null
-  form.value = { name: '', email: '', password: '', role: 'viewer' }
+  form.value = { userId: '', name: '', email: '', password: '', role: 'viewer' }
   dialogVisible.value = true
 }
 
@@ -166,6 +183,10 @@ async function handleSave() {
   saving.value = true
   try {
     const payload = { ...form.value }
+    if (!isEditing.value && payload.userId) {
+      payload.id = payload.userId
+    }
+    delete payload.userId
     if (isEditing.value && !payload.password) delete payload.password
     if (isEditing.value) {
       await updateUser(editingId.value, payload)

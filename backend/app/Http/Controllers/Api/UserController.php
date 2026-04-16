@@ -21,13 +21,19 @@ class UserController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
+            'id'       => 'sometimes|integer|min:1|unique:users,id',
             'name'     => 'required|string|max:100',
             'email'    => 'nullable|email|unique:users',
             'password' => 'required|string|min:8',
             'role'     => 'required|in:admin,viewer',
         ]);
 
-        $user = User::create($validated);
+        $user = new User();
+        if (isset($validated['id'])) {
+            $user->id = $validated['id'];
+        }
+        $user->fill(array_diff_key($validated, ['id' => null]));
+        $user->save();
 
         return response()->json([
             'id'    => $user->id,
