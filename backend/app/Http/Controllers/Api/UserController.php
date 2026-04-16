@@ -12,7 +12,7 @@ class UserController extends Controller
     public function index(): JsonResponse
     {
         return response()->json(
-            User::select('id', 'name', 'email', 'role', 'created_at')
+            User::select('id', 'user_id', 'name', 'email', 'role', 'created_at')
                 ->orderBy('id')
                 ->get()
         );
@@ -21,31 +21,28 @@ class UserController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'id'       => 'sometimes|integer|min:1|unique:users,id',
+            'user_id'  => 'required|string|max:50|unique:users,user_id',
             'name'     => 'required|string|max:100',
             'email'    => 'nullable|email|unique:users',
             'password' => 'required|string|min:8',
             'role'     => 'required|in:admin,viewer',
         ]);
 
-        $user = new User();
-        if (isset($validated['id'])) {
-            $user->id = $validated['id'];
-        }
-        $user->fill(array_diff_key($validated, ['id' => null]));
-        $user->save();
+        $user = User::create($validated);
 
         return response()->json([
-            'id'    => $user->id,
-            'name'  => $user->name,
-            'email' => $user->email,
-            'role'  => $user->role,
+            'id'      => $user->id,
+            'user_id' => $user->user_id,
+            'name'    => $user->name,
+            'email'   => $user->email,
+            'role'    => $user->role,
         ], 201);
     }
 
     public function update(Request $request, User $user): JsonResponse
     {
         $validated = $request->validate([
+            'user_id'  => 'sometimes|string|max:50|unique:users,user_id,' . $user->id,
             'name'     => 'sometimes|string|max:100',
             'email'    => 'sometimes|nullable|email|unique:users,email,' . $user->id,
             'password' => 'sometimes|string|min:8',
@@ -55,10 +52,11 @@ class UserController extends Controller
         $user->update($validated);
 
         return response()->json([
-            'id'    => $user->id,
-            'name'  => $user->name,
-            'email' => $user->email,
-            'role'  => $user->role,
+            'id'      => $user->id,
+            'user_id' => $user->user_id,
+            'name'    => $user->name,
+            'email'   => $user->email,
+            'role'    => $user->role,
         ]);
     }
 

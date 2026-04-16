@@ -10,9 +10,10 @@ class AdminSeeder extends Seeder
     public function run(): void
     {
         User::firstOrCreate(
-            ['email' => 'admin@trading.local'],
+            ['user_id' => 'admin'],
             [
                 'name'     => 'Admin',
+                'email'    => 'admin@trading.local',
                 'password' => 'changeme123',
                 'role'     => 'admin',
             ]

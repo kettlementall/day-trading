@@ -14,15 +14,19 @@ class AuthController extends Controller
     public function login(Request $request): JsonResponse
     {
         $request->validate([
-            'user_id'  => 'required|integer',
-            'password' => 'required|string',
+            'identifier' => 'required|string',
+            'password'   => 'required|string',
         ]);
 
-        $user = User::find($request->user_id);
+        $identifier = $request->identifier;
+
+        // 嘗試用 user_id 找，找不到再用 email
+        $user = User::where('user_id', $identifier)->first()
+             ?? User::where('email', $identifier)->first();
 
         if (! $user || ! Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
-                'user_id' => ['帳號或密碼錯誤'],
+                'identifier' => ['帳號或密碼錯誤'],
             ]);
         }
 
@@ -34,10 +38,11 @@ class AuthController extends Controller
         return response()->json([
             'token' => $token,
             'user'  => [
-                'id'    => $user->id,
-                'name'  => $user->name,
-                'email' => $user->email,
-                'role'  => $user->role,
+                'id'      => $user->id,
+                'user_id' => $user->user_id,
+                'name'    => $user->name,
+                'email'   => $user->email,
+                'role'    => $user->role,
             ],
         ]);
     }
@@ -47,10 +52,11 @@ class AuthController extends Controller
         $user = $request->user();
 
         return response()->json([
-            'id'    => $user->id,
-            'name'  => $user->name,
-            'email' => $user->email,
-            'role'  => $user->role,
+            'id'      => $user->id,
+            'user_id' => $user->user_id,
+            'name'    => $user->name,
+            'email'   => $user->email,
+            'role'    => $user->role,
         ]);
     }
 

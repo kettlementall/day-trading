@@ -9,6 +9,7 @@
 
     <el-table v-else :data="users" style="width: 100%">
       <el-table-column prop="id" label="ID" width="60" />
+      <el-table-column prop="user_id" label="帳號 ID" width="120" />
       <el-table-column prop="name" label="姓名" />
       <el-table-column prop="email" label="電子郵件" />
       <el-table-column prop="role" label="角色" width="100">
@@ -46,12 +47,8 @@
       :close-on-click-modal="false"
     >
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="90px">
-        <el-form-item v-if="isEditing" label="登入 ID">
-          <span style="font-weight: 600; color: #409eff">{{ editingId }}</span>
-          <span style="font-size: 12px; color: #909399; margin-left: 8px">（登入時填此 ID）</span>
-        </el-form-item>
-        <el-form-item v-else label="用戶 ID" prop="userId">
-          <el-input v-model.number="form.userId" type="number" placeholder="留空自動分配" />
+        <el-form-item label="帳號 ID" prop="user_id">
+          <el-input v-model="form.user_id" placeholder="登入用，英數字皆可" />
         </el-form-item>
         <el-form-item label="姓名" prop="name">
           <el-input v-model="form.name" placeholder="用戶姓名" />
@@ -104,24 +101,11 @@ const isEditing     = ref(false)
 const editingId     = ref(null)
 const formRef       = ref(null)
 
-const form = ref({ userId: '', name: '', email: '', password: '', role: 'viewer' })
+const form = ref({ user_id: '', name: '', email: '', password: '', role: 'viewer' })
 
 const formRules = {
-  userId: [
-    {
-      validator: (rule, value, callback) => {
-        if (value === '' || value === null || value === undefined) {
-          callback()
-        } else if (!Number.isInteger(Number(value)) || Number(value) < 1) {
-          callback(new Error('ID 必須為正整數'))
-        } else {
-          callback()
-        }
-      },
-      trigger: 'blur',
-    },
-  ],
-  name:  [{ required: true, message: '請輸入姓名', trigger: 'blur' }],
+  user_id: [{ required: true, message: '請輸入帳號 ID', trigger: 'blur' }],
+  name:    [{ required: true, message: '請輸入姓名', trigger: 'blur' }],
   email: [
     {
       validator: (rule, value, callback) => {
@@ -166,14 +150,14 @@ async function fetchUsers() {
 function openCreate() {
   isEditing.value = false
   editingId.value = null
-  form.value = { userId: '', name: '', email: '', password: '', role: 'viewer' }
+  form.value = { user_id: '', name: '', email: '', password: '', role: 'viewer' }
   dialogVisible.value = true
 }
 
 function openEdit(user) {
   isEditing.value = true
   editingId.value = user.id
-  form.value = { name: user.name, email: user.email, password: '', role: user.role }
+  form.value = { user_id: user.user_id, name: user.name, email: user.email ?? '', password: '', role: user.role }
   dialogVisible.value = true
 }
 
@@ -183,17 +167,13 @@ async function handleSave() {
   saving.value = true
   try {
     const payload = { ...form.value }
-    if (!isEditing.value && payload.userId) {
-      payload.id = payload.userId
-    }
-    delete payload.userId
     if (isEditing.value && !payload.password) delete payload.password
     if (isEditing.value) {
       await updateUser(editingId.value, payload)
       ElMessage.success('用戶已更新')
     } else {
       const { data } = await createUser(payload)
-      ElMessage.success(`用戶已建立，登入 ID：${data.id}`)
+      ElMessage.success(`用戶已建立，帳號 ID：${data.user_id}`)
     }
     dialogVisible.value = false
     await fetchUsers()

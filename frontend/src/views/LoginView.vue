@@ -5,11 +5,10 @@
       <p class="login-subtitle">請登入以繼續</p>
 
       <el-form ref="formRef" :model="form" :rules="rules" @submit.prevent="handleLogin">
-        <el-form-item prop="user_id">
+        <el-form-item prop="identifier">
           <el-input
-            v-model.number="form.user_id"
-            type="number"
-            placeholder="用戶 ID"
+            v-model="form.identifier"
+            placeholder="帳號 ID 或電子郵件"
             size="large"
             :prefix-icon="User"
             autocomplete="username"
@@ -64,11 +63,11 @@ const authStore = useAuthStore()
 const formRef  = ref(null)
 const errorMsg = ref('')
 
-const form = ref({ user_id: '', password: '' })
+const form = ref({ identifier: '', password: '' })
 
 const rules = {
-  user_id:  [{ required: true, message: '請輸入用戶 ID', trigger: 'blur' }],
-  password: [{ required: true, message: '請輸入密碼', trigger: 'blur' }],
+  identifier: [{ required: true, message: '請輸入帳號 ID 或電子郵件', trigger: 'blur' }],
+  password:   [{ required: true, message: '請輸入密碼', trigger: 'blur' }],
 }
 
 async function handleLogin() {
@@ -76,11 +75,11 @@ async function handleLogin() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
   try {
-    await authStore.login(form.value.user_id, form.value.password)
+    await authStore.login(form.value.identifier, form.value.password)
     const redirect = route.query.redirect || '/'
     router.push(redirect)
   } catch (err) {
-    const messages = err.response?.data?.errors?.user_id
+    const messages = err.response?.data?.errors?.identifier
     errorMsg.value = messages?.[0] ?? '登入失敗，請稍後再試'
   }
 }
