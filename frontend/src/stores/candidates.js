@@ -1,21 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getCandidates, getCandidateDates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getMonitorStatus, getAnalyzeTipUrl } from '../api'
-import { useAuthStore } from './auth'
+import { getCandidates, getCandidateDates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getMonitorStatus, getAnalyzeTipUrl, getPins, pinCandidate, unpinCandidate } from '../api'
 import dayjs from 'dayjs'
-
-function intradayPinKey() {
-  const uid = useAuthStore().user?.id ?? 'guest'
-  return `pinned_intraday_${uid}`
-}
-
-function loadPinnedIds(storageKey, date) {
-  try {
-    const stored = JSON.parse(localStorage.getItem(storageKey) || 'null')
-    if (stored && stored.date === date) return new Set(stored.ids)
-  } catch {}
-  return new Set()
-}
 
 export const useCandidateStore = defineStore('candidates', () => {
   const candidates = ref([])
@@ -30,19 +16,29 @@ export const useCandidateStore = defineStore('candidates', () => {
   const holidayName = ref('')
   const usIndices = ref([])
 
-  // 釘選
+  // 釘選（存資料庫，跨裝置同步）
   const pinnedIds = ref(new Set())
 
-  function togglePin(id) {
+  async function togglePin(id) {
     const next = new Set(pinnedIds.value)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    pinnedIds.value = next
-    localStorage.setItem(intradayPinKey(), JSON.stringify({ date: currentDate.value, ids: [...next] }))
+    if (next.has(id)) {
+      next.delete(id)
+      pinnedIds.value = next
+      await unpinCandidate(id)
+    } else {
+      next.add(id)
+      pinnedIds.value = next
+      await pinCandidate(id)
+    }
   }
 
   function isPinned(id) {
     return pinnedIds.value.has(id)
+  }
+
+  async function fetchPins(date, mode) {
+    const { data } = await getPins(date, mode)
+    pinnedIds.value = new Set(data)
   }
 
   // 依盤前校準等級篩選，釘選的浮到最上面
@@ -120,11 +116,11 @@ export const useCandidateStore = defineStore('candidates', () => {
       candidates.value = data.data
       currentDate.value = data.date
       currentMode.value = data.mode || targetMode
-      pinnedIds.value = loadPinnedIds(intradayPinKey(), data.date)
       lastUpdatedAt.value = data.last_updated_at || ''
       isHoliday.value = data.is_holiday || false
       holidayName.value = data.holiday_name || ''
       usIndices.value = data.us_indices || []
+      await fetchPins(data.date, data.mode || targetMode)
     } finally {
       loading.value = false
     }

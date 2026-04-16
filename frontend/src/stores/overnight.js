@@ -1,21 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getCandidates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getAnalyzeTipUrl } from '../api'
-import { useAuthStore } from './auth'
+import { getCandidates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getAnalyzeTipUrl, getPins, pinCandidate, unpinCandidate } from '../api'
 import dayjs from 'dayjs'
-
-function overnightPinKey() {
-  const uid = useAuthStore().user?.id ?? 'guest'
-  return `pinned_overnight_${uid}`
-}
-
-function loadPinnedIds(date) {
-  try {
-    const stored = JSON.parse(localStorage.getItem(overnightPinKey()) || 'null')
-    if (stored && stored.date === date) return new Set(stored.ids)
-  } catch {}
-  return new Set()
-}
 
 export const useOvernightStore = defineStore('overnight', () => {
   const candidates = ref([])
@@ -25,19 +11,29 @@ export const useOvernightStore = defineStore('overnight', () => {
   const isHoliday = ref(false)
   const holidayName = ref('')
 
-  // 釘選
+  // 釘選（存資料庫，跨裝置同步）
   const pinnedIds = ref(new Set())
 
-  function togglePin(id) {
+  async function togglePin(id) {
     const next = new Set(pinnedIds.value)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    pinnedIds.value = next
-    localStorage.setItem(overnightPinKey(), JSON.stringify({ date: currentDate.value, ids: [...next] }))
+    if (next.has(id)) {
+      next.delete(id)
+      pinnedIds.value = next
+      await unpinCandidate(id)
+    } else {
+      next.add(id)
+      pinnedIds.value = next
+      await pinCandidate(id)
+    }
   }
 
   function isPinned(id) {
     return pinnedIds.value.has(id)
+  }
+
+  async function fetchPins(date) {
+    const { data } = await getPins(date, 'overnight')
+    pinnedIds.value = new Set(data)
   }
 
   // 釘選的浮到最上面
@@ -76,8 +72,8 @@ export const useOvernightStore = defineStore('overnight', () => {
       const { data } = await getCandidates(date || currentDate.value, 'overnight')
       candidates.value = data.data
       currentDate.value = data.date
-      pinnedIds.value = loadPinnedIds(data.date)
       lastUpdatedAt.value = data.last_updated_at || ''
+      await fetchPins(data.date)
       isHoliday.value = data.is_holiday || false
       holidayName.value = data.holiday_name || ''
     } finally {

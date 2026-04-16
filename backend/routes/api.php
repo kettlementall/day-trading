@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\CandidateController;
 use App\Http\Controllers\Api\DataSyncController;
 use App\Http\Controllers\Api\FormulaSettingController;
 use App\Http\Controllers\Api\NewsController;
+use App\Http\Controllers\Api\PinController;
 use App\Http\Controllers\Api\ScreeningRuleController;
 use App\Http\Controllers\Api\StockController;
 use App\Http\Controllers\Api\UserController;
@@ -30,6 +31,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/candidates/{candidate}',           [CandidateController::class, 'show']);
     Route::get('/candidates/{candidate}/snapshots', [CandidateController::class, 'snapshots']);
     Route::get('/candidates/{candidate}/monitor',   [CandidateController::class, 'monitor']);
+
+    // 釘選（viewer + admin）
+    Route::get('/pins',                         [PinController::class, 'index']);
+    Route::post('/pins/{candidate}',            [PinController::class, 'store']);
+    Route::delete('/pins/{candidate}',          [PinController::class, 'destroy']);
 
     // 股票（viewer 可點卡片看股票詳情）
     Route::get('/stocks',                [StockController::class, 'index']);

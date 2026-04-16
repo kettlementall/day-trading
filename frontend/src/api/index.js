@@ -119,6 +119,16 @@ export const getAnalyzeTipUrl = (date, symbol, notes, mode = 'intraday') => {
   return `${base}/backtest/analyze-tip?${params}`
 }
 
+// 釘選
+export const getPins = (date, mode) =>
+  api.get('/pins', { params: { date, mode } })
+
+export const pinCandidate = (candidateId) =>
+  api.post(`/pins/${candidateId}`)
+
+export const unpinCandidate = (candidateId) =>
+  api.delete(`/pins/${candidateId}`)
+
 // 用戶管理（admin only）
 export const getUsers = () =>
   api.get('/users')
