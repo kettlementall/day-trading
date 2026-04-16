@@ -3,7 +3,29 @@ import axios from 'axios'
 const api = axios.create({
   baseURL: '/api',
   timeout: 15000,
+  headers: {
+    'Accept': 'application/json',
+  },
 })
+
+// 401 interceptor — lazy import 避免 circular dependency
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401) {
+      const { useAuthStore } = await import('../stores/auth')
+      const authStore = useAuthStore()
+      authStore.token = null
+      authStore.user  = null
+      localStorage.removeItem('auth_token')
+      delete api.defaults.headers.common['Authorization']
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+    }
+    return Promise.reject(error)
+  }
+)
 
 // 候選標的
 export const getCandidates = (date, mode = 'intraday') =>
@@ -80,7 +102,8 @@ export const getNewsFetchStatus = (date) =>
 // 回測系統
 export const getDailyReviewUrl = (date, mode = 'intraday') => {
   const base = api.defaults.baseURL || '/api'
-  return `${base}/backtest/daily-review?date=${date}&mode=${mode}`
+  const token = localStorage.getItem('auth_token') || ''
+  return `${base}/backtest/daily-review?date=${date}&mode=${mode}&token=${token}`
 }
 
 export const getDailyReviewShow = (date, mode = 'intraday') =>
@@ -91,9 +114,23 @@ export const getDailyReviewDates = (mode = 'intraday') =>
 
 export const getAnalyzeTipUrl = (date, symbol, notes, mode = 'intraday') => {
   const base = api.defaults.baseURL || '/api'
-  const params = new URLSearchParams({ date, symbol, notes: notes || '', mode })
+  const token = localStorage.getItem('auth_token') || ''
+  const params = new URLSearchParams({ date, symbol, notes: notes || '', mode, token })
   return `${base}/backtest/analyze-tip?${params}`
 }
+
+// 用戶管理（admin only）
+export const getUsers = () =>
+  api.get('/users')
+
+export const createUser = (data) =>
+  api.post('/users', data)
+
+export const updateUser = (id, data) =>
+  api.put(`/users/${id}`, data)
+
+export const deleteUser = (id) =>
+  api.delete(`/users/${id}`)
 
 // 系統規格
 export const getSpec = () =>
