@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * 從 TWSE open data 抓取上市股票本益比/殖利率/股價淨值比
- * API: https://opendata.twse.com.tw/v1/exchangeReport/BWIBBU_ALL
+ * API: https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL
  * 每個交易日收盤後更新（約 17:00）
  */
 class FetchStockValuations extends Command
@@ -18,7 +18,7 @@ class FetchStockValuations extends Command
     protected $signature   = 'stock:fetch-valuations {date?}';
     protected $description = '從 TWSE 抓取本益比/殖利率/股價淨值比（每日收盤後）';
 
-    private const TWSE_URL = 'https://opendata.twse.com.tw/v1/exchangeReport/BWIBBU_ALL';
+    private const TWSE_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL';
 
     public function handle(): int
     {
