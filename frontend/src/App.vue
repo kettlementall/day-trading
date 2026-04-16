@@ -5,18 +5,18 @@
       <!-- viewer + admin -->
       <router-link to="/" class="nav-item" active-class="active">
         <el-icon><TrendCharts /></el-icon>
-        <span>候選標的</span>
+        <span>當沖候選</span>
       </router-link>
       <router-link to="/overnight" class="nav-item" active-class="active">
         <el-icon><Moon /></el-icon>
-        <span>隔日沖</span>
+        <span>隔日沖候選</span>
       </router-link>
 
       <!-- admin only -->
       <template v-if="authStore.isAdmin">
         <router-link to="/stats" class="nav-item" active-class="active">
           <el-icon><DataAnalysis /></el-icon>
-          <span>績效統計</span>
+          <span>當中績效</span>
         </router-link>
         <router-link to="/overnight/stats" class="nav-item" active-class="active">
           <el-icon><DataLine /></el-icon>
@@ -24,7 +24,7 @@
         </router-link>
         <router-link to="/news" class="nav-item" active-class="active">
           <el-icon><ChatLineSquare /></el-icon>
-          <span>消息面</span>
+          <span>新聞整理</span>
         </router-link>
         <router-link to="/settings" class="nav-item" active-class="active">
           <el-icon><Setting /></el-icon>
@@ -32,7 +32,7 @@
         </router-link>
         <router-link to="/users" class="nav-item" active-class="active">
           <el-icon><UserFilled /></el-icon>
-          <span>用戶</span>
+          <span>用戶管理</span>
         </router-link>
       </template>
 
