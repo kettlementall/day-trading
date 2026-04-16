@@ -83,6 +83,7 @@ class MonitorStocks extends Command
 
         $candidates = Candidate::with('stock')
             ->where('trade_date', $date)
+            ->where('mode', 'intraday')
             ->get();
 
         if ($candidates->isEmpty()) {
@@ -220,7 +221,7 @@ class MonitorStocks extends Command
      */
     private function hasCalibrated(string $date): bool
     {
-        return CandidateMonitor::whereHas('candidate', fn($q) => $q->where('trade_date', $date))
+        return CandidateMonitor::whereHas('candidate', fn($q) => $q->where('trade_date', $date)->where('mode', 'intraday'))
             ->where('status', '!=', CandidateMonitor::STATUS_PENDING)
             ->exists();
     }

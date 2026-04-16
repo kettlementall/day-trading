@@ -22,6 +22,7 @@ class MonitorService
     {
         $candidates = Candidate::with('stock')
             ->where('trade_date', $date)
+            ->where('mode', 'intraday')
             ->where('ai_selected', true)
             ->get();
 
@@ -47,6 +48,7 @@ class MonitorService
     {
         $candidates = Candidate::with(['stock', 'monitor'])
             ->where('trade_date', $date)
+            ->where('mode', 'intraday')
             ->where('ai_selected', true)
             ->get();
 
@@ -142,7 +144,7 @@ class MonitorService
     public function processSnapshot(string $date): array
     {
         $monitors = CandidateMonitor::with(['candidate.stock'])
-            ->whereHas('candidate', fn($q) => $q->where('trade_date', $date))
+            ->whereHas('candidate', fn($q) => $q->where('trade_date', $date)->where('mode', 'intraday'))
             ->whereIn('status', CandidateMonitor::ACTIVE_STATUSES)
             ->get();
 
