@@ -34,6 +34,7 @@ class AiScreenCandidates extends Command
 
         $allCandidates = Candidate::with('stock')
             ->where('trade_date', $date)
+            ->where('mode', 'intraday')
             ->get();
 
         $this->info("物理篩選完成，共 {$allCandidates->count()} 檔候選");
@@ -49,12 +50,14 @@ class AiScreenCandidates extends Command
 
         $haikuApproved = Candidate::with('stock')
             ->where('trade_date', $date)
+            ->where('mode', 'intraday')
             ->where('haiku_selected', true)
             ->orderByDesc('score')
             ->get();
 
         $haikuRejected = Candidate::with('stock')
             ->where('trade_date', $date)
+            ->where('mode', 'intraday')
             ->where('haiku_selected', false)
             ->orderBy('score')
             ->get();
@@ -87,6 +90,7 @@ class AiScreenCandidates extends Command
         // 重新載入結果
         $finalCandidates = Candidate::with('stock')
             ->where('trade_date', $date)
+            ->where('mode', 'intraday')
             ->where('haiku_selected', true)
             ->orderByDesc('ai_selected')
             ->orderByDesc('score')

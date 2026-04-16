@@ -248,7 +248,7 @@ class StockScreener
             $dbData = $data;
             unset($dbData['_avg_vol5']);
             Candidate::updateOrCreate(
-                ['stock_id' => $dbData['stock_id'], 'trade_date' => $dbData['trade_date']],
+                ['stock_id' => $dbData['stock_id'], 'trade_date' => $dbData['trade_date'], 'mode' => $dbData['mode']],
                 $dbData
             );
             $stockIds[] = $dbData['stock_id'];
