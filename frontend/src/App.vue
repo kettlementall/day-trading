@@ -47,6 +47,7 @@
 
 <script setup>
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import { useAuthStore } from './stores/auth'
 
 const route     = useRoute()
@@ -54,8 +55,17 @@ const router    = useRouter()
 const authStore = useAuthStore()
 
 async function handleLogout() {
-  await authStore.logout()
-  router.push('/login')
+  try {
+    await ElMessageBox.confirm('確定要登出？', '登出', {
+      confirmButtonText: '登出',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    await authStore.logout()
+    router.push('/login')
+  } catch {
+    // 取消，不做任何事
+  }
 }
 </script>
 
