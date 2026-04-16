@@ -3,6 +3,16 @@ import { ref, computed } from 'vue'
 import { getCandidates, getCandidateDates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getMonitorStatus, getAnalyzeTipUrl } from '../api'
 import dayjs from 'dayjs'
 
+const INTRADAY_PIN_KEY = 'pinned_intraday'
+
+function loadPinnedIds(storageKey, date) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(storageKey) || 'null')
+    if (stored && stored.date === date) return new Set(stored.ids)
+  } catch {}
+  return new Set()
+}
+
 export const useCandidateStore = defineStore('candidates', () => {
   const candidates = ref([])
   const currentDate = ref(dayjs().format('YYYY-MM-DD'))
@@ -16,18 +26,36 @@ export const useCandidateStore = defineStore('candidates', () => {
   const holidayName = ref('')
   const usIndices = ref([])
 
-  // 依盤前校準等級篩選
+  // 釘選
+  const pinnedIds = ref(new Set())
+
+  function togglePin(id) {
+    const next = new Set(pinnedIds.value)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    pinnedIds.value = next
+    localStorage.setItem(INTRADAY_PIN_KEY, JSON.stringify({ date: currentDate.value, ids: [...next] }))
+  }
+
+  function isPinned(id) {
+    return pinnedIds.value.has(id)
+  }
+
+  // 依盤前校準等級篩選，釘選的浮到最上面
   const filteredCandidates = computed(() => {
+    let list = candidates.value
     if (morningFilter.value === 'AB') {
-      return candidates.value.filter(c => c.morning_grade === 'A' || c.morning_grade === 'B')
+      list = list.filter(c => c.morning_grade === 'A' || c.morning_grade === 'B')
+    } else if (morningFilter.value === 'C') {
+      list = list.filter(c => c.morning_grade === 'C')
+    } else if (morningFilter.value === 'D') {
+      list = list.filter(c => c.morning_grade === 'D')
     }
-    if (morningFilter.value === 'C') {
-      return candidates.value.filter(c => c.morning_grade === 'C')
-    }
-    if (morningFilter.value === 'D') {
-      return candidates.value.filter(c => c.morning_grade === 'D')
-    }
-    return candidates.value
+    return [...list].sort((a, b) => {
+      const ap = pinnedIds.value.has(a.id) ? 0 : 1
+      const bp = pinnedIds.value.has(b.id) ? 0 : 1
+      return ap - bp
+    })
   })
 
   // 盤前校準統計
@@ -88,6 +116,7 @@ export const useCandidateStore = defineStore('candidates', () => {
       candidates.value = data.data
       currentDate.value = data.date
       currentMode.value = data.mode || targetMode
+      pinnedIds.value = loadPinnedIds(INTRADAY_PIN_KEY, data.date)
       lastUpdatedAt.value = data.last_updated_at || ''
       isHoliday.value = data.is_holiday || false
       holidayName.value = data.holiday_name || ''
@@ -241,6 +270,7 @@ export const useCandidateStore = defineStore('candidates', () => {
     candidates, currentDate, currentMode, dates, stats, loading,
     morningFilter, filteredCandidates, morningSummary, lastUpdatedAt,
     isHoliday, holidayName, usIndices,
+    pinnedIds, togglePin, isPinned,
     monitors, monitorLoading, activeMonitors, completedMonitors,
     reviewing, reviewLogs, reviewResult, reviewStreamText, reviewDates,
     tipAnalyzing, tipLogs, tipStreamText, tipResult,

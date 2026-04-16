@@ -136,7 +136,7 @@
         v-for="item in store.filteredCandidates"
         :key="item.id"
         class="stock-card"
-        :class="{ 'ai-rejected': item.ai_selected === false && item.ai_reasoning }"
+        :class="{ 'ai-rejected': item.ai_selected === false && item.ai_reasoning, 'pinned-card': store.isPinned(item.id) }"
         @click="goDetail(item)"
       >
         <div class="card-top">
@@ -144,15 +144,20 @@
             <span class="stock-symbol">{{ item.stock.symbol }}</span>
             <span class="stock-name">{{ item.stock.name }}</span>
           </div>
-          <el-tooltip
-            :content="item.haiku_reasoning || ''"
-            placement="top"
-            :disabled="!item.haiku_reasoning"
-          >
-            <el-tag size="small" :type="scoreType(item.score)">
-              Haiku {{ item.score }}
-            </el-tag>
-          </el-tooltip>
+          <div style="display:flex;align-items:center;gap:6px">
+            <button class="pin-btn" :class="{ pinned: store.isPinned(item.id) }" @click.stop="store.togglePin(item.id)" title="釘選">
+              {{ store.isPinned(item.id) ? '📌' : '📍' }}
+            </button>
+            <el-tooltip
+              :content="item.haiku_reasoning || ''"
+              placement="top"
+              :disabled="!item.haiku_reasoning"
+            >
+              <el-tag size="small" :type="scoreType(item.score)">
+                Haiku {{ item.score }}
+              </el-tag>
+            </el-tooltip>
+          </div>
         </div>
 
         <div class="card-prices">
@@ -543,6 +548,26 @@ function gradeLabel(grade) {
 .ai-rejected {
   opacity: 0.55;
   border-left: 3px solid #f56c6c !important;
+}
+
+.pinned-card {
+  border-left: 3px solid #e6a23c !important;
+}
+
+.pin-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+
+.pin-btn:hover,
+.pin-btn.pinned {
+  opacity: 1;
 }
 .ai-rejected .card-ai-reasoning {
   background: #fef0f0;

@@ -35,10 +35,10 @@
 
     <div v-else class="candidate-list">
       <div
-        v-for="item in store.candidates"
+        v-for="item in store.sortedCandidates"
         :key="item.id"
         class="stock-card"
-        :class="{ 'ai-rejected': item.ai_selected === false && item.ai_reasoning }"
+        :class="{ 'ai-rejected': item.ai_selected === false && item.ai_reasoning, 'pinned-card': store.isPinned(item.id) }"
         @click="goDetail(item)"
       >
         <!-- 頭部：股票資訊 + Haiku 分數 -->
@@ -48,11 +48,16 @@
             <span class="stock-name">{{ item.stock.name }}</span>
             <span class="stock-industry">{{ item.stock.industry }}</span>
           </div>
-          <el-tooltip :content="item.haiku_reasoning || ''" placement="top" :disabled="!item.haiku_reasoning">
-            <el-tag size="small" :type="scoreType(item.score)">
-              Haiku {{ item.score }}
-            </el-tag>
-          </el-tooltip>
+          <div style="display:flex;align-items:center;gap:6px">
+            <button class="pin-btn" :class="{ pinned: store.isPinned(item.id) }" @click.stop="store.togglePin(item.id)" title="釘選">
+              {{ store.isPinned(item.id) ? '📌' : '📍' }}
+            </button>
+            <el-tooltip :content="item.haiku_reasoning || ''" placement="top" :disabled="!item.haiku_reasoning">
+              <el-tag size="small" :type="scoreType(item.score)">
+                Haiku {{ item.score }}
+              </el-tag>
+            </el-tooltip>
+          </div>
         </div>
 
         <!-- 標籤列 -->
@@ -409,6 +414,26 @@ function outcomeClass(outcome) {
 
 .ai-rejected {
   opacity: 0.6;
+}
+
+.pinned-card {
+  border-left: 3px solid #e6a23c !important;
+}
+
+.pin-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+
+.pin-btn:hover,
+.pin-btn.pinned {
+  opacity: 1;
 }
 
 .card-top {

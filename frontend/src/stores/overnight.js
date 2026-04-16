@@ -1,7 +1,17 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { getCandidates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getAnalyzeTipUrl } from '../api'
 import dayjs from 'dayjs'
+
+const OVERNIGHT_PIN_KEY = 'pinned_overnight'
+
+function loadPinnedIds(date) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(OVERNIGHT_PIN_KEY) || 'null')
+    if (stored && stored.date === date) return new Set(stored.ids)
+  } catch {}
+  return new Set()
+}
 
 export const useOvernightStore = defineStore('overnight', () => {
   const candidates = ref([])
@@ -10,6 +20,30 @@ export const useOvernightStore = defineStore('overnight', () => {
   const lastUpdatedAt = ref('')
   const isHoliday = ref(false)
   const holidayName = ref('')
+
+  // 釘選
+  const pinnedIds = ref(new Set())
+
+  function togglePin(id) {
+    const next = new Set(pinnedIds.value)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    pinnedIds.value = next
+    localStorage.setItem(OVERNIGHT_PIN_KEY, JSON.stringify({ date: currentDate.value, ids: [...next] }))
+  }
+
+  function isPinned(id) {
+    return pinnedIds.value.has(id)
+  }
+
+  // 釘選的浮到最上面
+  const sortedCandidates = computed(() =>
+    [...candidates.value].sort((a, b) => {
+      const ap = pinnedIds.value.has(a.id) ? 0 : 1
+      const bp = pinnedIds.value.has(b.id) ? 0 : 1
+      return ap - bp
+    })
+  )
 
   // 績效統計
   const stats = ref(null)
@@ -38,6 +72,7 @@ export const useOvernightStore = defineStore('overnight', () => {
       const { data } = await getCandidates(date || currentDate.value, 'overnight')
       candidates.value = data.data
       currentDate.value = data.date
+      pinnedIds.value = loadPinnedIds(data.date)
       lastUpdatedAt.value = data.last_updated_at || ''
       isHoliday.value = data.is_holiday || false
       holidayName.value = data.holiday_name || ''
@@ -153,7 +188,8 @@ export const useOvernightStore = defineStore('overnight', () => {
   }
 
   return {
-    candidates, currentDate, loading, lastUpdatedAt, isHoliday, holidayName,
+    candidates, sortedCandidates, currentDate, loading, lastUpdatedAt, isHoliday, holidayName,
+    pinnedIds, togglePin, isPinned,
     stats,
     reviewing, reviewLogs, reviewResult, reviewStreamText, reviewDates,
     tipAnalyzing, tipLogs, tipStreamText, tipResult,
