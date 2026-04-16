@@ -137,10 +137,10 @@
         :key="item.id"
         class="stock-card"
         :class="{ 'ai-rejected': item.ai_selected === false && item.ai_reasoning, 'pinned-card': store.isPinned(item.id) }"
-        @click="goDetail(item)"
+        @click="toggleExpand(item.id)"
       >
         <div class="card-top">
-          <div class="stock-info">
+          <div class="stock-info" @click.stop="goDetail(item)">
             <span class="stock-symbol">{{ item.stock.symbol }}</span>
             <span class="stock-name">{{ item.stock.name }}</span>
           </div>
@@ -157,6 +157,7 @@
                 Haiku {{ item.score }}
               </el-tag>
             </el-tooltip>
+            <span class="chevron" :class="{ expanded: isExpanded(item.id) }">›</span>
           </div>
         </div>
 
@@ -178,6 +179,9 @@
             <span class="value">{{ item.risk_reward_ratio }}</span>
           </div>
         </div>
+
+        <!-- 折疊區域 -->
+        <div v-show="isExpanded(item.id)">
 
         <div class="card-tags">
           <el-tag
@@ -328,18 +332,31 @@
             </span>
           </div>
         </div>
+
+        </div><!-- end 折疊區域 -->
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useCandidateStore } from '../stores/candidates'
 
 const store = useCandidateStore()
 const router = useRouter()
+
+const expandedIds = reactive(new Set())
+
+function isExpanded(id) {
+  return expandedIds.has(id)
+}
+
+function toggleExpand(id) {
+  if (expandedIds.has(id)) expandedIds.delete(id)
+  else expandedIds.add(id)
+}
 
 function isMarketHours() {
   const now = new Date()
@@ -568,6 +585,23 @@ function gradeLabel(grade) {
 .pin-btn:hover,
 .pin-btn.pinned {
   opacity: 1;
+}
+
+.chevron {
+  font-size: 18px;
+  color: #c0c4cc;
+  line-height: 1;
+  transform: rotate(90deg);
+  display: inline-block;
+  transition: transform 0.2s;
+}
+
+.chevron.expanded {
+  transform: rotate(270deg);
+}
+
+.stock-info {
+  cursor: pointer;
 }
 .ai-rejected .card-ai-reasoning {
   background: #fef0f0;

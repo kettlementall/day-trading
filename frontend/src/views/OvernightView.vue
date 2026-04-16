@@ -39,11 +39,11 @@
         :key="item.id"
         class="stock-card"
         :class="{ 'ai-rejected': item.ai_selected === false && item.ai_reasoning, 'pinned-card': store.isPinned(item.id) }"
-        @click="goDetail(item)"
+        @click="toggleExpand(item.id)"
       >
         <!-- 頭部：股票資訊 + Haiku 分數 -->
         <div class="card-top">
-          <div class="stock-info">
+          <div class="stock-info" @click.stop="goDetail(item)">
             <span class="stock-symbol">{{ item.stock.symbol }}</span>
             <span class="stock-name">{{ item.stock.name }}</span>
             <span class="stock-industry">{{ item.stock.industry }}</span>
@@ -57,6 +57,7 @@
                 Haiku {{ item.score }}
               </el-tag>
             </el-tooltip>
+            <span class="chevron" :class="{ expanded: isExpanded(item.id) }">›</span>
           </div>
         </div>
 
@@ -135,6 +136,9 @@
             <span class="value price-up">+{{ item.gap_potential_percent }}%</span>
           </div>
         </div>
+
+        <!-- 折疊區域 -->
+        <div v-show="isExpanded(item.id)">
 
         <!-- 監控狀態列（T+1 盤中） -->
         <div v-if="item.monitor && monitorStatusVisible(item.monitor.status)" class="card-monitor">
@@ -218,19 +222,32 @@
             收 {{ item.result.actual_close }}
           </span>
         </div>
+
+        </div><!-- end 折疊區域 -->
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useOvernightStore } from '../stores/overnight'
 import dayjs from 'dayjs'
 
 const store = useOvernightStore()
 const router = useRouter()
+
+const expandedIds = reactive(new Set())
+
+function isExpanded(id) {
+  return expandedIds.has(id)
+}
+
+function toggleExpand(id) {
+  if (expandedIds.has(id)) expandedIds.delete(id)
+  else expandedIds.add(id)
+}
 
 // 建倉日（T+0）= store.currentDate（出場日 T+1）往前一個交易日
 const entryDate = ref(prevTradingDay(store.currentDate))
@@ -436,6 +453,19 @@ function outcomeClass(outcome) {
   opacity: 1;
 }
 
+.chevron {
+  font-size: 18px;
+  color: #c0c4cc;
+  line-height: 1;
+  transform: rotate(90deg);
+  display: inline-block;
+  transition: transform 0.2s;
+}
+
+.chevron.expanded {
+  transform: rotate(270deg);
+}
+
 .card-top {
   display: flex;
   justify-content: space-between;
@@ -448,6 +478,7 @@ function outcomeClass(outcome) {
   align-items: baseline;
   gap: 6px;
   flex-wrap: wrap;
+  cursor: pointer;
 }
 
 .stock-symbol {
