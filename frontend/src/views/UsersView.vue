@@ -46,11 +46,15 @@
       :close-on-click-modal="false"
     >
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="90px">
+        <el-form-item v-if="isEditing" label="登入 ID">
+          <span style="font-weight: 600; color: #409eff">{{ editingId }}</span>
+          <span style="font-size: 12px; color: #909399; margin-left: 8px">（登入時填此 ID）</span>
+        </el-form-item>
         <el-form-item label="姓名" prop="name">
           <el-input v-model="form.name" placeholder="用戶姓名" />
         </el-form-item>
         <el-form-item label="電子郵件" prop="email">
-          <el-input v-model="form.email" type="email" placeholder="選填" />
+          <el-input v-model="form.email" placeholder="選填" />
         </el-form-item>
         <el-form-item label="密碼" prop="password">
           <el-input
@@ -101,7 +105,20 @@ const form = ref({ name: '', email: '', password: '', role: 'viewer' })
 
 const formRules = {
   name:  [{ required: true, message: '請輸入姓名', trigger: 'blur' }],
-  email: [{ type: 'email', message: '請輸入有效電子郵件格式', trigger: 'blur' }],
+  email: [
+    {
+      validator: (rule, value, callback) => {
+        if (!value) {
+          callback()
+        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+          callback(new Error('請輸入有效電子郵件格式'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur',
+    },
+  ],
   password: [
     {
       validator: (rule, value, callback) => {
@@ -154,8 +171,8 @@ async function handleSave() {
       await updateUser(editingId.value, payload)
       ElMessage.success('用戶已更新')
     } else {
-      await createUser(payload)
-      ElMessage.success('用戶已建立')
+      const { data } = await createUser(payload)
+      ElMessage.success(`用戶已建立，登入 ID：${data.id}`)
     }
     dialogVisible.value = false
     await fetchUsers()
