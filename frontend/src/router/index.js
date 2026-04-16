@@ -74,8 +74,8 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
 
-  // 有 token 但 user 尚未 hydrate（頁面重整）
-  if (authStore.token && !authStore.user) {
+  // user 尚未 hydrate（頁面重整）— session cookie 自動驗證
+  if (!authStore.user) {
     await authStore.fetchMe()
   }
 

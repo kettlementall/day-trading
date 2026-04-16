@@ -1,7 +1,7 @@
 <template>
   <div class="login-page">
     <div class="login-card">
-      <h1 class="login-title">日交易系統</h1>
+      <h1 class="login-title">💰幫我賺錢💰</h1>
       <p class="login-subtitle">請登入以繼續</p>
 
       <el-form ref="formRef" :model="form" :rules="rules" @submit.prevent="handleLogin">

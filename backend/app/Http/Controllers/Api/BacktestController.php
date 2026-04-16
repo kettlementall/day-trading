@@ -128,11 +128,6 @@ class BacktestController extends Controller
      */
     public function analyzeTip(Request $request): StreamedResponse
     {
-        // EventSource 無法送 Authorization header，改從 query string 讀 token
-        if ($request->query('token') && ! $request->bearerToken()) {
-            $request->headers->set('Authorization', 'Bearer ' . $request->query('token'));
-        }
-
         $date   = $request->input('date', now()->toDateString());
         $symbol = strtoupper(trim($request->input('symbol', '')));
         $notes  = $request->input('notes') ?? '';
@@ -181,11 +176,6 @@ class BacktestController extends Controller
      */
     public function dailyReview(Request $request): StreamedResponse
     {
-        // EventSource 無法送 Authorization header，改從 query string 讀 token
-        if ($request->query('token') && ! $request->bearerToken()) {
-            $request->headers->set('Authorization', 'Bearer ' . $request->query('token'));
-        }
-
         $date = $request->input('date', now()->toDateString());
         $mode = $request->input('mode', 'intraday');
 

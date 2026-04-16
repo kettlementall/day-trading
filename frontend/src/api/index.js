@@ -6,6 +6,8 @@ const api = axios.create({
   headers: {
     'Accept': 'application/json',
   },
+  withCredentials: true,
+  withXSRFToken: true,
 })
 
 // 401 interceptor — lazy import 避免 circular dependency
@@ -17,14 +19,10 @@ api.interceptors.response.use(
       _loggingOut = true
       const { useAuthStore } = await import('../stores/auth')
       const authStore = useAuthStore()
-      authStore.token = null
-      authStore.user  = null
-      localStorage.removeItem('auth_token')
-      delete api.defaults.headers.common['Authorization']
+      authStore.user = null
       if (window.location.pathname !== '/login') {
         window.location.href = '/login'
       }
-      // 導頁後重置 flag（以防同一 session 重新登入後又觸發）
       setTimeout(() => { _loggingOut = false }, 2000)
     }
     return Promise.reject(error)
@@ -106,8 +104,7 @@ export const getNewsFetchStatus = (date) =>
 // 回測系統
 export const getDailyReviewUrl = (date, mode = 'intraday') => {
   const base = api.defaults.baseURL || '/api'
-  const token = localStorage.getItem('auth_token') || ''
-  return `${base}/backtest/daily-review?date=${date}&mode=${mode}&token=${token}`
+  return `${base}/backtest/daily-review?date=${date}&mode=${mode}`
 }
 
 export const getDailyReviewShow = (date, mode = 'intraday') =>
@@ -118,8 +115,7 @@ export const getDailyReviewDates = (mode = 'intraday') =>
 
 export const getAnalyzeTipUrl = (date, symbol, notes, mode = 'intraday') => {
   const base = api.defaults.baseURL || '/api'
-  const token = localStorage.getItem('auth_token') || ''
-  const params = new URLSearchParams({ date, symbol, notes: notes || '', mode, token })
+  const params = new URLSearchParams({ date, symbol, notes: notes || '', mode })
   return `${base}/backtest/analyze-tip?${params}`
 }
 

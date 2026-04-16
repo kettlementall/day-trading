@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
@@ -30,14 +31,11 @@ class AuthController extends Controller
             ]);
         }
 
-        // 每次登入只保留最新 token（單一 session）
-        $user->tokens()->delete();
-
-        $token = $user->createToken('api-token')->plainTextToken;
+        Auth::login($user);
+        $request->session()->regenerate();
 
         return response()->json([
-            'token' => $token,
-            'user'  => [
+            'user' => [
                 'id'      => $user->id,
                 'user_id' => $user->user_id,
                 'name'    => $user->name,
@@ -62,7 +60,9 @@ class AuthController extends Controller
 
     public function logout(Request $request): JsonResponse
     {
-        $request->user()->currentAccessToken()->delete();
+        Auth::guard('web')->logout();
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
 
         return response()->json(['message' => '已登出']);
     }
