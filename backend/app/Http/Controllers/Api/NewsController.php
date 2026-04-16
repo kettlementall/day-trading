@@ -44,7 +44,8 @@ class NewsController extends Controller
             ->pluck('date');
 
         $lastFetchedAt = NewsArticle::where('fetched_date', $date)
-            ->max('created_at');
+            ->whereNotNull('sentiment_score')
+            ->max('updated_at');
 
         return response()->json([
             'date' => $date,
