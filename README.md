@@ -51,7 +51,10 @@ cp backend/.env.example backend/.env
 docker compose up -d
 docker compose exec php composer install
 docker compose exec php php artisan key:generate
-docker compose exec php php artisan migrate --seed
+docker compose exec php php artisan migrate
+
+# 建立預設管理員帳號
+docker compose exec php php artisan db:seed --class=AdminSeeder
 
 # 匯入休市日（每年執行一次）
 docker compose exec php php artisan stock:import-holidays 2026
@@ -62,17 +65,39 @@ docker compose exec php php artisan stock:import-holidays 2026
 - 前端: http://localhost:5173
 - 後端 API: http://localhost:8000/api
 
+## 預設帳號
+
+系統採用帳號 ID 登入（非電子郵件）。執行 AdminSeeder 後會建立：
+
+| 欄位 | 值 |
+|------|----|
+| 用戶 ID | `1`（可在用戶管理頁確認） |
+| 密碼 | `changeme123` |
+| 角色 | `admin` |
+
+> **首次登入後請立即至「用戶管理」修改密碼。**
+
+### 角色權限
+
+| 角色 | 可存取頁面 |
+|------|----------|
+| `viewer` | 候選標的、隔日沖 |
+| `admin` | 全部頁面 + 用戶管理 |
+
 ## 前端頁面
 
-| 路由 | 說明 |
-|------|------|
-| `/` | 候選標的（美股指數、盤中監控、AI 標籤） |
-| `/history` | 歷史紀錄 |
-| `/stats` | 績效統計 + 單日 AI 檢討報告 |
-| `/news` | 消息面儀表板 |
-| `/settings` | 篩選規則 + 公式設定 |
-| `/spec` | 系統規格書 |
-| `/stock/:id` | 個股 K 線詳情 |
+| 路由 | 角色 | 說明 |
+|------|------|------|
+| `/login` | 所有人 | 登入頁 |
+| `/` | viewer + admin | 候選標的（美股指數、盤中監控、AI 標籤） |
+| `/overnight` | viewer + admin | 隔日沖候選標的 |
+| `/stock/:id` | viewer + admin | 個股 K 線詳情 |
+| `/stats` | admin | 當沖績效統計 + 單日 AI 檢討報告 |
+| `/overnight/stats` | admin | 隔日沖績效統計 |
+| `/news` | admin | 消息面儀表板 |
+| `/settings` | admin | 篩選規則 + 公式設定 |
+| `/spec` | admin | 系統規格書 |
+| `/users` | admin | 用戶管理（新增/編輯/刪除） |
 
 ## 手動指令
 
@@ -135,6 +160,9 @@ gunzip -c ~/day_trading_*.sql.gz | docker compose exec -T mysql mysql -u root -p
 
 # 6. 跑尚未執行的 migration（如有新版）
 docker compose exec php php artisan migrate
+
+# 7. 若為全新安裝（無舊資料），建立管理員帳號
+# docker compose exec php php artisan db:seed --class=AdminSeeder
 ```
 
 > Redis 快取不需備份，重啟後自動重建。
