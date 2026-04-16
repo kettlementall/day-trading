@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <div class="page-header">
-      <h1 class="page-title">消息面</h1>
+      <h1 class="page-title">新聞整理</h1>
       <div class="header-actions">
         <el-date-picker
           v-model="currentDate"
