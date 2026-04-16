@@ -46,62 +46,62 @@ class FetchNews extends Command
 
     private function fetchCnyesCategory(string $category, string $date): int
     {
-        try {
-            $response = Http::timeout(15)
-                ->get("https://api.cnyes.com/media/api/v1/newslist/category/{$category}", [
-                    'limit' => 100,
-                ]);
+        $mappedCategory = $category === 'tw_stock' ? 'tw_stock' : 'international';
+        $count = 0;
 
-            if (!$response->successful()) {
-                $this->warn("    HTTP {$response->status()}");
-                return 0;
-            }
+        foreach ([1, 2] as $page) {
+            try {
+                $response = Http::timeout(15)
+                    ->get("https://api.cnyes.com/media/api/v1/newslist/category/{$category}", [
+                        'limit' => 100,
+                        'page'  => $page,
+                    ]);
 
-            $items = $response->json('items.data', []);
-            if (empty($items)) {
-                $this->warn("    無資料");
-                return 0;
-            }
-
-            $mappedCategory = $category === 'tw_stock' ? 'tw_stock' : 'international';
-            $count = 0;
-
-            foreach ($items as $item) {
-                $title = trim($item['title'] ?? '');
-                if (!$title) continue;
-
-                $summary = trim($item['summary'] ?? '');
-                $newsId = $item['newsId'] ?? '';
-                $url = $newsId ? "https://news.cnyes.com/news/id/{$newsId}" : '';
-                $publishedAt = isset($item['publishAt'])
-                    ? Carbon::createFromTimestamp($item['publishAt'])
-                    : null;
-
-                if (!NewsIndustryMap::isRelevant($title, $mappedCategory)) {
-                    continue;
+                if (!$response->successful()) {
+                    $this->warn("    HTTP {$response->status()} (page {$page})");
+                    break;
                 }
 
-                $fullText = $title . ' ' . $summary;
-                $industry = NewsIndustryMap::classify($fullText);
+                $items = $response->json('items.data', []);
+                if (empty($items)) {
+                    break;
+                }
 
-                NewsArticle::updateOrCreate(
-                    ['source' => 'cnyes', 'title' => mb_substr($title, 0, 500), 'fetched_date' => $date],
-                    [
-                        'summary' => mb_substr($summary, 0, 2000),
-                        'url' => mb_substr($url, 0, 1000),
-                        'category' => $mappedCategory,
-                        'industry' => $industry,
-                        'published_at' => $publishedAt,
-                    ]
-                );
-                $count++;
+                foreach ($items as $item) {
+                    $title = trim($item['title'] ?? '');
+                    if (!$title) continue;
+
+                    $summary = trim($item['summary'] ?? '');
+                    $newsId = $item['newsId'] ?? '';
+                    $url = $newsId ? "https://news.cnyes.com/news/id/{$newsId}" : '';
+                    $publishedAt = isset($item['publishAt'])
+                        ? Carbon::createFromTimestamp($item['publishAt'])
+                        : null;
+
+                    $fullText = $title . ' ' . $summary;
+                    $industry = NewsIndustryMap::classify($fullText);
+
+                    NewsArticle::updateOrCreate(
+                        ['source' => 'cnyes', 'title' => mb_substr($title, 0, 500), 'fetched_date' => $date],
+                        [
+                            'summary' => mb_substr($summary, 0, 2000),
+                            'url' => mb_substr($url, 0, 1000),
+                            'category' => $mappedCategory,
+                            'industry' => $industry,
+                            'published_at' => $publishedAt,
+                        ]
+                    );
+                    $count++;
+                }
+
+                usleep(300_000); // 兩頁之間稍等
+            } catch (\Exception $e) {
+                Log::error("FetchNews cnyes/{$category} page {$page}: " . $e->getMessage());
+                $this->error("    錯誤: " . $e->getMessage());
+                break;
             }
-
-            return $count;
-        } catch (\Exception $e) {
-            Log::error("FetchNews cnyes/{$category}: " . $e->getMessage());
-            $this->error("    錯誤: " . $e->getMessage());
-            return 0;
         }
+
+        return $count;
     }
 }
