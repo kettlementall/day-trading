@@ -1,13 +1,17 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { getCandidates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getAnalyzeTipUrl } from '../api'
+import { useAuthStore } from './auth'
 import dayjs from 'dayjs'
 
-const OVERNIGHT_PIN_KEY = 'pinned_overnight'
+function overnightPinKey() {
+  const uid = useAuthStore().user?.id ?? 'guest'
+  return `pinned_overnight_${uid}`
+}
 
 function loadPinnedIds(date) {
   try {
-    const stored = JSON.parse(localStorage.getItem(OVERNIGHT_PIN_KEY) || 'null')
+    const stored = JSON.parse(localStorage.getItem(overnightPinKey()) || 'null')
     if (stored && stored.date === date) return new Set(stored.ids)
   } catch {}
   return new Set()
@@ -29,7 +33,7 @@ export const useOvernightStore = defineStore('overnight', () => {
     if (next.has(id)) next.delete(id)
     else next.add(id)
     pinnedIds.value = next
-    localStorage.setItem(OVERNIGHT_PIN_KEY, JSON.stringify({ date: currentDate.value, ids: [...next] }))
+    localStorage.setItem(overnightPinKey(), JSON.stringify({ date: currentDate.value, ids: [...next] }))
   }
 
   function isPinned(id) {

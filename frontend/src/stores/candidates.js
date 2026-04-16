@@ -1,9 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { getCandidates, getCandidateDates, getCandidateStats, getDailyReviewUrl, getDailyReviewShow, getDailyReviewDates, getMonitorStatus, getAnalyzeTipUrl } from '../api'
+import { useAuthStore } from './auth'
 import dayjs from 'dayjs'
 
-const INTRADAY_PIN_KEY = 'pinned_intraday'
+function intradayPinKey() {
+  const uid = useAuthStore().user?.id ?? 'guest'
+  return `pinned_intraday_${uid}`
+}
 
 function loadPinnedIds(storageKey, date) {
   try {
@@ -34,7 +38,7 @@ export const useCandidateStore = defineStore('candidates', () => {
     if (next.has(id)) next.delete(id)
     else next.add(id)
     pinnedIds.value = next
-    localStorage.setItem(INTRADAY_PIN_KEY, JSON.stringify({ date: currentDate.value, ids: [...next] }))
+    localStorage.setItem(intradayPinKey(), JSON.stringify({ date: currentDate.value, ids: [...next] }))
   }
 
   function isPinned(id) {
@@ -116,7 +120,7 @@ export const useCandidateStore = defineStore('candidates', () => {
       candidates.value = data.data
       currentDate.value = data.date
       currentMode.value = data.mode || targetMode
-      pinnedIds.value = loadPinnedIds(INTRADAY_PIN_KEY, data.date)
+      pinnedIds.value = loadPinnedIds(intradayPinKey(), data.date)
       lastUpdatedAt.value = data.last_updated_at || ''
       isHoliday.value = data.is_holiday || false
       holidayName.value = data.holiday_name || ''
