@@ -50,7 +50,7 @@
           <el-input v-model="form.name" placeholder="用戶姓名" />
         </el-form-item>
         <el-form-item label="電子郵件" prop="email">
-          <el-input v-model="form.email" type="email" placeholder="user@example.com" />
+          <el-input v-model="form.email" type="email" placeholder="選填" />
         </el-form-item>
         <el-form-item label="密碼" prop="password">
           <el-input
@@ -101,7 +101,7 @@ const form = ref({ name: '', email: '', password: '', role: 'viewer' })
 
 const formRules = {
   name:  [{ required: true, message: '請輸入姓名', trigger: 'blur' }],
-  email: [{ required: true, type: 'email', message: '請輸入有效電子郵件', trigger: 'blur' }],
+  email: [{ type: 'email', message: '請輸入有效電子郵件格式', trigger: 'blur' }],
   password: [
     {
       validator: (rule, value, callback) => {

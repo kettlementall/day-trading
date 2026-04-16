@@ -14,15 +14,15 @@ class AuthController extends Controller
     public function login(Request $request): JsonResponse
     {
         $request->validate([
-            'email'    => 'required|email',
+            'user_id'  => 'required|integer',
             'password' => 'required|string',
         ]);
 
-        $user = User::where('email', $request->email)->first();
+        $user = User::find($request->user_id);
 
         if (! $user || ! Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
-                'email' => ['帳號或密碼錯誤'],
+                'user_id' => ['帳號或密碼錯誤'],
             ]);
         }
 
