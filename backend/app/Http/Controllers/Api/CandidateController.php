@@ -35,6 +35,11 @@ class CandidateController extends Controller
             $query->where('ai_reasoning', '!=', '')->whereNotNull('ai_reasoning');
         }
 
+        // viewer 只看 AI 選中的標的（不顯示被排除的卡片）
+        if (! $request->user()?->isAdmin()) {
+            $query->where('ai_selected', true);
+        }
+
         $candidates = $query
             ->orderByDesc('ai_selected')
             ->orderByDesc('score')
