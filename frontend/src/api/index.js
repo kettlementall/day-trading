@@ -9,10 +9,12 @@ const api = axios.create({
 })
 
 // 401 interceptor — lazy import 避免 circular dependency
+let _loggingOut = false
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 && !_loggingOut) {
+      _loggingOut = true
       const { useAuthStore } = await import('../stores/auth')
       const authStore = useAuthStore()
       authStore.token = null
@@ -22,6 +24,8 @@ api.interceptors.response.use(
       if (window.location.pathname !== '/login') {
         window.location.href = '/login'
       }
+      // 導頁後重置 flag（以防同一 session 重新登入後又觸發）
+      setTimeout(() => { _loggingOut = false }, 2000)
     }
     return Promise.reject(error)
   }

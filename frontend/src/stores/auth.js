@@ -36,9 +36,12 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const { data } = await api.get('/auth/me')
       user.value = data
-    } catch {
-      // token 過期或被撤銷
-      _clearAuth()
+    } catch (err) {
+      // 只有 401（token 真的失效）才登出
+      // 網路錯誤、5xx 等暫時性問題不登出，讓使用者繼續使用
+      if (err.response?.status === 401) {
+        _clearAuth()
+      }
     }
   }
 
