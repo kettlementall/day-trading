@@ -11,20 +11,20 @@
         <el-icon><Moon /></el-icon>
         <span>隔日沖候選</span>
       </router-link>
+      <router-link to="/news" class="nav-item" active-class="active">
+        <el-icon><ChatLineSquare /></el-icon>
+        <span>新聞整理</span>
+      </router-link>
 
       <!-- admin only -->
       <template v-if="authStore.isAdmin">
         <router-link to="/stats" class="nav-item" active-class="active">
           <el-icon><DataAnalysis /></el-icon>
-          <span>當中績效</span>
+          <span>當沖績效</span>
         </router-link>
         <router-link to="/overnight/stats" class="nav-item" active-class="active">
           <el-icon><DataLine /></el-icon>
           <span>隔日績效</span>
-        </router-link>
-        <router-link to="/news" class="nav-item" active-class="active">
-          <el-icon><ChatLineSquare /></el-icon>
-          <span>新聞整理</span>
         </router-link>
         <router-link to="/settings" class="nav-item" active-class="active">
           <el-icon><Setting /></el-icon>

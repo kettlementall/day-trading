@@ -44,7 +44,7 @@ const routes = [
     path: '/news',
     name: 'news',
     component: () => import('../views/NewsView.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true },
+    meta: { requiresAuth: true },
   },
   {
     path: '/settings',

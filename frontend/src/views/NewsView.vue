@@ -13,7 +13,7 @@
           style="width: 100px"
           @change="loadDashboard"
         />
-        <el-button type="primary" size="small" @click="doFetch" :loading="fetching">
+        <el-button v-if="authStore.isAdmin" type="primary" size="small" @click="doFetch" :loading="fetching">
           {{ fetching ? fetchProgress : '抓取分析' }}
         </el-button>
         <span v-if="lastFetchedAt" class="last-fetched">{{ lastFetchedAt }}</span>
@@ -90,7 +90,10 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { getNewsDashboard, fetchNews, getNewsFetchStatus } from '../api'
+import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
+
+const authStore = useAuthStore()
 
 const currentDate = ref(new Date().toISOString().slice(0, 10))
 const loading = ref(false)

@@ -51,6 +51,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/backtest/rounds',             [BacktestController::class, 'rounds']);
     Route::get('/backtest/optimize-validated', [BacktestController::class, 'optimizeValidated']);
 
+    // 消息面（viewer + admin 可看）
+    Route::get('/news/dashboard', [NewsController::class, 'dashboard']);
+
     // ── Admin only ───────────────────────────────────────────────────────────
     Route::middleware('admin')->group(function () {
 
@@ -63,8 +66,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // 手動同步
         Route::post('/data-sync', [DataSyncController::class, 'sync']);
 
-        // 消息面（觸發）
-        Route::get('/news/dashboard',    [NewsController::class, 'dashboard']);
+        // 消息面（觸發，admin only）
         Route::post('/news/fetch',       [NewsController::class, 'fetch']);
         Route::get('/news/fetch-status', [NewsController::class, 'fetchStatus']);
 
