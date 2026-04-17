@@ -39,7 +39,10 @@
 | **T+1 09:30** | **`stock:monitor-overnight-exit --slot=930`** | **隔日沖 T+1 出場監控（Fugle 即時報價：目標/停損觸發自動終止；Haiku 滾動判斷 hold/adjust/exit）** |
 | **T+1 10:00** | **`stock:monitor-overnight-exit --slot=1000`** | **同上，10:00 時段** |
 | **T+1 10:30** | **`stock:monitor-overnight-exit --slot=1030`** | **同上，10:30 時段** |
-| **T+1 11:00** | **`stock:monitor-overnight-exit --slot=1100`** | **同上，11:00 時段（末次 AI 滾動）** |
+| **T+1 11:00** | **`stock:monitor-overnight-exit --slot=1100`** | **同上，11:00 時段** |
+| **T+1 11:30** | **`stock:monitor-overnight-exit --slot=1130`** | **同上，11:30 時段** |
+| **T+1 12:00** | **`stock:monitor-overnight-exit --slot=1200`** | **同上，12:00 時段** |
+| **T+1 12:30** | **`stock:monitor-overnight-exit --slot=1230`** | **同上，12:30 時段（末次 AI 滾動）** |
 | **週日 22:00** | **`stock:compute-strategy-stats`** | **計算隔日沖/當沖策略量化績效統計（30/60 天窗口）** |
 
 > `stock:backtest --validated` 已停用自動排程。指令保留可手動執行回測指標檢視。
@@ -75,7 +78,7 @@
                                                         │
                   13:00–13:25 使用者下單建倉（T+0）
                                                         │
-                  T+1 09:30/10:00/10:30/11:00 出場監控（Fugle + Haiku 滾動）
+                  T+1 09:30~12:30 每 30 分鐘出場監控（Fugle + Haiku 滾動）
                                                         │
                   T+1 15:05 盤後結果回填 → 15:35 AI 隔日沖檢討
 ```
