@@ -8,7 +8,6 @@ use App\Models\DailyQuote;
 use App\Models\IntradaySnapshot;
 use App\Models\MarketHoliday;
 use App\Models\Stock;
-use App\Models\User;
 use App\Services\IntradayAiAdvisor;
 use App\Services\MonitorService;
 use App\Services\TelegramService;
@@ -42,10 +41,6 @@ class MonitorStocks extends Command
             return self::SUCCESS;
         }
 
-        if (!User::where('intraday_monitor_enabled', true)->exists()) {
-            $this->line('所有用戶已關閉當沖盤中監控，跳過');
-            return self::SUCCESS;
-        }
 
         // 時段外（scheduler 重啟保底用，正常由 between() 濾掉）
         $now = now();
@@ -92,18 +87,35 @@ class MonitorStocks extends Command
             ->where('mode', 'intraday')
             ->get();
 
-        if ($candidates->isEmpty()) {
-            $this->warn("[{$timeStr}] 無 {$date} 候選標的");
+        // 隔日沖標的（trade_date = 今日、mode = overnight、AI 選入）：只做快照，不做當沖監控
+        $overnightCandidates = Candidate::with('stock')
+            ->where('trade_date', $date)
+            ->where('mode', 'overnight')
+            ->where('ai_selected', true)
+            ->get();
+
+        // 合併所有需要快照的股票（去重）
+        $intradayStocks  = $candidates->pluck('stock')->unique('id');
+        $overnightStocks = $overnightCandidates->pluck('stock')->unique('id');
+        $allStocks       = $intradayStocks->merge($overnightStocks)->unique('id')->values()->all();
+
+        if (empty($allStocks)) {
+            $this->warn("[{$timeStr}] 無 {$date} 需快照標的");
             return;
         }
 
-        $stocks = $candidates->pluck('stock')->unique('id')->values()->all();
-        $this->info("[{$timeStr}] 快照 " . count($stocks) . " 檔");
+        $overnightOnlyCount = $overnightStocks->diffKeys($intradayStocks->keyBy('id'))->count();
+        $this->info("[{$timeStr}] 快照 " . count($allStocks) . " 檔" . ($overnightOnlyCount > 0 ? "（含隔日沖 {$overnightOnlyCount} 檔）" : ''));
 
         // ===== Step 1: 抓取即時報價並寫入快照 =====
-        $quotes = $this->client->fetchQuotes($stocks);
+        $quotes = $this->client->fetchQuotes($allStocks);
         $written = $this->writeSnapshots($quotes, $date, $now);
         $this->info("寫入 {$written} 筆快照");
+
+        // ===== 以下步驟只針對當沖候選（intraday），不影響隔日沖 =====
+        if ($candidates->isEmpty()) {
+            return;
+        }
 
         // ===== Step 1.5: 漲停/跌停通知 =====
         $this->notifyLimitHits($quotes, $date);

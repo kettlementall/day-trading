@@ -41,6 +41,7 @@ class AuthController extends Controller
                 'name'    => $user->name,
                 'email'   => $user->email,
                 'role'    => $user->role,
+                'intraday_monitor_enabled' => (bool) $user->intraday_monitor_enabled,
             ],
         ]);
     }
@@ -55,6 +56,7 @@ class AuthController extends Controller
             'name'    => $user->name,
             'email'   => $user->email,
             'role'    => $user->role,
+            'intraday_monitor_enabled' => (bool) $user->intraday_monitor_enabled,
         ]);
     }
 

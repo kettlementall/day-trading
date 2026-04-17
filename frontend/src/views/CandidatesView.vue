@@ -33,7 +33,7 @@
     </div>
 
     <!-- 盤前確認摘要 & 篩選 -->
-    <div v-if="store.morningSummary.screened > 0" class="morning-summary">
+    <div v-if="authStore.intradayEnabled && store.morningSummary.screened > 0" class="morning-summary">
       <div class="summary-stats">
         <span>候選 <strong>{{ store.morningSummary.total }}</strong> 檔</span>
         <span class="summary-divider">|</span>
@@ -53,7 +53,7 @@
     </div>
 
     <!-- 盤中即時監控面板 -->
-    <div v-if="store.monitors.length > 0" class="monitor-panel">
+    <div v-if="authStore.intradayEnabled && store.monitors.length > 0" class="monitor-panel">
       <div class="monitor-header">
         <h3 class="monitor-title">盤中監控</h3>
         <span class="monitor-count">
@@ -343,8 +343,10 @@
 import { onMounted, onUnmounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useCandidateStore } from '../stores/candidates'
+import { useAuthStore } from '../stores/auth'
 
 const store = useCandidateStore()
+const authStore = useAuthStore()
 const router = useRouter()
 
 const expandedIds = reactive(new Set())
@@ -367,10 +369,12 @@ function isMarketHours() {
 
 onMounted(() => {
   store.fetchCandidates()
-  if (isMarketHours()) {
-    store.startMonitorPolling(store.currentDate)
-  } else {
-    store.fetchMonitors(store.currentDate)
+  if (authStore.intradayEnabled) {
+    if (isMarketHours()) {
+      store.startMonitorPolling(store.currentDate)
+    } else {
+      store.fetchMonitors(store.currentDate)
+    }
   }
 })
 
@@ -381,7 +385,9 @@ onUnmounted(() => {
 function onDateChange() {
   store.stopMonitorPolling()
   store.fetchCandidates()
-  store.fetchMonitors(store.currentDate)
+  if (authStore.intradayEnabled) {
+    store.fetchMonitors(store.currentDate)
+  }
 }
 
 
