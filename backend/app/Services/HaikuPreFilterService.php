@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Carbon\Carbon;
 use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\DailyQuote;
@@ -373,9 +374,15 @@ SYSTEM;
 
         $sectorSection = SectorIndex::getSectorSummary($today);
 
+        // 持倉天數提示
+        $holdingDays = Carbon::parse($today)->diffInDays(Carbon::parse($tradeDate));
+        $holdingNote = $holdingDays > 1
+            ? "\n⚠️ 本次持倉跨 {$holdingDays} 天（含週末/假日），跳空風險顯著增加，非強勢標的應排除。"
+            : '';
+
         return <<<SYSTEM
 你是台股隔日沖選股 AI 助手（快速預篩模式）。現在是 {$today} 午盤前（12:30）。
-任務：判斷這些股票在今日收盤前建倉，明日（{$tradeDate}）是否有上漲延續潛力。
+任務：判斷這些股票在今日收盤前建倉，{$tradeDate}（出場日）是否有上漲延續潛力。{$holdingNote}
 
 {$usMarketSection}
 

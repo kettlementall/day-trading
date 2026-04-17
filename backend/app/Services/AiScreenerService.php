@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Carbon\Carbon;
 use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\DailyQuote;
@@ -490,9 +491,25 @@ MSG;
         }
         $newsIndexSection = $newsIndexLines ? implode("\n", $newsIndexLines) : '（無消息面指數）';
 
+        // 持倉天數計算（含週末/假日）
+        $holdingDays = Carbon::parse($today)->diffInDays(Carbon::parse($tradeDate));
+        $holdingWarning = '';
+        if ($holdingDays > 1) {
+            $holdingWarning = <<<WARN
+
+⚠️ **注意：本次持倉跨越 {$holdingDays} 個日曆天（{$today} 建倉 → {$tradeDate} 出場），中間包含非交易日。**
+跨週末/連假持倉風險顯著高於一般隔日沖：
+- 國際盤（美股、歐股、亞股）在此期間仍然交易，跳空風險大幅增加
+- 週末/假日期間可能出現突發消息（政策、地緣政治、財報），開盤跳空方向難以預測
+- 建議：停損應比一般隔日沖更寬（預留跳空空間）、倉位應更輕、風報比要求應更高（≥ 2.0）
+- 非強勢標的不建議選入（只選趨勢明確、法人持續買超、無明顯利空的標的）
+WARN;
+        }
+
         return <<<SYSTEM
 你是台股隔日沖選股 AI 助手。現在是 {$today} 午盤收盤前（12:30）。
-任務：對每檔 Haiku 預篩通過的候選，進行深度分析，判斷今日收盤前建倉、明日（{$tradeDate}）持有的隔日沖機會。
+任務：對每檔 Haiku 預篩通過的候選，進行深度分析，判斷今日收盤前建倉、{$tradeDate}（出場日）持有的隔日沖機會。
+{$holdingWarning}
 
 你需要設定三個關鍵價格：
 - **建議買入價（suggested_buy）**：今日 13:00 附近的合理建倉價位（勿離現價太遠）
