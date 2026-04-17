@@ -42,7 +42,7 @@ class IntradayAiAdvisor
         $prompt = $this->buildCalibrationPrompt($date, $candidates, $snapshots);
 
         try {
-            $response = Http::timeout(60)
+            $response = Http::timeout(120)
                 ->withHeaders([
                     'x-api-key' => $this->apiKey,
                     'anthropic-version' => '2023-06-01',
