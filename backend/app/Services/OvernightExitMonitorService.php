@@ -211,10 +211,25 @@ class OvernightExitMonitorService
         $entryType = $candidate->overnight_strategy ?? '';
         $overnightReasoning = $candidate->overnight_reasoning ?? '';
 
+        // 時間壓力提示（收盤 13:30，最晚 13:25 前需平倉）
+        $slotMinutes = $h * 60 + $m;
+        $deadlineMinutes = 13 * 60 + 25; // 13:25
+        $remainingMin = $deadlineMinutes - $slotMinutes;
+
+        if ($remainingMin <= 60) {
+            $urgency = "⚠️ **時間緊迫：距最終平倉期限（13:25）僅剩 {$remainingMin} 分鐘。除非走勢明確向上攻擊中，否則應優先建議出場鎖定損益。**";
+        } elseif ($remainingMin <= 120) {
+            $urgency = "⏰ 距收盤平倉期限（13:25）約 " . round($remainingMin / 60, 1) . " 小時。進入尾盤階段，獲利部位應考慮收緊停損鎖利，虧損部位應評估是否提前止損。";
+        } else {
+            $urgency = "距收盤平倉期限（13:25）尚有 " . round($remainingMin / 60, 1) . " 小時，可正常持有觀察。";
+        }
+
         $prompt = <<<PROMPT
 你是台股隔日沖出場管理 AI。
 
 **重要前提：我們已於昨日（T+0）收盤前建倉，目前持有 {$symbol} {$name}（{$industry}），現在是 T+1 的 {$slotLabel}，你的任務是管理這筆已建倉的持倉出場策略。**
+
+{$urgency}
 
 ## 持倉狀態（已進場）
 狀態: 持有中 — {$profitLabel}
@@ -238,6 +253,7 @@ class OvernightExitMonitorService
 1. 根據 5 分 K 走勢判斷：盤中趨勢是否支持繼續持有到目標？
 2. 是否需要調整目標或收緊停損來鎖利？
 3. 是否出現明確的出場訊號？（反轉、量縮價跌、支撐跌破）
+4. 考量剩餘時間：還有足夠時間等待目標達成嗎？
 
 決定策略：hold（維持）/ adjust（調整目標或停損）/ exit（建議提前出場）
 adjust 時必須給出新的 adjusted_target 或 adjusted_stop（或兩者），且需合理：target > current > stop
