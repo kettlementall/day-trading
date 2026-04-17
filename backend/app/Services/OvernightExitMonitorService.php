@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\CandidateMonitor;
+use App\Models\DailyQuote;
 use App\Models\IntradaySnapshot;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
@@ -194,10 +196,48 @@ class OvernightExitMonitorService
         $m = (int) $slot % 100;
         $slotLabel = sprintf('%02d:%02d', $h, $m);
 
-        // 今日 5 分 K 聚合
+        // ── 量比（預估全日量 vs 昨量）──
+        $yesterdayVolume = DailyQuote::where('stock_id', $candidate->stock_id)
+            ->where('date', '<', $candidate->trade_date->format('Y-m-d'))
+            ->orderByDesc('date')
+            ->value('volume') ?? 0;
+
+        $slotMinutes = $h * 60 + $m;
+        $elapsedMin  = max(1, $slotMinutes - 9 * 60); // 距 09:00 的分鐘數
+        $totalMin    = 270; // 09:00~13:30
+        $estimatedDailyVol = ($quote['accumulated_volume'] / $elapsedMin) * $totalMin;
+        $volumeRatio = $yesterdayVolume > 0 ? round($estimatedDailyVol / $yesterdayVolume, 2) : 0;
+        $volumeRatioFmt = $volumeRatio > 0 ? sprintf('%.2fx', $volumeRatio) : 'N/A';
+
+        // ── 跳空預測 vs 實際 ──
+        $gapPredicted = (float) ($candidate->gap_potential_percent ?? 0);
+        $gapSection = '';
+        if ($gapPredicted != 0) {
+            $gapDiff = round($openGapPct - $gapPredicted, 2);
+            $gapLabel = $gapDiff > 0.5 ? '超預期' : ($gapDiff < -0.5 ? '不及預期' : '符合預期');
+            $gapSection = sprintf(
+                "\n預測跳空: %+.2f%%　實際跳空: %+.2f%%　差異: %+.2f%%（%s）",
+                $gapPredicted, $openGapPct, $gapDiff, $gapLabel
+            );
+        }
+
+        // ── 關鍵價位（Opus 選股時設定）──
+        $keyLevelsSection = '';
+        $keyLevels = $candidate->overnight_key_levels ?? [];
+        if (!empty($keyLevels)) {
+            $keyLevelsSection = "\n## 關鍵價位（Opus 選股設定）\n";
+            foreach ($keyLevels as $level) {
+                $price  = $level['price'] ?? '?';
+                $type   = $level['type'] ?? '';
+                $reason = $level['reason'] ?? '';
+                $keyLevelsSection .= "- {$type} {$price}: {$reason}\n";
+            }
+        }
+
+        // ── 今日 5 分 K 聚合 ──
         $candleSection = $this->buildCandleSection($candidate->stock_id, $candidate->trade_date->format('Y-m-d'));
 
-        // 歷史建議
+        // ── 歷史建議 ──
         $prevAdviceSection = '';
         $log = $monitor->ai_advice_log ?? [];
         if (!empty($log)) {
@@ -207,12 +247,14 @@ class OvernightExitMonitorService
             }
         }
 
-        // 隔日沖策略
+        // ── AI 歷史教訓 ──
+        $lessonsSection = AiLesson::getOvernightLessons();
+
+        // ── 隔日沖策略 ──
         $entryType = $candidate->overnight_strategy ?? '';
         $overnightReasoning = $candidate->overnight_reasoning ?? '';
 
-        // 時間壓力提示（收盤 13:30，最晚 13:25 前需平倉）
-        $slotMinutes = $h * 60 + $m;
+        // ── 時間壓力提示 ──
         $deadlineMinutes = 13 * 60 + 25; // 13:25
         $remainingMin = $deadlineMinutes - $slotMinutes;
 
@@ -224,10 +266,39 @@ class OvernightExitMonitorService
             $urgency = "距收盤平倉期限（13:25）尚有 " . round($remainingMin / 60, 1) . " 小時，可正常持有觀察。";
         }
 
-        $prompt = <<<PROMPT
-你是台股隔日沖出場管理 AI。
+        // =====================================================================
+        // System prompt（靜態，可被 prompt cache 快取）
+        // =====================================================================
+        $systemPrompt = <<<SYSTEM
+你是台股隔日沖出場管理 AI。你的角色是管理已建倉持股的 T+1 出場策略。
 
-**重要前提：我們已於昨日（T+0）收盤前建倉，目前持有 {$symbol} {$name}（{$industry}），現在是 T+1 的 {$slotLabel}，你的任務是管理這筆已建倉的持倉出場策略。**
+## 背景
+- 隔日沖策略：T+0 收盤前建倉，T+1 盤中出場
+- 台股交易時間 09:00-13:30，最晚 13:25 前必須平倉
+- 你每 15 分鐘被呼叫一次，根據最新盤中數據決定持倉操作
+
+## 決策框架
+1. **趨勢判斷**：根據 5 分 K 走勢，盤中趨勢是否支持繼續持有到目標？
+2. **風控管理**：是否需要調整目標或收緊停損來鎖利？
+3. **出場訊號**：是否出現反轉、量縮價跌、支撐跌破等明確出場訊號？
+4. **時間因素**：剩餘時間是否足夠等待目標達成？
+5. **量能判斷**：量比偏低代表市場參與度不足，走勢可能缺乏持續性
+6. **跳空驗證**：實際跳空 vs 預測跳空的落差，反映市場對利多/利空的真實反應
+7. **關鍵價位**：支撐/壓力位是重要的進出參考
+
+## 回覆格式
+決定策略：hold（維持）/ adjust（調整目標或停損）/ exit（建議提前出場）
+adjust 時必須給出新的 adjusted_target 或 adjusted_stop（或兩者），且需合理：target > current > stop
+
+請直接回覆 JSON（不要加 markdown）：
+{"action":"hold","adjusted_target":null,"adjusted_stop":null,"reasoning":"一句話"}
+SYSTEM;
+
+        // =====================================================================
+        // User message（動態，每次呼叫都不同）
+        // =====================================================================
+        $userMessage = <<<USER
+**持有 {$symbol} {$name}（{$industry}），現在 T+1 {$slotLabel}**
 
 {$urgency}
 
@@ -243,36 +314,36 @@ class OvernightExitMonitorService
 {$overnightReasoning}
 
 ## T+1 盤中即時快照（{$slotLabel}）
-開盤: {$open}（跳空 {$openGapFmt}%）
+開盤: {$open}（跳空 {$openGapFmt}%）{$gapSection}
 最高: {$high}　最低: {$low}　現價: {$current}
-累積量: {$volume} 張
-{$candleSection}
+累積量: {$volume} 張　量比（預估全日/昨量）: {$volumeRatioFmt}
+{$keyLevelsSection}{$candleSection}
 {$prevAdviceSection}
+{$lessonsSection}
 
 ## 任務（持有中 — {$profitLabel}）
-1. 根據 5 分 K 走勢判斷：盤中趨勢是否支持繼續持有到目標？
-2. 是否需要調整目標或收緊停損來鎖利？
-3. 是否出現明確的出場訊號？（反轉、量縮價跌、支撐跌破）
-4. 考量剩餘時間：還有足夠時間等待目標達成嗎？
-
-決定策略：hold（維持）/ adjust（調整目標或停損）/ exit（建議提前出場）
-adjust 時必須給出新的 adjusted_target 或 adjusted_stop（或兩者），且需合理：target > current > stop
-
-請直接回覆 JSON（不要加 markdown）：
-{"action":"hold","adjusted_target":null,"adjusted_stop":null,"reasoning":"一句話"}
-PROMPT;
+請根據以上所有資訊，決定操作策略。
+USER;
 
         try {
             $response = Http::timeout(30)
                 ->withHeaders([
                     'x-api-key'         => $this->apiKey,
                     'anthropic-version' => '2023-06-01',
+                    'anthropic-beta'    => 'prompt-caching-2024-07-31',
                     'content-type'      => 'application/json',
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model'      => $this->model,
                     'max_tokens' => 256,
-                    'messages'   => [['role' => 'user', 'content' => $prompt]],
+                    'system'     => [
+                        [
+                            'type'          => 'text',
+                            'text'          => $systemPrompt,
+                            'cache_control' => ['type' => 'ephemeral'],
+                        ],
+                    ],
+                    'messages'   => [['role' => 'user', 'content' => $userMessage]],
                 ]);
 
             if (!$response->successful()) {
