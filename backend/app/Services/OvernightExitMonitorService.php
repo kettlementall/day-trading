@@ -190,16 +190,9 @@ class OvernightExitMonitorService
         $distStopFmt   = sprintf('%.2f', $distStop);
         $openGapFmt    = sprintf('%+.2f', $openGapPct);
 
-        $slotLabel = match($slot) {
-            '930'  => '09:30',
-            '1000' => '10:00',
-            '1030' => '10:30',
-            '1100' => '11:00',
-            '1130' => '11:30',
-            '1200' => '12:00',
-            '1230' => '12:30',
-            default => $slot,
-        };
+        $h = intdiv((int) $slot, 100);
+        $m = (int) $slot % 100;
+        $slotLabel = sprintf('%02d:%02d', $h, $m);
 
         // 今日 5 分 K 聚合
         $candleSection = $this->buildCandleSection($candidate->stock_id, $candidate->trade_date->format('Y-m-d'));
