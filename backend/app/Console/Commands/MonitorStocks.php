@@ -386,7 +386,7 @@ class MonitorStocks extends Command
                 : 0;
 
             $this->telegram->send(sprintf(
-                "[%s] %s %s %.2f (%+.1f%%) | 量 %s 股 | 監控 %s",
+                "[當沖%s] %s %s %.2f (%+.1f%%) | 量 %s 股 | 監控 %s",
                 $label,
                 $symbol,
                 $stock->name,

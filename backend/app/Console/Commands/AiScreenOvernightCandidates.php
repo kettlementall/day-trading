@@ -6,6 +6,7 @@ use App\Models\CandidateMonitor;
 use App\Services\AiScreenerService;
 use App\Services\HaikuPreFilterService;
 use App\Services\StockScreener;
+use App\Services\TelegramService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -55,8 +56,31 @@ class AiScreenOvernightCandidates extends Command
         $this->info("Opus 審核完成：{$selected} 檔選入隔日沖清單");
 
         // Step 4: 為 AI 選入的候選初始化隔日監控（status=holding）
-        $this->initOvernightMonitors($candidates->where('ai_selected', true)->values());
+        $selectedCandidates = $candidates->where('ai_selected', true)->values();
+        $this->initOvernightMonitors($selectedCandidates);
         $this->info("已建立 {$selected} 筆隔日監控記錄");
+
+        // Telegram 通知
+        $total      = $candidates->count();
+        $haikuCount = $candidates->where('haiku_selected', true)->count();
+
+        $lines = ["🌙 *隔日沖選股完成* ({$snapshotDate} → {$tradeDate})"];
+        $lines[] = "寬篩 {$total} 檔 → Haiku {$haikuCount} 檔 → Opus 選入 {$selected} 檔";
+        $lines[] = '';
+
+        foreach ($selectedCandidates as $c) {
+            $lines[] = sprintf(
+                "• %s %s | %s | 買 %.1f / 目標 %.1f / 停損 %.1f",
+                $c->stock->symbol,
+                $c->stock->name,
+                $c->overnight_strategy ?? '-',
+                (float) $c->suggested_buy,
+                (float) $c->target_price,
+                (float) $c->stop_loss
+            );
+        }
+
+        app(TelegramService::class)->send(implode("\n", $lines));
 
         Log::info("AiScreenOvernightCandidates：{$snapshotDate} → {$tradeDate}，選入 {$selected} 檔");
 

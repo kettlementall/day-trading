@@ -123,7 +123,7 @@ class AiScreenCandidates extends Command
         $haikuCount = $haikuApproved->count();
         $selectedCount = $selected->count();
 
-        $lines = ["📊 *AI 選股完成* ({$date})"];
+        $lines = ["📊 *當沖 AI 選股完成* ({$date})"];
         $lines[] = "寬篩 {$total} 檔 → Haiku {$haikuCount} 檔 → Opus 選入 {$selectedCount} 檔";
         $lines[] = '';
 

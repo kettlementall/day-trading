@@ -16,8 +16,10 @@ class OvernightExitMonitorService
     private string $apiKey;
     private string $model;
 
-    public function __construct(private FugleRealtimeClient $fugle)
-    {
+    public function __construct(
+        private FugleRealtimeClient $fugle,
+        private TelegramService $telegram,
+    ) {
         $this->apiKey = config('services.anthropic.api_key', '');
         $this->model  = config('services.anthropic.haiku_model', 'claude-haiku-4-5-20251001');
     }
@@ -70,11 +72,17 @@ class OvernightExitMonitorService
             $high          = (float) $quote['high'];
             $low           = (float) $quote['low'];
 
+            $name = $candidate->stock->name;
+
             // ── 已達目標 ──────────────────────────────────────────────
             if ($currentTarget > 0 && $high >= $currentTarget) {
                 $this->transition($monitor, CandidateMonitor::STATUS_TARGET_HIT,
                     "{$slot} 盤中最高 {$high} 達到目標 {$currentTarget}");
                 $summary['target_hit']++;
+                $this->telegram->send(sprintf(
+                    "[隔日沖達標] %s %s 盤中高 %.2f 達目標 %.2f | %s",
+                    $symbol, $name, $high, $currentTarget, $slot
+                ));
                 Log::info("OvernightExitMonitor [{$slot}] {$symbol}：目標達成（high={$high}）");
                 continue;
             }
@@ -84,6 +92,10 @@ class OvernightExitMonitorService
                 $this->transition($monitor, CandidateMonitor::STATUS_STOP_HIT,
                     "{$slot} 盤中最低 {$low} 觸及停損 {$currentStop}");
                 $summary['stop_hit']++;
+                $this->telegram->send(sprintf(
+                    "[隔日沖停損] %s %s 盤中低 %.2f 觸停損 %.2f | %s",
+                    $symbol, $name, $low, $currentStop, $slot
+                ));
                 Log::info("OvernightExitMonitor [{$slot}] {$symbol}：停損觸發（low={$low}）");
                 continue;
             }
@@ -92,8 +104,8 @@ class OvernightExitMonitorService
             $advice = $this->askHaiku($slot, $candidate, $monitor, $quote);
 
             match ($advice['action']) {
-                'exit' => $this->handleExit($monitor, $slot, $advice, $summary),
-                'adjust' => $this->handleAdjust($monitor, $slot, $advice, $summary),
+                'exit' => $this->handleExit($monitor, $slot, $advice, $summary, $symbol, $name),
+                'adjust' => $this->handleAdjust($monitor, $slot, $advice, $summary, $symbol, $name),
                 default => $this->handleHold($monitor, $slot, $advice, $summary),
             };
 
@@ -112,14 +124,18 @@ class OvernightExitMonitorService
         $monitor->save();
     }
 
-    private function handleExit(CandidateMonitor $monitor, string $slot, array $advice, array &$summary): void
+    private function handleExit(CandidateMonitor $monitor, string $slot, array $advice, array &$summary, string $symbol = '', string $name = ''): void
     {
         $monitor->logAiAdvice('exit', $advice['reasoning']);
         $this->transition($monitor, CandidateMonitor::STATUS_CLOSED, "{$slot} AI 建議提前出場：{$advice['reasoning']}");
         $summary['exited']++;
+        $this->telegram->send(sprintf(
+            "[隔日沖AI出場] %s %s | %s | %s",
+            $symbol, $name, $advice['reasoning'], $slot
+        ));
     }
 
-    private function handleAdjust(CandidateMonitor $monitor, string $slot, array $advice, array &$summary): void
+    private function handleAdjust(CandidateMonitor $monitor, string $slot, array $advice, array &$summary, string $symbol = '', string $name = ''): void
     {
         $updates = [];
 
@@ -144,6 +160,14 @@ class OvernightExitMonitorService
 
         $monitor->save();
         $summary['adjusted']++;
+
+        $adjustParts = [];
+        if (!empty($advice['adjusted_target'])) $adjustParts[] = sprintf('目標→%.2f', $advice['adjusted_target']);
+        if (!empty($advice['adjusted_stop']))   $adjustParts[] = sprintf('停損→%.2f', $advice['adjusted_stop']);
+        $this->telegram->send(sprintf(
+            "[隔日沖AI調整] %s %s %s | %s | %s",
+            $symbol, $name, implode(' ', $adjustParts), $advice['reasoning'], $slot
+        ));
     }
 
     private function handleHold(CandidateMonitor $monitor, string $slot, array $advice, array &$summary): void

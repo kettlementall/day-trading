@@ -97,7 +97,7 @@ class MonitorService
                 ]);
 
                 $this->telegram->send(sprintf(
-                    "[校準%s] %s %s %s | %s | 支撐 %s / 壓力 %s",
+                    "[當沖校準%s] %s %s %s | %s | 支撐 %s / 壓力 %s",
                     $gradeEmojis[$grade],
                     $grade,
                     $symbol,
@@ -122,7 +122,7 @@ class MonitorService
                 ]);
 
                 $this->telegram->send(sprintf(
-                    "[校準🔴] D %s %s | %s",
+                    "[當沖校準🔴] D %s %s | %s",
                     $symbol,
                     $candidate->stock->name,
                     $reason
@@ -134,7 +134,7 @@ class MonitorService
             ->filter(fn($c) => $c > 0)
             ->map(fn($c, $g) => "{$gradeEmojis[$g]}{$g}:{$c}")
             ->implode(' ');
-        $this->telegram->send("📋 *開盤校準完成*：{$summary}");
+        $this->telegram->send("📋 *當沖開盤校準完成*：{$summary}");
     }
 
     /**
@@ -248,7 +248,7 @@ class MonitorService
         if ($trajectory === 'weakness') {
             Log::info("MonitorService: {$stock->symbol} 走弱到價，不進場");
             $this->telegram->send(sprintf(
-                "[走弱] %s %s 走弱到價 %.2f，不進場 | 外盤 %.0f%%",
+                "[當沖走弱] %s %s 走弱到價 %.2f，不進場 | 外盤 %.0f%%",
                 $stock->symbol,
                 $stock->name,
                 $price,
@@ -296,7 +296,7 @@ class MonitorService
         $this->transition($monitor, CandidateMonitor::STATUS_HOLDING, '進場確認');
 
         $this->telegram->send(sprintf(
-            "[進場] %s %s %.2f | 量 %.1fx | 外盤 %.0f%% | 目標 %.2f / 停損 %.2f",
+            "[當沖進場] %s %s %.2f | 量 %.1fx | 外盤 %.0f%% | 目標 %.2f / 停損 %.2f",
             $stock->symbol,
             $stock->name,
             $entryPrice,
@@ -445,7 +445,7 @@ class MonitorService
             $stock = $candidate->stock;
             $candidate->update(['morning_grade' => 'B', 'morning_confirmed' => true]);
             $this->telegram->send(sprintf(
-                "[升格 C→B] %s %s | %s",
+                "[當沖升格 C→B] %s %s | %s",
                 $stock->symbol,
                 $stock->name,
                 $notes
@@ -494,11 +494,11 @@ class MonitorService
         $stock = $monitor->candidate->stock;
         $sign = $profitPct >= 0 ? '+' : '';
         $tag = match ($exitStatus) {
-            'target_hit' => '達標',
-            'stop_hit' => '停損',
-            'trailing_stop' => '停利',
-            'closed' => '收盤',
-            default => '出場',
+            'target_hit' => '當沖達標',
+            'stop_hit' => '當沖停損',
+            'trailing_stop' => '當沖停利',
+            'closed' => '當沖收盤',
+            default => '當沖出場',
         };
 
         $this->telegram->send(sprintf(
@@ -535,7 +535,7 @@ class MonitorService
         $monitor->update(['skip_reason' => $notes]);
 
         $stock = $monitor->candidate->stock;
-        $this->telegram->send(sprintf("[AI放棄] %s %s | %s", $stock->symbol, $stock->name, $notes));
+        $this->telegram->send(sprintf("[當沖AI放棄] %s %s | %s", $stock->symbol, $stock->name, $notes));
     }
 
     private function applyAdjustments(CandidateMonitor $monitor, array $advice): void
@@ -565,7 +565,7 @@ class MonitorService
         if (!empty($updated)) {
             $stock = $monitor->candidate->stock;
             $this->telegram->send(sprintf(
-                "[AI調整] %s %s %s | %s",
+                "[當沖AI調整] %s %s %s | %s",
                 $stock->symbol,
                 $stock->name,
                 implode(' ', $updated),
