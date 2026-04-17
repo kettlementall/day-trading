@@ -175,7 +175,7 @@ class MonitorStocks extends Command
     private function performRollingAdvice(string $date): void
     {
         $monitors = CandidateMonitor::with(['candidate.stock'])
-            ->whereHas('candidate', fn($q) => $q->where('trade_date', $date))
+            ->whereHas('candidate', fn($q) => $q->where('trade_date', $date)->where('mode', 'intraday'))
             ->whereIn('status', CandidateMonitor::ACTIVE_STATUSES)
             ->get();
 
@@ -368,10 +368,11 @@ class MonitorStocks extends Command
             $stock = Stock::where('symbol', $symbol)->first();
             if (!$stock) continue;
 
-            // 只通知有 active monitor 的標的
+            // 只通知有 active monitor 的當沖標的（隔日沖由 monitor-overnight-exit 獨立處理）
             $monitor = CandidateMonitor::whereHas('candidate', fn($q) => $q
                 ->where('trade_date', $date)
                 ->where('stock_id', $stock->id)
+                ->where('mode', 'intraday')
             )->whereIn('status', CandidateMonitor::ACTIVE_STATUSES)->first();
 
             if (!$monitor) continue;

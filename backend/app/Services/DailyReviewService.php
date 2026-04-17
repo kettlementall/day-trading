@@ -466,7 +466,7 @@ PROMPT;
         // 監控系統軌跡
         $monitorSection = '';
         $monitors = CandidateMonitor::with('candidate.stock')
-            ->whereHas('candidate', fn($q) => $q->where('trade_date', $date))
+            ->whereHas('candidate', fn($q) => $q->where('trade_date', $date)->where('mode', 'intraday'))
             ->get();
 
         if ($monitors->isNotEmpty()) {
