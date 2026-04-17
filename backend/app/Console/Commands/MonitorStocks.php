@@ -120,8 +120,8 @@ class MonitorStocks extends Command
         // ===== Step 1.5: 漲停/跌停通知 =====
         $this->notifyLimitHits($quotes, $date);
 
-        // ===== Step 2: 09:01–09:10 AI 開盤校準（只做一次） =====
-        if ($written > 0 && !$this->hasCalibrated($date) && $timeStr >= '09:01' && $timeStr <= '09:10') {
+        // ===== Step 2: 09:02–09:10 AI 開盤校準（只做一次，確保至少已有 2 輪快照） =====
+        if ($written > 0 && !$this->hasCalibrated($date) && $timeStr >= '09:02' && $timeStr <= '09:10') {
             $this->performOpeningCalibration($date, $candidates);
         }
 
