@@ -9,12 +9,13 @@ class User extends Authenticatable
 {
     use HasApiTokens;
 
-    protected $fillable = ['user_id', 'name', 'email', 'password', 'role'];
+    protected $fillable = ['user_id', 'name', 'email', 'password', 'role', 'intraday_monitor_enabled'];
 
     protected $hidden = ['password'];
 
     protected $casts = [
         'password' => 'hashed',
+        'intraday_monitor_enabled' => 'boolean',
     ];
 
     public function isAdmin(): bool

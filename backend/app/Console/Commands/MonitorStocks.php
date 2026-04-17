@@ -8,6 +8,7 @@ use App\Models\DailyQuote;
 use App\Models\IntradaySnapshot;
 use App\Models\MarketHoliday;
 use App\Models\Stock;
+use App\Models\User;
 use App\Services\IntradayAiAdvisor;
 use App\Services\MonitorService;
 use App\Services\TelegramService;
@@ -38,6 +39,11 @@ class MonitorStocks extends Command
 
         if (MarketHoliday::isHoliday($date)) {
             $this->line("今日（{$date}）休市，跳過監控");
+            return self::SUCCESS;
+        }
+
+        if (!User::where('intraday_monitor_enabled', true)->exists()) {
+            $this->line('所有用戶已關閉當沖盤中監控，跳過');
             return self::SUCCESS;
         }
 

@@ -19,6 +19,15 @@
           </el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="盤中監控" width="100" align="center">
+        <template #default="{ row }">
+          <el-switch
+            :model-value="row.intraday_monitor_enabled"
+            @change="(val) => toggleMonitor(row, val)"
+            size="small"
+          />
+        </template>
+      </el-table-column>
       <el-table-column label="建立日期" width="120">
         <template #default="{ row }">
           {{ dayjs(row.created_at).format('YYYY/MM/DD') }}
@@ -182,6 +191,15 @@ async function handleSave() {
     ElMessage.error(msg)
   } finally {
     saving.value = false
+  }
+}
+
+async function toggleMonitor(user, val) {
+  try {
+    await updateUser(user.id, { intraday_monitor_enabled: val })
+    user.intraday_monitor_enabled = val
+  } catch {
+    ElMessage.error('更新失敗')
   }
 }
 

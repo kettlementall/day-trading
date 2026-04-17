@@ -12,9 +12,15 @@ class UserController extends Controller
     public function index(): JsonResponse
     {
         return response()->json(
-            User::select('id', 'user_id', 'name', 'email', 'role', 'created_at')
-                ->orderBy('id')
-                ->get()
+            User::orderBy('id')->get()->map(fn ($u) => [
+                'id'         => $u->id,
+                'user_id'    => $u->user_id,
+                'name'       => $u->name,
+                'email'      => $u->email,
+                'role'       => $u->role,
+                'intraday_monitor_enabled' => $u->intraday_monitor_enabled ?? true,
+                'created_at' => $u->created_at,
+            ])
         );
     }
 
@@ -26,6 +32,7 @@ class UserController extends Controller
             'email'    => 'nullable|email|unique:users',
             'password' => 'required|string|min:8',
             'role'     => 'required|in:admin,viewer',
+            'intraday_monitor_enabled' => 'sometimes|boolean',
         ]);
 
         $user = User::create($validated);
@@ -36,6 +43,7 @@ class UserController extends Controller
             'name'    => $user->name,
             'email'   => $user->email,
             'role'    => $user->role,
+            'intraday_monitor_enabled' => $user->intraday_monitor_enabled,
         ], 201);
     }
 
@@ -47,6 +55,7 @@ class UserController extends Controller
             'email'    => 'sometimes|nullable|email|unique:users,email,' . $user->id,
             'password' => 'sometimes|string|min:8',
             'role'     => 'sometimes|in:admin,viewer',
+            'intraday_monitor_enabled' => 'sometimes|boolean',
         ]);
 
         $user->update($validated);
@@ -57,6 +66,7 @@ class UserController extends Controller
             'name'    => $user->name,
             'email'   => $user->email,
             'role'    => $user->role,
+            'intraday_monitor_enabled' => $user->intraday_monitor_enabled,
         ]);
     }
 
