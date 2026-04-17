@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\CandidateMonitor;
+use App\Models\MarketHoliday;
 use App\Services\AiScreenerService;
 use App\Services\HaikuPreFilterService;
 use App\Services\StockScreener;
@@ -118,7 +119,11 @@ class AiScreenOvernightCandidates extends Command
     {
         $next = Carbon::parse($date)->addDay();
 
-        while ($next->isWeekend()) {
+        // 跳過週末與國定假日（最多往後查 10 天，防無窮迴圈）
+        for ($i = 0; $i < 10; $i++) {
+            if (!$next->isWeekend() && !MarketHoliday::isHoliday($next->format('Y-m-d'))) {
+                break;
+            }
             $next->addDay();
         }
 
