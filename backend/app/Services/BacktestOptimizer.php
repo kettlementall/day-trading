@@ -368,6 +368,7 @@ class BacktestOptimizer
         $from = $metrics['period']['from'] ?? now()->subDays(30)->format('Y-m-d');
         $to = $metrics['period']['to'] ?? now()->format('Y-m-d');
         $candidates = \App\Models\Candidate::whereBetween('trade_date', [$from, $to])
+            ->where('mode', 'intraday')
             ->whereHas('result')
             ->with(['result', 'stock:id,symbol,name,industry'])
             ->orderBy('trade_date')

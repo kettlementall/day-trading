@@ -39,6 +39,7 @@ class AiLesson extends Model
     {
         $lessons = static::active()
             ->whereIn('type', ['screening', 'market', 'entry'])
+            ->whereIn('mode', ['intraday', 'both'])
             ->orderByDesc('priority')
             ->orderByDesc('trade_date')
             ->limit($limit)
@@ -88,6 +89,7 @@ class AiLesson extends Model
     {
         $lessons = static::active()
             ->whereIn('type', ['calibration', 'entry', 'exit', 'market'])
+            ->whereIn('mode', ['intraday', 'both'])
             ->orderByDesc('priority')
             ->orderByDesc('trade_date')
             ->limit($limit)

@@ -98,6 +98,7 @@ class CandidateController extends Controller
 
         $candidates = Candidate::with(['stock', 'result'])
             ->where('trade_date', $date)
+            ->where('mode', 'intraday')
             ->orderByDesc('morning_confirmed')
             ->orderByDesc('morning_score')
             ->orderByDesc('score')

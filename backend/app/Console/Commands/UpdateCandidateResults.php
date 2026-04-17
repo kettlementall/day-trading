@@ -19,6 +19,7 @@ class UpdateCandidateResults extends Command
         $date = $this->argument('date') ?? now()->format('Y-m-d');
 
         $candidates = Candidate::where('trade_date', $date)
+            ->where('mode', 'intraday')
             ->whereDoesntHave('result')
             ->get();
 

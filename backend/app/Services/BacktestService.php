@@ -317,8 +317,10 @@ class BacktestService
      */
     public function rescreen(string $from, string $to): array
     {
-        // 清除期間內的候選資料
-        $candidateIds = Candidate::whereBetween('trade_date', [$from, $to])->pluck('id');
+        // 清除期間內的當沖候選資料（不影響隔日沖）
+        $candidateIds = Candidate::whereBetween('trade_date', [$from, $to])
+            ->where('mode', 'intraday')
+            ->pluck('id');
         if ($candidateIds->isNotEmpty()) {
             CandidateResult::whereIn('candidate_id', $candidateIds)->delete();
             Candidate::whereIn('id', $candidateIds)->delete();
