@@ -75,13 +75,13 @@ Schedule::command('stock:monitor-intraday')
     ->appendOutputTo($scheduleLog);
 
 // ---- 隔日沖選股流程（每個交易日執行）----
-// 12:25 抓取類股指數（供 12:30 Haiku/Opus 選股使用）
+// 12:45 抓取類股指數（供 12:50 Haiku/Opus 選股使用）
 scheduledCommand('stock:fetch-sector-indices', '類股指數抓取')
-    ->dailyAt('12:25')->weekdays();
+    ->dailyAt('12:45')->weekdays();
 
-// 12:30 隔日沖 AI 選股（Screener → Haiku → Opus，完成後可於 13:00-13:25 下單）
+// 12:50 隔日沖 AI 選股（Screener → Haiku → Opus，完成後可於 13:00-13:25 下單）
 scheduledCommand('stock:ai-screen-overnight', '隔日沖 AI 選股')
-    ->dailyAt('12:30')->weekdays();
+    ->dailyAt('12:50')->weekdays();
 
 // T+1 盤中出場監控（9:30~12:30 每 15 分鐘）：檢查目標/停損觸發 + Haiku 滾動調整
 foreach ([

@@ -89,21 +89,9 @@ class FetchIntradayQuotes extends Command
             $first5minLow = $data['low'];
         }
 
-        // 內外盤量推算
-        $buyVolume = $existing?->buy_volume ?? 0;
-        $sellVolume = $existing?->sell_volume ?? 0;
-
-        if ($data['current_price'] > 0 && $data['best_ask'] > 0 && $data['best_bid'] > 0) {
-            $midPrice = ($data['best_ask'] + $data['best_bid']) / 2;
-            $prevAccVolume = ($existing?->accumulated_volume ?? 0);
-            $deltaVolume = max(0, $data['accumulated_volume'] - $prevAccVolume);
-
-            if ($data['current_price'] >= $midPrice) {
-                $buyVolume += $deltaVolume;
-            } else {
-                $sellVolume += $deltaVolume;
-            }
-        }
+        // 內外盤量：使用 Fugle API 直接提供的 tradeVolumeAtAsk/Bid
+        $buyVolume = $data['trade_volume_at_ask'] ?? 0;   // 外盤
+        $sellVolume = $data['trade_volume_at_bid'] ?? 0;  // 內盤
 
         $totalBuySell = $buyVolume + $sellVolume;
         $externalRatio = $totalBuySell > 0

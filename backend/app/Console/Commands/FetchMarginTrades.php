@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\MarginTrade;
+use App\Models\MarketHoliday;
 use App\Models\Stock;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
@@ -13,38 +14,43 @@ class FetchMarginTrades extends Command
     protected $signature = 'stock:fetch-margin {date?}';
     protected $description = '抓取融資融券資料';
 
+    private const OPENDATA_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/MI_MARGN';
+
     public function handle(): int
     {
-        $date = $this->argument('date') ?? now()->format('Ymd');
+        $date = $this->argument('date') ?? now()->format('Y-m-d');
+
+        // 統一轉為 SQL 格式
+        if (strlen($date) === 8 && ctype_digit($date)) {
+            $date = substr($date, 0, 4) . '-' . substr($date, 4, 2) . '-' . substr($date, 6, 2);
+        }
+
         $this->info("抓取融資融券: {$date}");
 
-        $url = "https://www.twse.com.tw/exchangeReport/MI_MARGN?response=json&date={$date}&selectType=STOCK";
+        if (MarketHoliday::isHoliday($date)) {
+            $this->info("休市日，跳過");
+            return self::SUCCESS;
+        }
 
         try {
-            $response = Http::timeout(30)->get($url);
-            $json = $response->json();
+            $response = Http::timeout(30)->get(self::OPENDATA_URL);
 
-            if (($json['stat'] ?? '') !== 'OK') {
-                $this->warn("回傳非 OK");
+            if (!$response->successful()) {
+                $this->warn("HTTP {$response->status()}");
                 return self::SUCCESS;
             }
 
-            // 驗證回傳日期是否與請求日期一致
-            $actualDate = $json['date'] ?? $date;
-            $sqlDate = substr($actualDate, 0, 4) . '-' . substr($actualDate, 4, 2) . '-' . substr($actualDate, 6, 2);
-            $requestedSqlDate = substr($date, 0, 4) . '-' . substr($date, 4, 2) . '-' . substr($date, 6, 2);
-
-            if ($sqlDate !== $requestedSqlDate) {
-                $this->warn("回傳日期 {$sqlDate} 與請求日期 {$requestedSqlDate} 不符（非交易日），跳過");
+            $rows = $response->json();
+            if (!is_array($rows) || empty($rows)) {
+                $this->warn("回傳空資料");
                 return self::SUCCESS;
             }
 
-            $rows = $json['data'] ?? [];
             $count = 0;
+            $parse = fn ($v) => (int) str_replace([',', ' '], '', $v ?: '0');
 
             foreach ($rows as $row) {
-                $symbol = trim($row[0]);
-
+                $symbol = trim($row['股票代號'] ?? '');
                 if (!preg_match('/^\d{4}$/', $symbol)) {
                     continue;
                 }
@@ -52,19 +58,26 @@ class FetchMarginTrades extends Command
                 $stock = Stock::where('symbol', $symbol)->first();
                 if (!$stock) continue;
 
-                $parse = fn ($v) => (int) str_replace([',', ' '], '', $v);
+                $marginBuy     = $parse($row['融資買進'] ?? '0');
+                $marginSell    = $parse($row['融資賣出'] ?? '0');
+                $marginBalance = $parse($row['融資今日餘額'] ?? '0');
+                $marginPrev    = $parse($row['融資前日餘額'] ?? '0');
+                $shortBuy      = $parse($row['融券買進'] ?? '0');
+                $shortSell     = $parse($row['融券賣出'] ?? '0');
+                $shortBalance  = $parse($row['融券今日餘額'] ?? '0');
+                $shortPrev     = $parse($row['融券前日餘額'] ?? '0');
 
                 MarginTrade::updateOrCreate(
-                    ['stock_id' => $stock->id, 'date' => $sqlDate],
+                    ['stock_id' => $stock->id, 'date' => $date],
                     [
-                        'margin_buy' => $parse($row[2]),
-                        'margin_sell' => $parse($row[3]),
-                        'margin_balance' => $parse($row[6]),
-                        'margin_change' => $parse($row[2]) - $parse($row[3]),
-                        'short_buy' => $parse($row[8] ?? '0'),
-                        'short_sell' => $parse($row[7] ?? '0'),
-                        'short_balance' => $parse($row[11] ?? '0'),
-                        'short_change' => $parse($row[7] ?? '0') - $parse($row[8] ?? '0'),
+                        'margin_buy'     => $marginBuy,
+                        'margin_sell'    => $marginSell,
+                        'margin_balance' => $marginBalance,
+                        'margin_change'  => $marginBalance - $marginPrev,
+                        'short_buy'      => $shortBuy,
+                        'short_sell'     => $shortSell,
+                        'short_balance'  => $shortBalance,
+                        'short_change'   => $shortBalance - $shortPrev,
                     ]
                 );
                 $count++;

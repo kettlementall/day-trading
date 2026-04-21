@@ -63,18 +63,20 @@ class FugleRealtimeClient
     /**
      * 解析 Fugle intraday/quote 回應
      *
-     * 主要欄位對照：
-     *   openPrice      → open
-     *   highPrice      → high
-     *   lowPrice       → low
-     *   closePrice     → current_price（盤中最後成交價）
-     *   referencePrice → prev_close（昨收，漲跌停基準）
-     *   totalVolume    → accumulated_volume（單位：股 shares，非張）
-     *   limitUpPrice   → 由 Fugle 直接計算，無需自行推算
-     *   limitDownPrice → 同上
-     *   isLimitUp      → limit_up
-     *   isLimitDown    → limit_down
-     *   lastUpdated    → timestamp_ms（ISO-8601 字串 → ms）
+     * 主要欄位對照（Fugle MarketData v1.0）：
+     *   openPrice              → open
+     *   highPrice              → high
+     *   lowPrice               → low
+     *   closePrice             → current_price（盤中最後成交價）
+     *   referencePrice         → prev_close（昨收，漲跌停基準）
+     *   total.tradeVolume      → accumulated_volume（API 回傳張，轉為股 shares）
+     *   total.tradeVolumeAtAsk → trade_volume_at_ask（外盤量，轉為股）
+     *   total.tradeVolumeAtBid → trade_volume_at_bid（內盤量，轉為股）
+     *   limitUpPrice           → 由 Fugle 直接計算，無需自行推算
+     *   limitDownPrice         → 同上
+     *   isLimitUpPrice         → limit_up
+     *   isLimitDownPrice       → limit_down
+     *   lastUpdated            → timestamp_ms（微秒 timestamp → ms）
      */
     private function parseQuote(array $data): ?array
     {
@@ -93,9 +95,9 @@ class FugleRealtimeClient
         $low     = (float) ($data['lowPrice']   ?? 0);
         $current = (float) ($data['closePrice'] ?? 0);
 
-        // Fugle 提供現成的漲跌停旗標與價格，不需自行推算
-        $limitUp   = (bool) ($data['isLimitUp']   ?? false);
-        $limitDown = (bool) ($data['isLimitDown'] ?? false);
+        // Fugle 漲跌停旗標：isLimitUpPrice / isLimitDownPrice
+        $limitUp   = (bool) ($data['isLimitUpPrice']  ?? $data['isLimitUp']  ?? false);
+        $limitDown = (bool) ($data['isLimitDownPrice'] ?? $data['isLimitDown'] ?? false);
 
         $bestBid = (float) ($data['bids'][0]['price'] ?? 0);
         $bestAsk = (float) ($data['asks'][0]['price'] ?? 0);
@@ -115,29 +117,37 @@ class FugleRealtimeClient
             }
         }
 
-        // totalVolume 單位為「股」(shares)，非張（1 張 = 1000 股）
-        $accVolume = (int) ($data['totalVolume'] ?? 0);
+        // 成交量在 total 物件下，Fugle 單位為「張」(lots)，轉為「股」(shares) 以匹配 DailyQuote
+        $total = $data['total'] ?? [];
+        $accVolume        = (int) ($total['tradeVolume']      ?? 0) * 1000;
+        $volumeAtAsk      = (int) ($total['tradeVolumeAtAsk'] ?? 0) * 1000; // 外盤
+        $volumeAtBid      = (int) ($total['tradeVolumeAtBid'] ?? 0) * 1000; // 內盤
 
-        // lastUpdated: ISO-8601 字串（"2026-04-15T09:30:00.000+08:00"）→ ms
+        // lastUpdated: 微秒 timestamp（如 1776733207942780）→ 毫秒
         $ts = $data['lastUpdated'] ?? 0;
-        $timestampMs = is_string($ts)
-            ? (int) (strtotime($ts) * 1000)
-            : (int) $ts;
+        if (is_string($ts) && !is_numeric($ts)) {
+            $timestampMs = (int) (strtotime($ts) * 1000);
+        } else {
+            // 微秒 → 毫秒
+            $timestampMs = (int) ($ts / 1000);
+        }
 
         return [
-            'symbol'             => $symbol,
-            'name'               => $data['name'] ?? '',
-            'open'               => $open,
-            'high'               => $high,
-            'low'                => $low,
-            'current_price'      => $current ?: $open,
-            'prev_close'         => $prevClose,
-            'accumulated_volume' => $accVolume,
-            'best_ask'           => $bestAsk,
-            'best_bid'           => $bestBid,
-            'limit_up'           => $limitUp,
-            'limit_down'         => $limitDown,
-            'timestamp_ms'       => $timestampMs,
+            'symbol'              => $symbol,
+            'name'                => $data['name'] ?? '',
+            'open'                => $open,
+            'high'                => $high,
+            'low'                 => $low,
+            'current_price'       => $current ?: $open,
+            'prev_close'          => $prevClose,
+            'accumulated_volume'  => $accVolume,
+            'trade_volume_at_ask' => $volumeAtAsk,
+            'trade_volume_at_bid' => $volumeAtBid,
+            'best_ask'            => $bestAsk,
+            'best_bid'            => $bestBid,
+            'limit_up'            => $limitUp,
+            'limit_down'          => $limitDown,
+            'timestamp_ms'        => $timestampMs,
         ];
     }
 }

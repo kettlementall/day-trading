@@ -279,32 +279,9 @@ class MonitorStocks extends Command
                 ? round(($data['high'] - $data['low']) / $data['prev_close'] * 100, 2)
                 : 0;
 
-            // 內外盤推算
-            $prevSnapshot = IntradaySnapshot::where('stock_id', $stock->id)
-                ->where('trade_date', $date)
-                ->orderByDesc('snapshot_time')
-                ->first();
-
-            $buyVolume = $prevSnapshot?->buy_volume ?? 0;
-            $sellVolume = $prevSnapshot?->sell_volume ?? 0;
-
-            $prevAccVolume = $prevSnapshot?->accumulated_volume ?? 0;
-            $deltaVolume = max(0, $data['accumulated_volume'] - $prevAccVolume);
-
-            if (!empty($data['limit_up'])) {
-                // 漲停：全部算外盤（買方）
-                $buyVolume += $deltaVolume;
-            } elseif (!empty($data['limit_down'])) {
-                // 跌停：全部算內盤（賣方）
-                $sellVolume += $deltaVolume;
-            } elseif ($data['current_price'] > 0 && $data['best_ask'] > 0 && $data['best_bid'] > 0) {
-                $midPrice = ($data['best_ask'] + $data['best_bid']) / 2;
-                if ($data['current_price'] >= $midPrice) {
-                    $buyVolume += $deltaVolume;
-                } else {
-                    $sellVolume += $deltaVolume;
-                }
-            }
+            // 內外盤：優先使用 Fugle API 直接提供的 tradeVolumeAtAsk/Bid
+            $buyVolume = $data['trade_volume_at_ask'] ?? 0;   // 外盤
+            $sellVolume = $data['trade_volume_at_bid'] ?? 0;  // 內盤
 
             $totalBuySell = $buyVolume + $sellVolume;
             $externalRatio = $totalBuySell > 0

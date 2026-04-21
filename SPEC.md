@@ -22,8 +22,8 @@
 | 09:00-13:30 | `stock:monitor-intraday` | 盤中即時監控（每 30 秒快照；command 內部 loop，scheduler 每分鐘觸發作為當機重啟保底） |
 | 12:00 | `news:fetch`                | 午間新聞抓取                                                    |
 | 12:15 | `news:compute-indices`      | 計算新聞指數                                                    |
-| **12:25** | **`stock:fetch-sector-indices`** | **抓取 TWSE 類股指數（供隔日沖選股使用）** |
-| **12:30** | **`stock:ai-screen-overnight`** | **隔日沖三階段 AI 選股（用今日盤中資料選明日建倉標的）** |
+| **12:45** | **`stock:fetch-sector-indices`** | **抓取 TWSE 類股指數（供隔日沖選股使用）** |
+| **12:50** | **`stock:ai-screen-overnight`** | **隔日沖三階段 AI 選股（用今日盤中資料選明日建倉標的）** |
 | 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情                                                 |
 | 15:00 | `stock:update-results`      | 更新當日當沖候選標的的盤後結果                                           |
 | **15:05** | **`stock:update-overnight-results`** | **更新隔日沖候選標的盤後實際結果（T+1 收盤後）** |
@@ -64,8 +64,8 @@
 ```
 16:00 法人（T-1）──┐
 17:00 估值資料 ────┤
-12:00 新聞（T+0）──┼── 12:25 類股指數 → 12:30 隔日沖 AI 三階段選股
-12:30 盤中快照 ────┘                   │
+12:00 新聞（T+0）──┼── 12:45 類股指數 → 12:50 隔日沖 AI 三階段選股
+12:50 盤中快照 ────┘                   │
                                        ├─ Step 1: overnight 物理篩選（top 100）
                                        ├─ Step 2: Haiku overnight（→ 最多 20 檔）
                                        └─ Step 3: Opus overnight（→ 設定三個價格）
@@ -768,9 +768,9 @@ expected_value = avg(所有 buy_reachable 為 true 的 profit)
 **關鍵時序：**
 
 ```
-12:25  抓取類股指數（stock:fetch-sector-indices）
+12:45  抓取類股指數（stock:fetch-sector-indices）
          │
-12:30  三階段 AI 選股（stock:ai-screen-overnight）
+12:50  三階段 AI 選股（stock:ai-screen-overnight）
          │
          ├─ Step 1: StockScreener overnight 模式（物理門檻）
          ├─ Step 2: HaikuPreFilterService overnight 模式（→ 最多 20 檔）
@@ -963,7 +963,7 @@ Fallback（API 失敗）：回傳 `{action: "hold"}`，維持現狀。
 
 資料來源：TWSE OpenAPI `https://openapi.twse.com.tw/v1/indicesReport/MI_5MINS`
 
-每日 **12:25** 由 `stock:fetch-sector-indices` 抓取並存入 `sector_indices` 表。
+每日 **12:45** 由 `stock:fetch-sector-indices` 抓取並存入 `sector_indices` 表。
 
 涵蓋25個類股（IX0007–IX0056），包含：電子工業、半導體業、金融保險、鋼鐵工業等主要類股。
 
