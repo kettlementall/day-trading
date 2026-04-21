@@ -142,6 +142,10 @@ export const updateUser = (id, data) =>
 export const deleteUser = (id) =>
   api.delete(`/users/${id}`)
 
+// 即時報價
+export const getQuote = (symbol) =>
+  api.get(`/quote/${symbol}`)
+
 // 系統規格
 export const getSpec = () =>
   api.get('/spec')

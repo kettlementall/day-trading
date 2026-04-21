@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\NewsController;
 use App\Http\Controllers\Api\PinController;
 use App\Http\Controllers\Api\ScreeningRuleController;
 use App\Http\Controllers\Api\StockController;
+use App\Http\Controllers\Api\QuoteController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -36,6 +37,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/pins',                         [PinController::class, 'index']);
     Route::post('/pins/{candidate}',            [PinController::class, 'store']);
     Route::delete('/pins/{candidate}',          [PinController::class, 'destroy']);
+
+    // 即時報價
+    Route::get('/quote/{symbol}',        [QuoteController::class, 'show']);
 
     // 股票（viewer 可點卡片看股票詳情）
     Route::get('/stocks',                [StockController::class, 'index']);

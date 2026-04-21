@@ -27,6 +27,12 @@ const routes = [
     component: () => import('../views/StockDetailView.vue'),
     meta: { requiresAuth: true },
   },
+  {
+    path: '/quote',
+    name: 'quote',
+    component: () => import('../views/QuoteView.vue'),
+    meta: { requiresAuth: true },
+  },
   // ── admin only ─────────────────────────────────────────────────
   {
     path: '/stats',

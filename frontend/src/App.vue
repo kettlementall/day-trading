@@ -11,6 +11,10 @@
         <el-icon><Moon /></el-icon>
         <span>隔日沖候選</span>
       </router-link>
+      <router-link to="/quote" class="nav-item" active-class="active">
+        <el-icon><Search /></el-icon>
+        <span>即時報價</span>
+      </router-link>
       <router-link to="/news" class="nav-item" active-class="active">
         <el-icon><ChatLineSquare /></el-icon>
         <span>新聞整理</span>
