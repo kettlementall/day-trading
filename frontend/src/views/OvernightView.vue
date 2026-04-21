@@ -49,6 +49,7 @@
             <span class="stock-industry">{{ item.stock.industry }}</span>
           </div>
           <div style="display:flex;align-items:center;gap:6px">
+            <button class="quote-btn" @click.stop="goQuote(item)" title="即時報價">💹</button>
             <button class="pin-btn" :class="{ pinned: store.isPinned(item.id) }" @click.stop="store.togglePin(item.id)" title="釘選">
               {{ store.isPinned(item.id) ? '📌' : '📍' }}
             </button>
@@ -285,6 +286,10 @@ function goDetail(item) {
   window.open(r.href, '_blank')
 }
 
+function goQuote(item) {
+  router.push({ path: '/quote', query: { symbol: item.stock.symbol } })
+}
+
 function formatTime(dt) {
   const d = new Date(dt)
   const hh = String(d.getHours()).padStart(2, '0')
@@ -436,6 +441,18 @@ function outcomeClass(outcome) {
 .pinned-card {
   border-left: 3px solid #e6a23c !important;
 }
+
+.quote-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+.quote-btn:hover { opacity: 1; }
 
 .pin-btn {
   background: none;

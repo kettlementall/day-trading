@@ -39,7 +39,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/pins/{candidate}',          [PinController::class, 'destroy']);
 
     // 即時報價
-    Route::get('/quote/{symbol}',        [QuoteController::class, 'show']);
+    Route::get('/quote/{symbol}',            [QuoteController::class, 'show']);
+    Route::post('/quote/{symbol}/analyze',   [QuoteController::class, 'analyze']);
 
     // 股票（viewer 可點卡片看股票詳情）
     Route::get('/stocks',                [StockController::class, 'index']);
