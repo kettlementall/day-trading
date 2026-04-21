@@ -178,7 +178,7 @@ class QuoteController extends Controller
 PROMPT;
 
         $anthropicKey = config('services.anthropic.api_key', '');
-        $model = config('services.anthropic.sentiment_model', 'claude-haiku-4-5-20251001');
+        $model = config('services.anthropic.model', 'claude-opus-4-6');
 
         $aiResp = Http::timeout(30)
             ->withHeaders([
