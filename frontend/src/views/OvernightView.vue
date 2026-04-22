@@ -30,7 +30,7 @@
     </div>
 
     <div v-else-if="store.candidates.length === 0" class="empty-wrap">
-      <el-empty description="此交易日尚無隔日沖候選標的（12:30 後執行選股）" />
+      <el-empty description="此交易日尚無隔日沖候選標的（12:50 後執行選股）" />
     </div>
 
     <div v-else class="candidate-list">

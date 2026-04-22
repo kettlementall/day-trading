@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Log;
 class AiScreenOvernightCandidates extends Command
 {
     protected $signature = 'stock:ai-screen-overnight {date?}';
-    protected $description = '隔日沖選股（12:30 執行）：Screener → Haiku → Opus，供今日收盤前下單';
+    protected $description = '隔日沖選股（12:50 執行）：Screener → Haiku → Opus，供今日收盤前下單';
 
     public function handle(
         StockScreener $screener,

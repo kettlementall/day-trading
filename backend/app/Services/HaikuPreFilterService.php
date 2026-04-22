@@ -381,7 +381,7 @@ SYSTEM;
             : '';
 
         return <<<SYSTEM
-你是台股隔日沖選股 AI 助手（快速預篩模式）。現在是 {$today} 午盤前（12:30）。
+你是台股隔日沖選股 AI 助手（快速預篩模式）。現在是 {$today} 午盤前（12:50）。
 任務：判斷這些股票在今日收盤前建倉，{$tradeDate}（出場日）是否有上漲延續潛力。{$holdingNote}
 
 {$usMarketSection}

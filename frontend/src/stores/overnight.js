@@ -5,9 +5,9 @@ import dayjs from 'dayjs'
 
 export const useOvernightStore = defineStore('overnight', () => {
   const candidates = ref([])
-  // 12:30 前看前一批（trade_date = T），12:30 後看今日批（trade_date = T+1）
+  // 12:50 前看前一批（trade_date = T），12:50 後看今日批（trade_date = T+1）
   const currentDate = ref(
-    dayjs().hour() < 12 || (dayjs().hour() === 12 && dayjs().minute() < 30)
+    dayjs().hour() < 12 || (dayjs().hour() === 12 && dayjs().minute() < 50)
       ? dayjs().format('YYYY-MM-DD')
       : dayjs().add(1, 'day').format('YYYY-MM-DD')
   )
