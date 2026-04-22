@@ -26,6 +26,7 @@
             <span class="symbol">{{ quote.symbol }}</span>
             <span class="name">{{ quote.name }}</span>
             <el-tag v-if="quote.is_close" size="small" type="info">已收盤</el-tag>
+            <el-tag v-if="quote.source === 'db'" size="small" type="warning">快照</el-tag>
           </div>
           <div class="quote-price" :class="priceClass">
             <span class="current-price">{{ quote.close.toFixed(2) }}</span>

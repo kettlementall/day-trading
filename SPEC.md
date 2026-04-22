@@ -1106,3 +1106,52 @@ Admin 專用，提供：
 - 列表（ID、姓名、電子郵件、角色標籤、建立日期）
 - 新增/編輯 Dialog（電子郵件選填，編輯時密碼留空表示不修改）
 - 刪除（自己的帳號無法刪除）
+
+---
+
+## 8. 即時報價頁（`/quote`）
+
+定義於 `frontend/src/views/QuoteView.vue` 與 `backend/app/Http/Controllers/Api/QuoteController.php`。
+
+### 8.1 資料來源優先順序（DB 優先 + API Fallback）
+
+報價查詢採 **DB 優先** 策略，減少 API 呼叫並提升可靠性：
+
+```
+使用者輸入股票代號
+    │
+    ▼ 查詢 IntradaySnapshot（今日最新）
+DB 有資料？──── 是 ──→ 用 DB 快照回傳主報價
+    │                      │
+    │                      ▼ 嘗試補抓 Fugle 5分K（graceful failure）
+    │
+    否 ──→ 呼叫 Fugle API 取得完整報價 + 5分K
+```
+
+| 資料來源 | 主報價（OHLCV、外盤比） | 五檔 | 5分K | 適用情境 |
+|---------|----------------------|------|------|---------|
+| DB（`IntradaySnapshot`） | 完整 | 僅 best_bid/best_ask | 從 API 補抓（可失敗） | 候選標的在監控時段內 |
+| API（Fugle MarketData） | 完整 | 完整五檔 | 完整 | DB 無資料時 fallback |
+
+**限制：** `IntradaySnapshot` 僅記錄被系統監控的候選標的（每 30 秒快照），非候選標的一律走 API。
+
+前端以橘色「快照」標籤標示資料來自 DB，回傳 JSON 包含 `source` 欄位（`db` 或 `api`）。
+
+### 8.2 API 端點
+
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| `GET` | `/api/quote/{symbol}` | 取得即時報價 + 5分K |
+| `POST` | `/api/quote/{symbol}/analyze` | AI 持倉分析（需傳 `cost` 參數） |
+
+兩個端點皆採用相同的 DB 優先策略。
+
+### 8.3 AI 持倉分析
+
+使用者輸入成本價後，系統將報價數據（OHLCV、外盤比、5分K、五檔）送至 Claude API 分析，回傳：
+
+- **建議動作**：續抱 / 止損 / 觀望
+- **分析內容**：開盤型態、量價關係、趨勢方向、關鍵價位、外盤比判讀
+- **停利/停損價位**（如適用）
+
+AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`）。

@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\IntradaySnapshot;
+use App\Models\Stock;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Http;
 
@@ -23,9 +25,74 @@ class QuoteController extends Controller
             return response()->json(['error' => '無效代號'], 422);
         }
 
+        // 先查 DB：今日最新 IntradaySnapshot
+        $dbQuote = $this->getFromDb($symbol);
+
+        if ($dbQuote) {
+            // DB 有資料，嘗試補抓 candles（graceful failure）
+            $dbQuote['candles'] = $this->fetchCandles($symbol);
+
+            return response()->json($dbQuote);
+        }
+
+        // DB 沒有 → 呼叫 Fugle API
+        return $this->fetchFromApi($symbol);
+    }
+
+    /**
+     * 從 DB 取得今日最新快照資料
+     */
+    private function getFromDb(string $symbol): ?array
+    {
+        $stock = Stock::where('symbol', $symbol)->first();
+        if (!$stock) {
+            return null;
+        }
+
+        $snapshot = IntradaySnapshot::where('stock_id', $stock->id)
+            ->where('trade_date', now()->format('Y-m-d'))
+            ->orderByDesc('snapshot_time')
+            ->first();
+
+        if (!$snapshot) {
+            return null;
+        }
+
+        $prevClose = (float) $snapshot->prev_close;
+        $close     = (float) $snapshot->current_price;
+        $volume    = (int) $snapshot->accumulated_volume;
+
+        return [
+            'symbol'         => $symbol,
+            'name'           => $stock->name ?? '',
+            'prev_close'     => $prevClose,
+            'open'           => (float) $snapshot->open,
+            'high'           => (float) $snapshot->high,
+            'low'            => (float) $snapshot->low,
+            'close'          => $close,
+            'change_pct'     => $prevClose > 0 ? round(($close - $prevClose) / $prevClose * 100, 2) : 0,
+            'volume'         => (int) round($volume / 1000), // shares → 張
+            'transaction'    => 0,
+            'external_ratio' => (float) $snapshot->external_ratio,
+            'bids'           => $snapshot->best_bid > 0
+                ? [['price' => (float) $snapshot->best_bid, 'size' => 0]]
+                : [],
+            'asks'           => $snapshot->best_ask > 0
+                ? [['price' => (float) $snapshot->best_ask, 'size' => 0]]
+                : [],
+            'is_close'       => false,
+            'candles'        => [],
+            'source'         => 'db',
+        ];
+    }
+
+    /**
+     * 從 Fugle API 取得完整報價（fallback）
+     */
+    private function fetchFromApi(string $symbol): JsonResponse
+    {
         $headers = ['X-API-KEY' => $this->apiKey];
 
-        // 同時抓 quote 和 candles
         $quoteResp = Http::timeout(10)->withHeaders($headers)
             ->get(self::API_BASE . "/stock/intraday/quote/{$symbol}");
 
@@ -45,7 +112,6 @@ class QuoteController extends Controller
 
         $candles = $candleResp->successful() ? ($candleResp->json()['data'] ?? []) : [];
 
-        // 整理回傳
         $total     = $quote['total'] ?? [];
         $prevClose = (float) ($quote['referencePrice'] ?? 0);
         $close     = (float) ($quote['closePrice'] ?? 0);
@@ -76,8 +142,37 @@ class QuoteController extends Controller
                 'close'  => (float) $c['close'],
                 'volume' => (int) $c['volume'],
             ], $candles),
+            'source'       => 'api',
         ]);
     }
+
+    /**
+     * 嘗試從 API 抓取 5 分 K（失敗回空陣列）
+     */
+    private function fetchCandles(string $symbol): array
+    {
+        try {
+            $resp = Http::timeout(10)
+                ->withHeaders(['X-API-KEY' => $this->apiKey])
+                ->get(self::API_BASE . "/stock/intraday/candles/{$symbol}", ['timeframe' => '5']);
+
+            if (!$resp->successful()) {
+                return [];
+            }
+
+            return array_map(fn($c) => [
+                'time'   => substr($c['date'] ?? '', 11, 5),
+                'open'   => (float) $c['open'],
+                'high'   => (float) $c['high'],
+                'low'    => (float) $c['low'],
+                'close'  => (float) $c['close'],
+                'volume' => (int) $c['volume'],
+            ], $resp->json()['data'] ?? []);
+        } catch (\Exception $e) {
+            return [];
+        }
+    }
+
 
     /**
      * POST /api/quote/{symbol}/analyze
@@ -94,53 +189,32 @@ class QuoteController extends Controller
             return response()->json(['error' => '無效代號'], 422);
         }
 
-        $headers = ['X-API-KEY' => $this->apiKey];
+        // 先查 DB
+        $dbData = $this->getAnalyzeDataFromDb($symbol);
 
-        // 抓 quote
-        $quoteResp = Http::timeout(10)->withHeaders($headers)
-            ->get(self::API_BASE . "/stock/intraday/quote/{$symbol}");
-        if (!$quoteResp->successful() || empty($quoteResp->json('symbol'))) {
+        if (!$dbData) {
+            // DB 沒有 → 呼叫 Fugle API
+            $dbData = $this->getAnalyzeDataFromApi($symbol);
+        }
+
+        if (!$dbData) {
             return response()->json(['error' => '無法取得報價'], 502);
         }
-        $quote = $quoteResp->json();
 
-        usleep(200000);
+        $prevClose = $dbData['prev_close'];
+        $close     = $dbData['close'];
+        $open      = $dbData['open'];
+        $high      = $dbData['high'];
+        $low       = $dbData['low'];
+        $volume    = $dbData['volume'];
+        $extRatio  = $dbData['external_ratio'];
+        $changePct = $dbData['change_pct'];
+        $name      = $dbData['name'];
+        $candleLines = $dbData['candle_lines'];
+        $bidLines  = $dbData['bid_lines'];
+        $askLines  = $dbData['ask_lines'];
 
-        // 抓 5 分 K
-        $candleResp = Http::timeout(10)->withHeaders($headers)
-            ->get(self::API_BASE . "/stock/intraday/candles/{$symbol}", ['timeframe' => '5']);
-        $candles = $candleResp->successful() ? ($candleResp->json()['data'] ?? []) : [];
-
-        // 組裝數據摘要
-        $total     = $quote['total'] ?? [];
-        $prevClose = (float) ($quote['referencePrice'] ?? 0);
-        $close     = (float) ($quote['closePrice'] ?? 0);
-        $open      = (float) ($quote['openPrice'] ?? 0);
-        $high      = (float) ($quote['highPrice'] ?? 0);
-        $low       = (float) ($quote['lowPrice'] ?? 0);
-        $volume    = (int) ($total['tradeVolume'] ?? 0);
-        $volAtAsk  = (int) ($total['tradeVolumeAtAsk'] ?? 0);
-        $volAtBid  = (int) ($total['tradeVolumeAtBid'] ?? 0);
-        $extRatio  = ($volAtAsk + $volAtBid) > 0
-            ? round($volAtAsk / ($volAtAsk + $volAtBid) * 100, 1) : 50;
-        $changePct = $prevClose > 0 ? round(($close - $prevClose) / $prevClose * 100, 2) : 0;
-        $pnlPct    = $cost > 0 ? round(($close - $cost) / $cost * 100, 2) : 0;
-
-        $name = $quote['name'] ?? '';
-
-        // 5分K摘要（最近12根）
-        $recentCandles = array_slice($candles, -12);
-        $candleLines = array_map(function ($c) use ($prevClose) {
-            $t = substr($c['date'] ?? '', 11, 5);
-            $pct = $prevClose > 0 ? round(((float)$c['close'] - $prevClose) / $prevClose * 100, 2) : 0;
-            return "{$t} O:{$c['open']} H:{$c['high']} L:{$c['low']} C:{$c['close']} V:{$c['volume']} ({$pct}%)";
-        }, $recentCandles);
-
-        // 五檔
-        $bids = array_slice($quote['bids'] ?? [], 0, 5);
-        $asks = array_slice($quote['asks'] ?? [], 0, 5);
-        $bidLines = array_map(fn($b) => "買: {$b['price']} x {$b['size']}", $bids);
-        $askLines = array_map(fn($a) => "賣: {$a['price']} x {$a['size']}", $asks);
+        $pnlPct = $cost > 0 ? round(($close - $cost) / $cost * 100, 2) : 0;
 
         $dataBlock = implode("\n", [
             "股票：{$symbol} {$name}",
@@ -226,5 +300,112 @@ PROMPT;
             'current'     => $close,
             'cost'        => $cost,
         ]);
+    }
+
+    /**
+     * 從 DB 取得 analyze 所需的報價資料
+     */
+    private function getAnalyzeDataFromDb(string $symbol): ?array
+    {
+        $stock = Stock::where('symbol', $symbol)->first();
+        if (!$stock) {
+            return null;
+        }
+
+        $snapshot = IntradaySnapshot::where('stock_id', $stock->id)
+            ->where('trade_date', now()->format('Y-m-d'))
+            ->orderByDesc('snapshot_time')
+            ->first();
+
+        if (!$snapshot) {
+            return null;
+        }
+
+        $prevClose = (float) $snapshot->prev_close;
+        $close     = (float) $snapshot->current_price;
+        $volume    = (int) round((int) $snapshot->accumulated_volume / 1000);
+        $extRatio  = (float) $snapshot->external_ratio;
+        $changePct = $prevClose > 0 ? round(($close - $prevClose) / $prevClose * 100, 2) : 0;
+
+        // 嘗試抓 candles
+        $candles = $this->fetchCandles($symbol);
+        $recentCandles = array_slice($candles, -12);
+        $candleLines = array_map(function ($c) use ($prevClose) {
+            $pct = $prevClose > 0 ? round(($c['close'] - $prevClose) / $prevClose * 100, 2) : 0;
+            return "{$c['time']} O:{$c['open']} H:{$c['high']} L:{$c['low']} C:{$c['close']} V:{$c['volume']} ({$pct}%)";
+        }, $recentCandles);
+
+        return [
+            'name'           => $stock->name ?? '',
+            'prev_close'     => $prevClose,
+            'open'           => (float) $snapshot->open,
+            'high'           => (float) $snapshot->high,
+            'low'            => (float) $snapshot->low,
+            'close'          => $close,
+            'volume'         => $volume,
+            'external_ratio' => $extRatio,
+            'change_pct'     => $changePct,
+            'candle_lines'   => $candleLines,
+            'bid_lines'      => $snapshot->best_bid > 0
+                ? ["買: {$snapshot->best_bid} x -"]
+                : [],
+            'ask_lines'      => $snapshot->best_ask > 0
+                ? ["賣: {$snapshot->best_ask} x -"]
+                : [],
+        ];
+    }
+
+    /**
+     * 從 Fugle API 取得 analyze 所需的報價資料
+     */
+    private function getAnalyzeDataFromApi(string $symbol): ?array
+    {
+        $headers = ['X-API-KEY' => $this->apiKey];
+
+        $quoteResp = Http::timeout(10)->withHeaders($headers)
+            ->get(self::API_BASE . "/stock/intraday/quote/{$symbol}");
+        if (!$quoteResp->successful() || empty($quoteResp->json('symbol'))) {
+            return null;
+        }
+        $quote = $quoteResp->json();
+
+        usleep(200000);
+
+        $candleResp = Http::timeout(10)->withHeaders($headers)
+            ->get(self::API_BASE . "/stock/intraday/candles/{$symbol}", ['timeframe' => '5']);
+        $candles = $candleResp->successful() ? ($candleResp->json()['data'] ?? []) : [];
+
+        $total     = $quote['total'] ?? [];
+        $prevClose = (float) ($quote['referencePrice'] ?? 0);
+        $close     = (float) ($quote['closePrice'] ?? 0);
+        $volAtAsk  = (int) ($total['tradeVolumeAtAsk'] ?? 0);
+        $volAtBid  = (int) ($total['tradeVolumeAtBid'] ?? 0);
+        $extRatio  = ($volAtAsk + $volAtBid) > 0
+            ? round($volAtAsk / ($volAtAsk + $volAtBid) * 100, 1) : 50;
+
+        $recentCandles = array_slice($candles, -12);
+        $candleLines = array_map(function ($c) use ($prevClose) {
+            $t = substr($c['date'] ?? '', 11, 5);
+            $pct = $prevClose > 0 ? round(((float)$c['close'] - $prevClose) / $prevClose * 100, 2) : 0;
+            return "{$t} O:{$c['open']} H:{$c['high']} L:{$c['low']} C:{$c['close']} V:{$c['volume']} ({$pct}%)";
+        }, $recentCandles);
+
+        $bids = array_slice($quote['bids'] ?? [], 0, 5);
+        $asks = array_slice($quote['asks'] ?? [], 0, 5);
+
+        return [
+            'name'           => $quote['name'] ?? '',
+            'prev_close'     => $prevClose,
+            'open'           => (float) ($quote['openPrice'] ?? 0),
+            'high'           => (float) ($quote['highPrice'] ?? 0),
+            'low'            => (float) ($quote['lowPrice'] ?? 0),
+            'close'          => $close,
+            'volume'         => (int) ($total['tradeVolume'] ?? 0),
+            'external_ratio' => $extRatio,
+            'change_pct'     => $prevClose > 0 ? round(($close - $prevClose) / $prevClose * 100, 2) : 0,
+            'candle_lines'   => $candleLines,
+            'bid_lines'      => array_map(fn($b) => "買: {$b['price']} x {$b['size']}", $bids),
+            'ask_lines'      => array_map(fn($a) => "賣: {$a['price']} x {$a['size']}", $asks),
+        ];
     }
 }
