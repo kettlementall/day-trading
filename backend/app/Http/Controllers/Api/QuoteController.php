@@ -216,8 +216,14 @@ class QuoteController extends Controller
 
         $pnlPct = $cost > 0 ? round(($close - $cost) / $cost * 100, 2) : 0;
 
+        $now = now()->timezone('Asia/Taipei');
+        $currentTime = $now->format('H:i');
+        $marketClose = '13:30';
+        $minutesLeft = max(0, $now->diffInMinutes(\Carbon\Carbon::parse("today {$marketClose}", 'Asia/Taipei'), false));
+
         $dataBlock = implode("\n", [
             "股票：{$symbol} {$name}",
+            "現在時間：{$currentTime}　距收盤：{$minutesLeft}分鐘",
             "昨收：{$prevClose}　開：{$open}　高：{$high}　低：{$low}　現價：{$close}",
             "漲跌：{$changePct}%　成交量：{$volume}張　外盤比：{$extRatio}%",
             "成本價：{$cost}　帳面損益：{$pnlPct}%",
@@ -239,11 +245,12 @@ class QuoteController extends Controller
 3. 趨勢方向：從5分K判斷上升/下降/震盪
 4. 關鍵價位：日高/日低/開盤價作為支撐壓力
 5. 外盤比：>55%偏多、<45%偏空
+6. 時間壓力：根據距收盤剩餘時間調整策略。尾盤（<30分鐘）流動性降低、波動加大，應更積極決斷，避免建議「繼續觀察」；若已收盤則僅就收盤結果評估隔日策略
 
 最後根據成本價，明確給出以下其中一個建議：
 - 續抱：說明理由，給出建議停利價和停損價
 - 止損：說明理由，給出建議出場價
-- 觀望：說明需要觀察的條件
+- 觀望：說明需要觀察的條件（尾盤時段應盡量避免此建議）
 
 回覆格式（嚴格遵守）：
 第一行：建議|續抱 或 建議|止損 或 建議|觀望

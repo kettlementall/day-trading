@@ -423,6 +423,11 @@ PROMPT;
         return <<<SYSTEM
 你是台股當沖 AI 助手，正在協助管理 {$stock->symbol} {$stock->name}（{$industry}）的盤中倉位。
 
+## 時間規則
+- 當沖部位必須在 13:30 收盤前平倉
+- 距收盤 ≤ 30 分鐘（尾盤）：不建議新進場；持有中應積極決斷，傾向出場而非繼續觀望
+- 距收盤 ≤ 15 分鐘：除非明確獲利且走勢強勁，否則應建議 exit
+
 ## 策略: {$strategy}
 
 ## 近 5 日 K 線（盤前參考，了解結構）
@@ -448,6 +453,12 @@ SYSTEM;
         $currentPrice = $latest ? (float) $latest->current_price : 0;
         $dayHigh = $latest ? (float) $latest->high : 0;
         $dayLow = $latest ? (float) $latest->low : 0;
+
+        // 時間壓力
+        $now = now()->timezone('Asia/Taipei');
+        $currentTime = $now->format('H:i');
+        $marketClose = '13:30';
+        $minutesLeft = max(0, $now->diffInMinutes(\Carbon\Carbon::parse("today {$marketClose}", 'Asia/Taipei'), false));
 
         // 5分K表格
         $candleLines = [];
@@ -530,8 +541,12 @@ TASK;
             $emergencySection = "\n⚠️ **緊急觸發：{$emergencyReason}** — 請明確回覆 hold 或 exit，不要回覆 hold 而不帶任何調整。\n";
         }
 
+        $timeWarning = $minutesLeft <= 30 ? "⚠️ 尾盤階段，當沖部位必須在收盤前平倉" : '';
+
         return <<<MSG
 ## {$stock->symbol} {$stock->name} 盤中狀態
+現在時間：{$currentTime}　距收盤：{$minutesLeft}分鐘
+{$timeWarning}
 {$statusSection}
 {$emergencySection}
 ## 今日 5 分 K
