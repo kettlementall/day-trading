@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\InstitutionalTrade;
 use App\Models\Stock;
+use App\Services\TelegramService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -79,6 +80,8 @@ class FetchInstitutionalTrades extends Command
                 );
                 $count++;
             }
+
+            app(TelegramService::class)->send("✅ *三大法人抓取* 完成\n📅 {$sqlDate} | 共 {$count} 筆");
 
             $this->info("三大法人: 匯入 {$count} 筆");
         } catch (\Exception $e) {

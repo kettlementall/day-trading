@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\SectorIndex;
+use App\Services\TelegramService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -62,6 +63,7 @@ class FetchSectorIndices extends Command
         }
 
         $saved = 0;
+        $actualDate = $date;
         foreach ($data as $item) {
             $indexName = trim($item['指數'] ?? '');
             if (!isset(self::SECTOR_MAP[$indexName])) {
@@ -76,6 +78,7 @@ class FetchSectorIndices extends Command
             // 民國年日期 → 西元（e.g. "1150414" → "2026-04-14"）
             $rocDate    = $item['日期'] ?? '';
             $dataDate   = $this->parseRocDate($rocDate) ?? $date;
+            $actualDate = $dataDate;
 
             SectorIndex::updateOrCreate(
                 ['date' => $dataDate, 'sector_code' => $indexName],
@@ -89,6 +92,24 @@ class FetchSectorIndices extends Command
 
             $saved++;
         }
+
+        // 找出漲跌幅前3名
+        $topSectors = SectorIndex::where('date', $actualDate)
+            ->orderByDesc('change_percent')
+            ->take(3)
+            ->get()
+            ->map(fn ($s) => sprintf('%s %+.1f%%', $s->sector_name, $s->change_percent))
+            ->implode(' | ');
+        $bottomSectors = SectorIndex::where('date', $actualDate)
+            ->orderBy('change_percent')
+            ->take(3)
+            ->get()
+            ->map(fn ($s) => sprintf('%s %+.1f%%', $s->sector_name, $s->change_percent))
+            ->implode(' | ');
+
+        app(TelegramService::class)->send(
+            "✅ *類股指數抓取* 完成\n📅 {$date} | 共 {$saved} 類\n🔺 {$topSectors}\n🔻 {$bottomSectors}"
+        );
 
         $this->info("完成，儲存 {$saved} 個類股指數。");
         Log::info("FetchSectorIndices {$date}：儲存 {$saved} 筆");

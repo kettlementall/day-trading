@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\MarginTrade;
 use App\Models\MarketHoliday;
 use App\Models\Stock;
+use App\Services\TelegramService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -83,6 +84,7 @@ class FetchMarginTrades extends Command
                 $count++;
             }
 
+            app(TelegramService::class)->send("✅ *融資融券抓取* 完成\n📅 {$date} | 共 {$count} 筆");
             $this->info("融資融券: 匯入 {$count} 筆");
         } catch (\Exception $e) {
             Log::error("Margin fetch error: " . $e->getMessage());

@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\NewsArticle;
 use App\Models\NewsIndex;
 use App\Services\SentimentAnalyzer;
+use App\Services\TelegramService;
 use Illuminate\Console\Command;
 
 class ComputeNewsIndices extends Command
@@ -25,6 +26,19 @@ class ComputeNewsIndices extends Command
 
         // 3. 計算各產業指數
         $this->computeByIndustry($date);
+
+        // 發送通知
+        $overall = NewsIndex::where('date', $date)->where('scope', 'overall')->first();
+        $industryCount = NewsIndex::where('date', $date)->where('scope', 'industry')->count();
+        $time = now()->format('H:i');
+
+        if ($overall) {
+            app(TelegramService::class)->send(sprintf(
+                "✅ *新聞指數*(%s) 完成\n📅 %s | %d 篇 · %d 產業\n情緒 %.0f | 熱度 %.0f | 恐慌 %.0f | 國際 %.0f",
+                $time, $date, $overall->article_count, $industryCount,
+                $overall->sentiment, $overall->heatmap, $overall->panic, $overall->international
+            ));
+        }
 
         $this->info('新聞指數計算完成');
         return self::SUCCESS;

@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\DailyQuote;
 use App\Models\Stock;
+use App\Services\TelegramService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -13,15 +14,24 @@ class FetchDailyQuotes extends Command
     protected $signature = 'stock:fetch-daily {date?}';
     protected $description = '抓取台股每日收盤行情（TWSE + TPEX）';
 
+    private int $twseCount = 0;
+    private int $tpexCount = 0;
+
     public function handle(): int
     {
         $date = $this->argument('date') ?? now()->format('Ymd');
         $rocDate = (intval(substr($date, 0, 4)) - 1911) . '/' . substr($date, 4, 2) . '/' . substr($date, 6, 2);
+        $sqlDate = $this->toSqlDate($date);
 
         $this->info("抓取日期: {$date}");
 
         $this->fetchTwse($date);
         $this->fetchTpex($rocDate);
+
+        $total = $this->twseCount + $this->tpexCount;
+        app(TelegramService::class)->send(
+            "✅ *每日行情抓取* 完成\n📅 {$sqlDate} | 上市 {$this->twseCount} 筆 + 上櫃 {$this->tpexCount} 筆 = 共 {$total} 筆"
+        );
 
         $this->info('每日行情抓取完成');
         return self::SUCCESS;
@@ -118,6 +128,7 @@ class FetchDailyQuotes extends Command
                 $count++;
             }
 
+            $this->twseCount = $count;
             $this->info("TWSE: 匯入 {$count} 筆 (交易日: {$actualSqlDate})");
         } catch (\Exception $e) {
             Log::error("TWSE fetch error: " . $e->getMessage());
@@ -194,6 +205,7 @@ class FetchDailyQuotes extends Command
                 $count++;
             }
 
+            $this->tpexCount = $count;
             $this->info("TPEX: 匯入 {$count} 筆 (交易日: {$actualSqlDate})");
         } catch (\Exception $e) {
             Log::error("TPEX fetch error: " . $e->getMessage());

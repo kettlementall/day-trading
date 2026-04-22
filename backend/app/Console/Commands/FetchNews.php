@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\NewsArticle;
 use App\Services\NewsIndustryMap;
+use App\Services\TelegramService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
@@ -38,6 +39,9 @@ class FetchNews extends Command
 
             usleep(500_000);
         }
+
+        $time = now()->format('H:i');
+        app(TelegramService::class)->send("✅ *新聞抓取*({$time}) 完成\n📅 {$date} | 共 {$totalCount} 篇");
 
         $this->info("新聞抓取完成，共 {$totalCount} 篇");
 

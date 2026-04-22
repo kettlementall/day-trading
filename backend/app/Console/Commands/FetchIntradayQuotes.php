@@ -7,6 +7,7 @@ use App\Models\DailyQuote;
 use App\Models\IntradayQuote;
 use App\Models\Stock;
 use App\Services\FugleRealtimeClient;
+use App\Services\TelegramService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
@@ -30,6 +31,7 @@ class FetchIntradayQuotes extends Command
             ->get();
 
         if ($candidates->isEmpty()) {
+            app(TelegramService::class)->send("✅ *盤中行情* 完成\n📅 {$date} | 無候選標的，跳過");
             $this->warn("無 {$date} 的候選標的，跳過盤中抓取");
             return self::SUCCESS;
         }
@@ -44,6 +46,12 @@ class FetchIntradayQuotes extends Command
         foreach ($quotes as $symbol => $data) {
             $this->processRealtimeItem($data, $date);
         }
+
+        $stockCount = $candidates->pluck('stock')->unique('id')->count();
+        $apiCount = count($quotes);
+        app(TelegramService::class)->send(
+            "✅ *盤中行情* 完成\n📅 {$date} | 候選 {$stockCount} 檔 · API 回傳 {$apiCount} 筆"
+        );
 
         $this->info('盤中行情抓取完成');
         return self::SUCCESS;
