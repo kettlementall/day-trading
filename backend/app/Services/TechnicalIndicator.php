@@ -120,6 +120,34 @@ class TechnicalIndicator
         ];
     }
 
+    /**
+     * MA 排列分類（日K趨勢判斷）
+     *
+     * @return array{label: string, code: string}|null
+     */
+    public static function maAlignment(?float $ma5, ?float $ma10, ?float $ma20, float $close): ?array
+    {
+        if ($ma5 === null || $ma10 === null || $ma20 === null) return null;
+
+        // 多頭排列: MA5 > MA10 > MA20 且收盤站上 MA5
+        if ($ma5 > $ma10 && $ma10 > $ma20 && $close > $ma5) {
+            return ['label' => '多頭排列', 'code' => 'bullish'];
+        }
+
+        // 空頭排列: MA5 < MA10 < MA20 且收盤跌破 MA5
+        if ($ma5 < $ma10 && $ma10 < $ma20 && $close < $ma5) {
+            return ['label' => '空頭排列', 'code' => 'bearish'];
+        }
+
+        // 糾結: 三條均線極接近 (spread < 1.5% of close)
+        $spread = max($ma5, $ma10, $ma20) - min($ma5, $ma10, $ma20);
+        if ($close > 0 && ($spread / $close) < 0.015) {
+            return ['label' => '均線糾結', 'code' => 'converging'];
+        }
+
+        return ['label' => '均線混排', 'code' => 'mixed'];
+    }
+
     private static function ema(array $data, int $period): array
     {
         if (count($data) < $period) return [];

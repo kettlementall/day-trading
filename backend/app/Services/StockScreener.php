@@ -136,6 +136,34 @@ class StockScreener
                 if ($ma5 && $ma10 && $ma20 && $ma5 > $ma10 && $ma10 > $ma20 && $closes[0] > $ma5) {
                     $reasons[] = '強勢排列';
                 }
+
+                // 空頭排列（持有過夜風險高）
+                if ($ma5 && $ma10 && $ma20 && $ma5 < $ma10 && $ma10 < $ma20 && $closes[0] < $ma5) {
+                    $reasons[] = '空頭排列';
+                }
+
+                // 均線糾結（方向不明）
+                if ($ma5 && $ma10 && $ma20) {
+                    $spread = max($ma5, $ma10, $ma20) - min($ma5, $ma10, $ma20);
+                    if ($closes[0] > 0 && ($spread / $closes[0]) < 0.015) {
+                        $reasons[] = '均線糾結';
+                    }
+                }
+
+                // 記錄 MA alignment code 供下游讀取
+                $maAlign = TechnicalIndicator::maAlignment($ma5, $ma10, $ma20, $closes[0]);
+                if ($maAlign) {
+                    $indicators['ma_alignment'] = $maAlign['code'];
+                }
+            }
+
+            // intraday：MA 排列標籤（幫助 Haiku 快篩 + IntradayAiAdvisor 讀取）
+            if ($mode === 'intraday') {
+                $maAlign = TechnicalIndicator::maAlignment($ma5, $ma10, $ma20, $closes[0]);
+                if ($maAlign) {
+                    $reasons[] = $maAlign['label'];
+                    $indicators['ma_alignment'] = $maAlign['code'];
+                }
             }
 
             // 量放大

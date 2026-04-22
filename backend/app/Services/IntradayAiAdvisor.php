@@ -420,6 +420,18 @@ PROMPT;
         $industry = $stock->industry ?? '';
         $strategy = $candidate->intraday_strategy ?? 'momentum';
 
+        // 日K趨勢背景
+        $storedIndicators = is_array($candidate->indicators) ? $candidate->indicators : [];
+        $maCode = $storedIndicators['ma_alignment'] ?? null;
+        $trendMap = [
+            'bullish'    => '多頭排列（MA5>MA10>MA20）',
+            'bearish'    => '空頭排列（MA5<MA10<MA20）',
+            'converging' => '均線糾結',
+            'mixed'      => '均線混排',
+        ];
+        $trendDesc = $maCode ? ($trendMap[$maCode] ?? '未知') : '無資料';
+        $trendSection = "## 日K趨勢背景\n{$trendDesc}";
+
         return <<<SYSTEM
 你是台股當沖 AI 助手，正在協助管理 {$stock->symbol} {$stock->name}（{$industry}）的盤中倉位。
 
@@ -429,6 +441,8 @@ PROMPT;
 - 距收盤 ≤ 15 分鐘：除非明確獲利且走勢強勁，否則應建議 exit
 
 ## 策略: {$strategy}
+
+{$trendSection}
 
 ## 近 5 日 K 線（盤前參考，了解結構）
 {$klineSection}
@@ -507,6 +521,7 @@ SYSTEM;
 ## 任務（持有中 — {$profitContext}）
 1. 走勢是否仍支持持有到目標？是否建議調整目標或收緊停損？
 2. 是否出現出場訊號？（明確建議 hold 或 exit）
+3. 日K趨勢排列是否仍支持持有方向？
 TASK;
         } else {
             // WATCHING
@@ -530,6 +545,7 @@ TASK;
 ## 任務（觀望中）
 1. 當前走勢是否已達或即將達到進場條件？（建議 entry / hold / skip）
 2. 支撐位或壓力位是否需根據今日盤中走勢調整？（在 adjustments 中提供 support / resistance）
+3. 日K趨勢是否支持當前操作方向？
 TASK;
         }
 
