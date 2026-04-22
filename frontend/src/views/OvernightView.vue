@@ -138,15 +138,21 @@
           </div>
         </div>
 
+        <!-- 監控狀態 badge（折疊外） -->
+        <span
+          v-if="item.monitor && monitorStatusVisible(item.monitor.status)"
+          class="monitor-badge"
+          :class="monitorBadgeClass(item.monitor.status)"
+        >
+          {{ monitorStatusLabel(item.monitor.status) }}
+        </span>
+
         <!-- 折疊區域 -->
         <div v-show="isExpanded(item.id)">
 
-        <!-- 監控狀態列（T+1 盤中） -->
-        <div v-if="item.monitor && monitorStatusVisible(item.monitor.status)" class="card-monitor">
-          <span class="monitor-badge" :class="monitorBadgeClass(item.monitor.status)">
-            {{ monitorStatusLabel(item.monitor.status) }}
-          </span>
-          <div v-if="item.monitor.ai_advice_log?.length" class="monitor-log">
+        <!-- 監控 AI 調整紀錄（T+1 盤中） -->
+        <div v-if="item.monitor && monitorStatusVisible(item.monitor.status) && item.monitor.ai_advice_log?.length" class="card-monitor">
+          <div class="monitor-log">
             <span
               v-for="(log, i) in item.monitor.ai_advice_log"
               :key="i"
@@ -661,7 +667,7 @@ function outcomeClass(outcome) {
   font-weight: 600;
   padding: 1px 7px;
   border-radius: 4px;
-  align-self: flex-start;
+  display: inline-block;
 }
 
 .badge-holding { background: #ecf5ff; color: #409eff; }

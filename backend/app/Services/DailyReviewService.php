@@ -331,7 +331,14 @@ PROMPT;
                 ]);
 
             if (!$response->successful()) {
+                Log::error('DailyReviewService extractOvernightLessons API error: ' . $response->body());
                 return 0;
+            }
+
+            // 檢查是否因 max_tokens 截斷
+            $stopReason = $response->json('stop_reason', '');
+            if ($stopReason === 'max_tokens') {
+                Log::warning('DailyReviewService: extractOvernightLessons 回應被截斷，嘗試修復 JSON');
             }
 
             $text    = trim($response->json('content.0.text', ''));
@@ -340,12 +347,27 @@ PROMPT;
             $lessons = json_decode(trim($cleaned), true);
 
             if (!is_array($lessons)) {
+                // 找第一個 [ 到最後一個 ] 之間的內容
                 if (preg_match('/\[[\s\S]*\]/u', $text, $m)) {
                     $lessons = json_decode($m[0], true);
+                }
+                // 若仍失敗，嘗試修復被截斷的 JSON
+                if (!is_array($lessons) && ($bracketPos = strpos($text, '[')) !== false) {
+                    $partial = substr($text, $bracketPos);
+                    $lastComplete = strrpos($partial, '},');
+                    if ($lastComplete !== false) {
+                        $fixed = substr($partial, 0, $lastComplete + 1) . ']';
+                        $decoded = json_decode($fixed, true);
+                        if (is_array($decoded)) {
+                            $lessons = $decoded;
+                            Log::info("DailyReviewService: 修復截斷 JSON 成功（overnight），salvaged " . count($decoded) . " 條教訓");
+                        }
+                    }
                 }
             }
 
             if (!is_array($lessons)) {
+                Log::error('DailyReviewService: 無法解析隔日沖教訓 JSON', ['raw' => mb_substr($text, 0, 500)]);
                 return 0;
             }
 
@@ -368,6 +390,7 @@ PROMPT;
                 $count++;
             }
 
+            Log::info("DailyReviewService: 從 {$date} 隔日沖檢討萃取 {$count} 條教訓");
             return $count;
         } catch (\Exception $e) {
             Log::error('DailyReviewService extractOvernightLessons: ' . $e->getMessage());
