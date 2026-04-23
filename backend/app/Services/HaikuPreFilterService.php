@@ -430,6 +430,18 @@ SYSTEM;
         $today = $snapshotDate ?? now()->format('Y-m-d');
         $lines = ["## 批量預篩（{$batch->count()} 檔，隔日沖模式）：請依序回覆 JSON array\n"];
 
+        // 預先批次撈無快照標的的 Fugle 即時報價
+        $noSnapStocks = $batch->filter(function ($c) use ($today) {
+            return !IntradaySnapshot::where('stock_id', $c->stock_id)
+                ->where('trade_date', $today)->exists();
+        })->map(fn($c) => $c->stock)->values()->all();
+
+        $fugleQuotes = [];
+        if (!empty($noSnapStocks)) {
+            $fugle = app(FugleRealtimeClient::class);
+            $fugleQuotes = $fugle->fetchQuotes($noSnapStocks);
+        }
+
         foreach ($batch as $candidate) {
             $stock    = $candidate->stock;
             $symbol   = $stock->symbol;
@@ -500,7 +512,37 @@ SYSTEM;
                 $intradaySummary = "今日盤中: 開盤{$openSign}{$openChg}% 現價{$currentPrice}({$sign}{$changePct}%) "
                     . "日高{$dayHigh}/日低{$dayLow} 量比{$volRatio}x 外盤{$extRatio}% 走勢:{$trendLabel}";
             } else {
-                $intradaySummary = '今日盤中: 無快照資料';
+                // 無快照：使用預先批次撈的 Fugle 即時報價
+                $fq = $fugleQuotes[$candidate->stock->symbol] ?? null;
+                if ($fq && $fq['current_price'] > 0) {
+                    $currentPrice = (float) $fq['current_price'];
+                    $prevClose    = (float) $fq['prev_close'];
+                    $changePct    = $prevClose > 0 ? round(($currentPrice - $prevClose) / $prevClose * 100, 2) : 0;
+                    $openPrice    = (float) $fq['open'];
+                    $openChg      = $prevClose > 0 ? round(($openPrice - $prevClose) / $prevClose * 100, 2) : 0;
+                    $dayHigh      = (float) $fq['high'];
+                    $dayLow       = (float) $fq['low'];
+                    $extRatio     = ($fq['trade_volume_at_ask'] + $fq['trade_volume_at_bid']) > 0
+                        ? round($fq['trade_volume_at_ask'] / ($fq['trade_volume_at_ask'] + $fq['trade_volume_at_bid']) * 100, 1)
+                        : 0;
+                    $volLots      = round($fq['accumulated_volume'] / 1000);
+
+                    $midPrice   = ($dayHigh + $dayLow) / 2;
+                    $trendLabel = match(true) {
+                        $changePct > 2.0 && $currentPrice >= $dayHigh * 0.99 => '強勢衝高',
+                        $changePct > 0.5 && $currentPrice >= $midPrice       => '高檔整理',
+                        $changePct > 0 && $currentPrice < $midPrice          => '盤中拉回',
+                        $changePct < -2.0                                     => '明顯弱勢',
+                        default                                               => '盤整',
+                    };
+
+                    $sign = $changePct >= 0 ? '+' : '';
+                    $openSign = $openChg >= 0 ? '+' : '';
+                    $intradaySummary = "今日盤中: 開盤{$openSign}{$openChg}% 現價{$currentPrice}({$sign}{$changePct}%) "
+                        . "日高{$dayHigh}/日低{$dayLow} 量{$volLots}張 外盤{$extRatio}% 走勢:{$trendLabel}（Fugle即時）";
+                } else {
+                    $intradaySummary = '今日盤中: 無快照資料';
+                }
             }
 
             // 類股強弱

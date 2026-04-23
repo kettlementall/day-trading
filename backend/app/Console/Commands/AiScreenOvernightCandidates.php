@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\MarketHoliday;
 use App\Services\AiScreenerService;
@@ -26,6 +27,16 @@ class AiScreenOvernightCandidates extends Command
         $tradeDate    = $this->getNextTradingDay($snapshotDate);
 
         $this->info("隔日沖選股：盤中日 {$snapshotDate}，目標交易日 {$tradeDate}");
+
+        // 清除舊的隔日沖候選（含 monitor），確保重跑不殘留
+        $oldIds = Candidate::where('trade_date', $tradeDate)
+            ->where('mode', 'overnight')
+            ->pluck('id');
+        if ($oldIds->isNotEmpty()) {
+            CandidateMonitor::whereIn('candidate_id', $oldIds)->delete();
+            Candidate::whereIn('id', $oldIds)->delete();
+            $this->info("已清除 {$oldIds->count()} 筆舊隔日沖候選");
+        }
 
         // Step 1: 規則篩選
         $this->info('Step 1: 股票篩選（overnight 門檻）...');

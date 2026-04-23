@@ -14,5 +14,6 @@ return [
     ],
     'fugle' => [
         'api_key' => env('FUGLE_API_KEY', ''),
+        'api_key_backup' => env('FUGLE_API_KEY_BACKUP', ''),
     ],
 ];

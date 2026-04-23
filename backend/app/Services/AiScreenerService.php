@@ -512,7 +512,7 @@ WARN;
 {$holdingWarning}
 
 你需要設定三個關鍵價格：
-- **建議買入價（suggested_buy）**：今日 13:00 附近的合理建倉價位（勿離現價太遠）
+- **建議買入價（suggested_buy）**：今日 13:00 附近的合理建倉價位，必須在 per-stock 訊息中標示的現價 ±2% 以內
 - **目標價（target_price）**：明日技術面阻力位或延續高點
 - **停損價（stop_loss）**：明日技術面支撐位，跌破即出
 
@@ -652,7 +652,58 @@ SYSTEM;
         $dayLowSnap      = 0.0;
         $currentPrice    = 0.0;
 
-        if ($allSnapshots->isNotEmpty()) {
+        if ($allSnapshots->isEmpty()) {
+            // 非監控標的無快照，用 Fugle API 即時補抓報價 + 5分K
+            $fugle = app(FugleRealtimeClient::class);
+            $fugleQuotes = $fugle->fetchQuotes([$stock]);
+            $fq = $fugleQuotes[$stock->symbol] ?? null;
+            if ($fq && $fq['current_price'] > 0) {
+                $currentPrice = (float) $fq['current_price'];
+                $dayHighSnap  = (float) $fq['high'];
+                $dayLowSnap   = (float) $fq['low'];
+                $todayVolume  = (int) $fq['accumulated_volume'];
+                $prevClose    = (float) $fq['prev_close'];
+                $changePct    = $prevClose > 0 ? round(($currentPrice - $prevClose) / $prevClose * 100, 2) : 0;
+                $openPrice    = (float) $fq['open'];
+                $openChg      = $prevClose > 0 ? round(($openPrice - $prevClose) / $prevClose * 100, 2) : 0;
+                $extRatio     = ($fq['trade_volume_at_ask'] + $fq['trade_volume_at_bid']) > 0
+                    ? round($fq['trade_volume_at_ask'] / ($fq['trade_volume_at_ask'] + $fq['trade_volume_at_bid']) * 100, 1)
+                    : 0;
+
+                // 5 分 K 線
+                usleep(150000); // rate limit
+                $candles = $fugle->fetchCandles($stock->symbol);
+                if (!empty($candles)) {
+                    $candleLines = ['時間  開  高  低  收  量(張)  漲%'];
+                    foreach ($candles as $c) {
+                        $cPct = $prevClose > 0 ? round(($c['close'] - $prevClose) / $prevClose * 100, 2) : 0;
+                        $candleLines[] = sprintf('%s  %.2f  %.2f  %.2f  %.2f  %d  %+.2f%%',
+                            $c['time'], $c['open'], $c['high'], $c['low'], $c['close'], $c['volume'], $cPct
+                        );
+                    }
+                    $intradaySection = implode("\n", $candleLines);
+                } else {
+                    $intradaySection = sprintf(
+                        "Fugle即時  開%.2f  高%.2f  低%.2f  現%.2f  %+.2f%%  外盤%.1f%%  量%d張",
+                        $openPrice, $dayHighSnap, $dayLowSnap, $currentPrice,
+                        $changePct, $extRatio, round($todayVolume / 1000)
+                    );
+                }
+
+                $midPrice   = ($dayHighSnap + $dayLowSnap) / 2;
+                $trendLabel = match(true) {
+                    $changePct > 2.0 && $currentPrice >= $dayHighSnap * 0.99 => '強勢衝高',
+                    $changePct > 0.5 && $currentPrice >= $midPrice            => '高檔整理',
+                    $changePct > 0 && $currentPrice < $midPrice               => '盤中拉回',
+                    $changePct < -2.0                                          => '明顯弱勢',
+                    default                                                    => '盤整',
+                };
+                $snapSummary = sprintf(
+                    '現況摘要: 現價%.2f(%+.2f%%) 開盤%+.2f%% 日高%.2f/日低%.2f 外盤%.1f%% 走勢:%s（Fugle即時）',
+                    $currentPrice, $changePct, $openChg, $dayHighSnap, $dayLowSnap, $extRatio, $trendLabel
+                );
+            }
+        } elseif ($allSnapshots->isNotEmpty()) {
             $dayHighSnap  = (float) $allSnapshots->max('high');
             $dayLowSnap   = (float) $allSnapshots->min('low');
             $lastSnap     = $allSnapshots->last();
@@ -802,6 +853,10 @@ SYSTEM;
         )->implode("\n");
         $stockNewsSection = $stockNewsLines ?: '（近期無相關新聞）';
 
+        // 現價 ±2% 範圍，供 prompt 約束 suggested_buy
+        $buyFloor = $currentPrice > 0 ? round($currentPrice * 0.98, 2) : 0;
+        $buyCeil  = $currentPrice > 0 ? round($currentPrice * 1.02, 2) : 0;
+
         return <<<MSG
 ## 待評估標的：{$stock->symbol} {$stock->name}（{$stock->industry}）
 
@@ -837,6 +892,8 @@ Haiku 信度：{$candidate->score}　Haiku 理由：{$candidate->haiku_reasoning
 ### 個股相關新聞與題材
 {$stockNewsSection}
 
+**重要：目前最新現價為 {$currentPrice}。suggested_buy 必須在現價 ±2% 以內（即 {$buyFloor}～{$buyCeil}），超出此範圍代表設定不合理。**
+
 請依上述資料（技術面、籌碼面、基本面、題材面），設定合理的建議買入/目標/停損三個價格，並回覆此標的的隔日沖 JSON 評估結果。
 MSG;
     }
@@ -869,7 +926,35 @@ MSG;
             $tgt  = (float) ($result['target_price'] ?? 0);
             $stop = (float) ($result['stop_loss'] ?? 0);
 
+            // 取得現價參考（快照優先，Fugle fallback）
+            $snapshotDay = $candidate->trade_date->subDay()->format('Y-m-d');
+            $refPrice = IntradaySnapshot::where('stock_id', $candidate->stock_id)
+                ->where('trade_date', $snapshotDay)
+                ->orderByDesc('snapshot_time')
+                ->value('current_price');
+
+            if (!$refPrice) {
+                $fugle = app(FugleRealtimeClient::class);
+                $fqResult = $fugle->fetchQuotes([$candidate->stock]);
+                $refPrice = ($fqResult[$symbol] ?? null) ? $fqResult[$symbol]['current_price'] : null;
+            }
+
+            // AI 未回傳價格時用現價自動補
+            if ($buy <= 0 && $refPrice && (float) $refPrice > 0) {
+                $buy = (float) $refPrice;
+                Log::warning("AiScreenerService overnight {$symbol}: AI 未回傳 suggested_buy，以現價 {$refPrice} 補入");
+            }
+
             if ($buy > 0) {
+                // 現價防護：suggested_buy 偏離現價超過 3% 則修正為現價
+                if ($refPrice && (float) $refPrice > 0) {
+                    $deviation = abs($buy - (float) $refPrice) / (float) $refPrice;
+                    if ($deviation > 0.03) {
+                        Log::warning("AiScreenerService overnight {$symbol}: buy {$buy} 偏離現價 {$refPrice} 達 " . round($deviation * 100, 1) . "%，修正為現價");
+                        $buy = (float) $refPrice;
+                    }
+                }
+
                 // 邊界保護：target > buy > stop
                 if ($tgt <= $buy) {
                     $tgt = round($buy * 1.03, 2);

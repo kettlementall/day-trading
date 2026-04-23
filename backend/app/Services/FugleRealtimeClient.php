@@ -11,11 +11,35 @@ class FugleRealtimeClient
     private const API_BASE    = 'https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote';
     private const REQUEST_DELAY_US = 150000; // 150ms，避免超過 rate limit
 
-    private string $apiKey;
+    /** @var string[] 可用的 API key 清單 */
+    private array $apiKeys = [];
+
+    /** @var int 目前使用的 key index */
+    private int $currentKeyIndex = 0;
 
     public function __construct()
     {
-        $this->apiKey = config('services.fugle.api_key', '');
+        $primary = config('services.fugle.api_key', '');
+        $backup  = config('services.fugle.api_key_backup', '');
+
+        if ($primary) $this->apiKeys[] = $primary;
+        if ($backup)  $this->apiKeys[] = $backup;
+    }
+
+    private function currentKey(): string
+    {
+        return $this->apiKeys[$this->currentKeyIndex] ?? '';
+    }
+
+    private function rotateKey(): bool
+    {
+        $nextIndex = $this->currentKeyIndex + 1;
+        if ($nextIndex < count($this->apiKeys)) {
+            $this->currentKeyIndex = $nextIndex;
+            Log::info("Fugle API key rotated to key #" . ($nextIndex + 1));
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -26,7 +50,7 @@ class FugleRealtimeClient
      */
     public function fetchQuotes(array $stocks): array
     {
-        if (empty($stocks)) {
+        if (empty($stocks) || empty($this->apiKeys)) {
             return [];
         }
 
@@ -35,16 +59,7 @@ class FugleRealtimeClient
 
         foreach ($stocks as $index => $stock) {
             try {
-                $response = Http::timeout(10)
-                    ->withHeaders(['X-API-KEY' => $this->apiKey])
-                    ->get(self::API_BASE . '/' . $stock->symbol);
-
-                if (!$response->successful()) {
-                    Log::warning("Fugle [{$stock->symbol}] HTTP {$response->status()}: " . $response->body());
-                    continue;
-                }
-
-                $parsed = $this->parseQuote($response->json());
+                $parsed = $this->fetchSingleQuote($stock->symbol);
                 if ($parsed) {
                     $results[$parsed['symbol']] = $parsed;
                 }
@@ -58,6 +73,77 @@ class FugleRealtimeClient
         }
 
         return $results;
+    }
+
+    /**
+     * 單檔報價抓取（429 自動換 key 重試一次）
+     */
+    private function fetchSingleQuote(string $symbol): ?array
+    {
+        $response = Http::timeout(10)
+            ->withHeaders(['X-API-KEY' => $this->currentKey()])
+            ->get(self::API_BASE . '/' . $symbol);
+
+        // 429 rate limit → 嘗試換 key 重試
+        if ($response->status() === 429 && $this->rotateKey()) {
+            usleep(self::REQUEST_DELAY_US);
+            $response = Http::timeout(10)
+                ->withHeaders(['X-API-KEY' => $this->currentKey()])
+                ->get(self::API_BASE . '/' . $symbol);
+        }
+
+        if (!$response->successful()) {
+            Log::warning("Fugle [{$symbol}] HTTP {$response->status()}: " . $response->body());
+            return null;
+        }
+
+        return $this->parseQuote($response->json());
+    }
+
+    /**
+     * 抓取單檔 5 分 K 線（429 自動換 key 重試）
+     *
+     * @return array[] 每筆含 time, open, high, low, close, volume
+     */
+    public function fetchCandles(string $symbol, int $timeframe = 5): array
+    {
+        if (empty($this->apiKeys)) {
+            return [];
+        }
+
+        try {
+            $url = 'https://api.fugle.tw/marketdata/v1.0/stock/intraday/candles/' . $symbol;
+
+            $response = Http::timeout(10)
+                ->withHeaders(['X-API-KEY' => $this->currentKey()])
+                ->get($url, ['timeframe' => $timeframe]);
+
+            if ($response->status() === 429 && $this->rotateKey()) {
+                usleep(self::REQUEST_DELAY_US);
+                $response = Http::timeout(10)
+                    ->withHeaders(['X-API-KEY' => $this->currentKey()])
+                    ->get($url, ['timeframe' => $timeframe]);
+            }
+
+            if (!$response->successful()) {
+                Log::warning("Fugle candles [{$symbol}] HTTP {$response->status()}");
+                return [];
+            }
+
+            $data = $response->json()['data'] ?? [];
+
+            return array_map(fn($c) => [
+                'time'   => substr($c['date'] ?? '', 11, 5),
+                'open'   => (float) ($c['open'] ?? 0),
+                'high'   => (float) ($c['high'] ?? 0),
+                'low'    => (float) ($c['low'] ?? 0),
+                'close'  => (float) ($c['close'] ?? 0),
+                'volume' => (int) ($c['volume'] ?? 0),
+            ], $data);
+        } catch (\Exception $e) {
+            Log::error("Fugle candles [{$symbol}]: " . $e->getMessage());
+            return [];
+        }
     }
 
     /**
