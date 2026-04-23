@@ -53,8 +53,7 @@ scheduledCommand('stock:fetch-intraday', '盤中行情(09:30)', selfNotify: true
 scheduledCommand('stock:update-results', '候選結果回填')->dailyAt('15:00');
 
 // 每日 15:30 自動產出前日 AI 檢討報告（依賴 15:00 結果回填）
-// 改為手動觸發，排程已停用
-// scheduledCommand('stock:daily-review', 'AI 每日檢討')->dailyAt('15:30');
+scheduledCommand('stock:daily-review', 'AI 每日檢討')->dailyAt('15:30');
 
 // 每日 06:00 抓取隔夜國際新聞 + 美股指數（供 08:00 選股用）
 scheduledCommand('stock:fetch-us-indices', '美股指數抓取', selfNotify: true)->dailyAt('06:00');
@@ -111,9 +110,12 @@ scheduledCommand('stock:update-overnight-results', '隔日沖結果回填')
     ->dailyAt('15:05')->weekdays();
 
 // 15:35 隔日沖 AI 檢討報告（依賴 15:05 結果回填）
-// 改為手動觸發，排程已停用
-// scheduledCommand('stock:daily-review --mode=overnight', '隔日沖 AI 檢討')
-//     ->dailyAt('15:35')->weekdays();
+scheduledCommand('stock:daily-review --mode=overnight', '隔日沖 AI 檢討')
+    ->dailyAt('15:35')->weekdays();
+
+// 每週五 16:00 從整週檢討報告萃取通用教訓（依賴 15:30/15:35 檢討完成）
+scheduledCommand('stock:extract-weekly-lessons', '週教訓萃取')
+    ->weeklyOn(5, '16:00');
 
 // 每週日 22:00 計算策略量化績效統計（30/60 天窗口）
 scheduledCommand('stock:compute-strategy-stats', '策略績效統計')

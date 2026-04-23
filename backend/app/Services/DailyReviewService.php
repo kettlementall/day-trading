@@ -98,15 +98,6 @@ class DailyReviewService
             ['candidates_count' => $candidates->count(), 'report' => $report]
         );
 
-        // 從報告中萃取結構化教訓
-        try {
-            $count = $this->extractLessons($date, $report);
-            $log("教訓萃取完成（新增 {$count} 條）");
-        } catch (\Exception $e) {
-            Log::error("DailyReviewService extractLessons: " . $e->getMessage());
-            $log("教訓萃取失敗：{$e->getMessage()}");
-        }
-
         return [
             'date' => $date,
             'candidates_count' => $candidates->count(),
@@ -159,15 +150,6 @@ class DailyReviewService
             ['candidates_count' => $candidates->count(), 'report' => $report]
         );
 
-        // 萃取隔日沖教訓
-        try {
-            $count = $this->extractOvernightLessons($date, $report);
-            $log("隔日沖教訓萃取完成（新增 {$count} 條）");
-        } catch (\Exception $e) {
-            Log::error("DailyReviewService extractOvernightLessons: " . $e->getMessage());
-            $log("教訓萃取失敗：{$e->getMessage()}");
-        }
-
         return [
             'date'             => $date,
             'mode'             => 'overnight',
@@ -178,7 +160,7 @@ class DailyReviewService
 
     private function buildOvernightReviewPrompt(string $date, $candidates, array $klineData): string
     {
-        $lines = ["symbol\tname\tind\tentry_type\thaiku_reason\thaiku_conf\tbuy\ttarget\tstop\trr\tgap_potential%\topen\thigh\tlow\tclose\topen_gap%\tgap_ok?\toutcome\tprofit%"];
+        $lines = ["symbol\tname\tind\tai_selected\tentry_type\thaiku_reason\thaiku_conf\tbuy\ttarget\tstop\trr\tgap_potential%\topen\thigh\tlow\tclose\topen_gap%\tgap_ok?\toutcome\tprofit%"];
 
         foreach ($candidates as $c) {
             $r = $c->result;
@@ -199,6 +181,7 @@ class DailyReviewService
                 $c->stock->symbol,
                 $c->stock->name,
                 $c->stock->industry ?? '-',
+                $c->ai_selected ? 'Y' : 'N',
                 $c->overnight_strategy ?? '-',
                 $c->haiku_reasoning ?? '-',
                 $c->score ?? 0,
@@ -238,48 +221,101 @@ class DailyReviewService
         }
         $klineTsv = implode("\n", $klineLines);
 
+        // 監控系統軌跡（隔日沖）
+        $monitorSection = '';
+        $monitors = CandidateMonitor::with('candidate.stock')
+            ->whereHas('candidate', fn($q) => $q->where('trade_date', $date)->where('mode', 'overnight'))
+            ->get();
+
+        if ($monitors->isNotEmpty()) {
+            $monitorLines = ["symbol\tstatus\tentry_price\tentry_time\texit_price\texit_time\ttarget\tstop\tai_notes"];
+            foreach ($monitors as $m) {
+                $c = $m->candidate;
+                $lastAdvice = $m->ai_advice_log ? collect($m->ai_advice_log)->pluck('notes')->implode(' → ') : '';
+
+                $monitorLines[] = implode("\t", [
+                    $c->stock->symbol,
+                    $m->status,
+                    $m->entry_price ?? '-',
+                    $m->entry_time?->format('H:i') ?? '-',
+                    $m->exit_price ?? '-',
+                    $m->exit_time?->format('H:i') ?? '-',
+                    $m->current_target ?? '-',
+                    $m->current_stop ?? '-',
+                    mb_substr($lastAdvice, 0, 80),
+                ]);
+            }
+            $monitorTsv = implode("\n", $monitorLines);
+            $monitorSection = <<<MONITOR
+
+## AI 監控系統軌跡
+{$monitorTsv}
+
+### 欄位說明
+status=最終狀態(target_hit/stop_hit/trailing_stop/closed/holding), entry/exit=進出場價與時間, target/stop=最終目標與停損（可能經 AI 調整）, ai_notes=AI 滾動建議摘要
+MONITOR;
+        }
+
+        $selectedCount = $candidates->where('ai_selected', true)->count();
+        $totalCount = $candidates->count();
+
         return <<<PROMPT
 你是台股隔日沖交易檢討分析師。請針對 {$date} 隔日沖候選標的做全面檢討分析。
 
+## 重要背景
+本系統經三階段篩選：寬篩 → Haiku 預篩 → Opus 深度審核。
+以下 {$totalCount} 檔候選標的中，只有 {$selectedCount} 檔被 AI 最終選入（ai_selected=Y），其餘為被排除的標的。
+**請以 ai_selected=Y 的標的為主要評估對象**，被排除的標的僅作為對照參考（驗證排除決策是否正確）。
+
 ## 分析目標
-1. 隔日沖選股的邏輯是否正確：選擇今日收盤前建倉、明日（{$date}）持有的標的
-2. 跳空預測是否準確（gap_potential% 是否與實際 open_gap% 相符）
-3. 進場策略（entry_type）與實際開盤表現的匹配度
-4. 找出共通的成功/失敗模式
+1. AI 選入的標的表現如何：成功率、跳空預測準確度、價格設定合理性
+2. AI 排除的標的是否確實表現較差（排除決策是否正確）
+3. 跳空預測是否準確（gap_potential% 是否與實際 open_gap% 相符）
+4. 進場策略（entry_type）與實際開盤表現的匹配度
+5. 找出共通的成功/失敗模式
 
 ## 候選標的明細
 {$candidatesTsv}
 
 ### 欄位說明
-symbol=股票代號, name=名稱, ind=產業, entry_type=進場策略(gap_up_open/pullback_entry/open_follow_through/limit_up_chase), haiku_conf=Haiku信度, buy/target/stop=建議價, rr=風報比, gap_potential%=預測跳空幅度, open/high/low/close=實際T+1 OHLC, open_gap%=實際開盤跳空%, gap_ok?=跳空方向預測正確(Y/N), outcome=最終結果, profit%=報酬率
+symbol=股票代號, name=名稱, ind=產業, ai_selected=AI最終選入(Y/N), entry_type=進場策略(gap_up_open/pullback_entry/open_follow_through/limit_up_chase), haiku_conf=Haiku信度, buy/target/stop=建議價, rr=風報比, gap_potential%=預測跳空幅度, open/high/low/close=實際T+1 OHLC, open_gap%=實際開盤跳空%, gap_ok?=跳空方向預測正確(Y/N), outcome=最終結果, profit%=報酬率
 
 ## 近 5 日 K 線（含今日）
 {$klineTsv}
+{$monitorSection}
 
 ## 輸出格式
 請用繁體中文輸出，Markdown 格式：
 
 ### 一、整體表現
-簡述所有隔日沖標的的整體成效，跳空預測準確率，以及整體策略的有效性。
+分別統計 AI 選入（ai_selected=Y）和排除（ai_selected=N）標的的表現：
+- AI 選入標的：成功率、平均報酬率、跳空預測準確率
+- AI 排除標的：假如也進場的成功率（驗證排除決策品質）
+- 整體策略有效性評估
 
-### 二、逐檔分析
-先用一個摘要表格列出所有標的（代號、策略、跳空預測 vs 實際、結果、一句話評語），
-然後挑出最具討論價值的標的（最多 8 檔）深入分析：
+### 二、AI 選入標的逐檔分析
+針對 ai_selected=Y 的標的，逐檔詳細分析：
 - 選股邏輯是否合理（為何前一日選擇建倉？）
 - 明日實際走勢是否符合預期？
 - 三個價格設定（買入/目標/停損）是否合理？
+- 監控系統的進出場決策是否恰當？
 
-### 三、跳空分析
-- 跳空方向預測準確率（gap_ok? = Y 的比例）
+### 三、排除決策檢討
+挑出被排除但事後表現好的標的（最多 5 檔），分析：
+- AI 為何排除？排除理由是否合理？
+- 是否有遺漏的選股訊號？
+
+### 四、跳空分析
+- 跳空方向預測準確率（gap_ok? = Y 的比例，分 ai_selected Y/N 統計）
 - 哪類型的標的跳空預測較準確？
 - 跳空預測有什麼系統性偏差？
 
-### 四、策略改善建議
+### 五、策略改善建議
 具體可改善的選股條件或進場策略調整。
 PROMPT;
     }
 
-    private function extractOvernightLessons(string $date, string $report): int
+    public function extractOvernightLessons(string $date, string $report): int
     {
         if (!$this->apiKey || strlen($report) < 100) {
             return 0;
@@ -297,8 +333,11 @@ PROMPT;
 {$report}
 
 ## 萃取規則
-- 只萃取具體、可操作的教訓（針對隔日沖場景）
-- 忽略籠統的建議
+- 最多萃取 5 條最重要的教訓，寧精勿多
+- 只萃取**跨日通用**的規則，不要針對單一個股的特殊情況
+- **禁止在 content 中提到具體股票名稱或代號**，用「該類型標的」「此類個股」等通用描述取代
+- 禁止提到具體日期，用「本次」「近期」等取代
+- 忽略籠統的建議（例如「要注意風險」）
 - 每條教訓 type 分類：
   - `screening`：選股階段的教訓
   - `entry`：進場策略的教訓（建議買入價、進場條件）
@@ -310,7 +349,7 @@ PROMPT;
   {
     "type": "screening",
     "category": "volume",
-    "content": "一句具體可操作的規則"
+    "content": "連續漲停後第三日追高應排除，本次4檔中3檔停損（75%），獲利回吐壓力在第三日集中釋放"
   }
 ]
 PROMPT;
@@ -371,13 +410,14 @@ PROMPT;
                 return 0;
             }
 
-            $expiresAt   = now()->addDays(14)->toDateString();
+            $expiresAt   = now()->addDays(7)->toDateString();
             $validTypes  = ['screening', 'entry', 'exit', 'market'];
             $count       = 0;
 
             foreach ($lessons as $lesson) {
                 if (empty($lesson['content']) || empty($lesson['type'])) continue;
                 if (!in_array($lesson['type'], $validTypes)) continue;
+                if ($count >= 5) break;
 
                 AiLesson::create([
                     'trade_date' => $date,
@@ -602,7 +642,7 @@ PROMPT;
     /**
      * 從每日檢討報告中萃取結構化教訓，存入 ai_lessons
      */
-    private function extractLessons(string $date, string $report): int
+    public function extractLessons(string $date, string $report): int
     {
         if (!$this->apiKey || strlen($report) < 100) {
             return 0;
@@ -621,7 +661,10 @@ PROMPT;
 {$report}
 
 ## 萃取規則
-- 只萃取具體、可操作的教訓（例如「突破型標的買入價不應設在前高上方超過 1%」）
+- 最多萃取 5 條最重要的教訓，寧精勿多
+- 只萃取**跨日通用**的規則，不要針對單一個股的特殊情況
+- **禁止在 content 中提到具體股票名稱或代號**，用「該類型標的」「此類個股」等通用描述取代
+- 禁止提到具體日期，用「本次」「近期」等取代
 - 忽略籠統的建議（例如「要注意風險」）
 - 每條教訓 type 分類：
   - `screening`：選股階段的教訓（哪些該選/不該選）
@@ -637,12 +680,12 @@ PROMPT;
   {
     "type": "entry",
     "category": "price_setting",
-    "content": "突破回測型標的，買入價設前高回測位而非突破價上方，4/10 三檔因買入價設太高而錯過"
+    "content": "突破回測型標的，買入價設前高回測位而非突破價上方，本次三檔因買入價設太高而錯過"
   },
   {
     "type": "screening",
     "category": "volume",
-    "content": "連續 3 天量縮的標的即使技術面過關也應降低優先級，4/10 兩檔量縮標的全部未達標"
+    "content": "連續 3 天量縮的標的即使技術面過關也應降低優先級，本次兩檔量縮標的全部未達標"
   }
 ]
 PROMPT;
@@ -712,13 +755,14 @@ PROMPT;
                 return 0;
             }
 
-            $expiresAt = now()->addDays(14)->toDateString();
+            $expiresAt = now()->addDays(7)->toDateString();
             $validTypes = ['screening', 'calibration', 'entry', 'exit', 'market'];
             $count = 0;
 
             foreach ($lessons as $lesson) {
                 if (empty($lesson['content']) || empty($lesson['type'])) continue;
                 if (!in_array($lesson['type'], $validTypes)) continue;
+                if ($count >= 5) break;
 
                 AiLesson::create([
                     'trade_date' => $date,
