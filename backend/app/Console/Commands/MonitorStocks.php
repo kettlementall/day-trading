@@ -10,6 +10,7 @@ use App\Models\MarketHoliday;
 use App\Models\Stock;
 use App\Services\IntradayAiAdvisor;
 use App\Services\MonitorService;
+use App\Services\OvernightExitMonitorService;
 use App\Services\TelegramService;
 use App\Services\FugleRealtimeClient;
 use Illuminate\Console\Command;
@@ -111,6 +112,19 @@ class MonitorStocks extends Command
         $quotes = $this->client->fetchQuotes($allStocks);
         $written = $this->writeSnapshots($quotes, $date, $now);
         $this->info("寫入 {$written} 筆快照");
+
+        // ===== Step 1.5: 隔日沖即時到價檢查（純規則，不含 AI）=====
+        if ($overnightCandidates->isNotEmpty()) {
+            try {
+                $overnightService = app(OvernightExitMonitorService::class);
+                $hitCount = $overnightService->checkPriceHits($date, $quotes);
+                if ($hitCount > 0) {
+                    $this->info("隔日沖即時到價：{$hitCount} 檔觸發");
+                }
+            } catch (\Exception $e) {
+                Log::error("隔日沖即時到價檢查失敗：" . $e->getMessage());
+            }
+        }
 
         // ===== 以下步驟只針對當沖候選（intraday），不影響隔日沖 =====
         if ($candidates->isEmpty()) {

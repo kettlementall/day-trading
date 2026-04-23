@@ -88,11 +88,13 @@ scheduledCommand('stock:fetch-sector-indices', '類股指數抓取', selfNotify:
 scheduledCommand('stock:ai-screen-overnight', '隔日沖 AI 選股')
     ->dailyAt('12:50')->weekdays();
 
-// T+1 盤中出場監控（9:30~12:30 每 15 分鐘）：檢查目標/停損觸發 + Haiku 滾動調整
+// T+1 盤中出場監控（9:05~13:15 每 15 分鐘）：檢查目標/停損觸發 + Haiku 滾動調整
 foreach ([
+    '905', '915',
     '930', '945', '1000', '1015', '1030', '1045',
     '1100', '1115', '1130', '1145',
     '1200', '1215', '1230',
+    '1245', '1300', '1315',
 ] as $slot) {
     $h = intdiv((int) $slot, 100);
     $m = (int) $slot % 100;

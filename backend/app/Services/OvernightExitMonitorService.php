@@ -25,10 +25,10 @@ class OvernightExitMonitorService
     }
 
     /**
-     * 指定時段的監控執行（9:30 / 10:00 / 10:30 / 11:00）
+     * 指定時段的監控執行（09:05~13:15，每 15 分鐘）
      *
      * @param  string  $tradeDate  T+1 出場日（YYYY-MM-DD）
-     * @param  string  $slot       時段代碼，如 '930'、'1000'
+     * @param  string  $slot       時段代碼，如 '905'、'930'、'1000'
      */
     public function checkTimeSlot(string $tradeDate, string $slot): array
     {
@@ -51,6 +51,15 @@ class OvernightExitMonitorService
         $stocks  = $candidates->map(fn ($c) => $c->stock)->all();
         $quotes  = $this->fugle->fetchQuotes($stocks);
 
+        // 批次撈昨量（消除 per-stock N+1 query）
+        $yesterdayVolumes = [];
+        foreach ($candidates->pluck('stock_id')->unique() as $sid) {
+            $yesterdayVolumes[$sid] = DailyQuote::where('stock_id', $sid)
+                ->where('date', '<', $tradeDate)
+                ->orderByDesc('date')
+                ->value('volume') ?? 0;
+        }
+
         foreach ($candidates as $candidate) {
             $symbol  = $candidate->stock->symbol;
             $monitor = $candidate->monitor;
@@ -69,6 +78,7 @@ class OvernightExitMonitorService
 
             $currentTarget = (float) $monitor->current_target;
             $currentStop   = (float) $monitor->current_stop;
+            $open          = (float) ($quote['open'] ?? 0);
             $high          = (float) $quote['high'];
             $low           = (float) $quote['low'];
 
@@ -90,20 +100,22 @@ class OvernightExitMonitorService
 
             // ── 觸發停損 ──────────────────────────────────────────────
             if ($currentStop > 0 && $low <= $currentStop) {
+                // 跳空跌破停損 → 出場價用開盤價（不可能賣在停損價）
+                $exitPrice = ($open > 0 && $open < $currentStop) ? $open : $currentStop;
                 $this->transition($monitor, CandidateMonitor::STATUS_STOP_HIT,
                     "{$slot} 盤中最低 {$low} 觸及停損 {$currentStop}");
-                $monitor->update(['exit_price' => $currentStop, 'exit_time' => now()]);
+                $monitor->update(['exit_price' => $exitPrice, 'exit_time' => now()]);
                 $summary['stop_hit']++;
                 $this->telegram->send(sprintf(
-                    "[隔日沖停損] %s %s 盤中低 %.2f 觸停損 %.2f | %s",
-                    $symbol, $name, $low, $currentStop, $slot
+                    "[隔日沖停損] %s %s 盤中低 %.2f 觸停損 %.2f｜出場 %.2f | %s",
+                    $symbol, $name, $low, $currentStop, $exitPrice, $slot
                 ));
                 Log::info("OvernightExitMonitor [{$slot}] {$symbol}：停損觸發（low={$low}）");
                 continue;
             }
 
             // ── AI 滾動判斷 ───────────────────────────────────────────
-            $advice = $this->askHaiku($slot, $candidate, $monitor, $quote);
+            $advice = $this->askHaiku($slot, $candidate, $monitor, $quote, $yesterdayVolumes[$candidate->stock_id] ?? 0);
 
             match ($advice['action']) {
                 'exit' => $this->handleExit($monitor, $slot, $advice, $summary, $symbol, $name),
@@ -115,6 +127,73 @@ class OvernightExitMonitorService
         }
 
         return $summary;
+    }
+
+    /**
+     * 純規則到價檢查（每 30 秒由 monitor-intraday 呼叫，不含 AI）
+     *
+     * @param  array  $quotes  Fugle 報價（keyed by symbol）
+     * @return int  觸發數量
+     */
+    public function checkPriceHits(string $tradeDate, array $quotes): int
+    {
+        $candidates = Candidate::with(['stock', 'monitor'])
+            ->where('mode', 'overnight')
+            ->where('trade_date', $tradeDate)
+            ->where('ai_selected', true)
+            ->whereHas('monitor', fn ($q) => $q->whereNotIn('status', CandidateMonitor::TERMINAL_STATUSES))
+            ->get();
+
+        if ($candidates->isEmpty()) {
+            return 0;
+        }
+
+        $triggered = 0;
+        $timeStr = now()->format('H:i');
+
+        foreach ($candidates as $candidate) {
+            $symbol  = $candidate->stock->symbol;
+            $monitor = $candidate->monitor;
+            $quote   = $quotes[$symbol] ?? null;
+
+            if (!$monitor || !$quote) continue;
+
+            $currentTarget = (float) $monitor->current_target;
+            $currentStop   = (float) $monitor->current_stop;
+            $open          = (float) ($quote['open'] ?? 0);
+            $high          = (float) $quote['high'];
+            $low           = (float) $quote['low'];
+            $name          = $candidate->stock->name;
+
+            if ($currentTarget > 0 && $high >= $currentTarget) {
+                $this->transition($monitor, CandidateMonitor::STATUS_TARGET_HIT,
+                    "即時偵測 {$timeStr} 盤中最高 {$high} 達到目標 {$currentTarget}");
+                $monitor->update(['exit_price' => $currentTarget, 'exit_time' => now()]);
+                $this->telegram->send(sprintf(
+                    "[隔日沖達標] %s %s 盤中高 %.2f 達目標 %.2f | 即時偵測 %s",
+                    $symbol, $name, $high, $currentTarget, $timeStr
+                ));
+                Log::info("OvernightPriceHit [{$timeStr}] {$symbol}：目標達成（high={$high}）");
+                $triggered++;
+                continue;
+            }
+
+            if ($currentStop > 0 && $low <= $currentStop) {
+                $exitPrice = ($open > 0 && $open < $currentStop) ? $open : $currentStop;
+                $this->transition($monitor, CandidateMonitor::STATUS_STOP_HIT,
+                    "即時偵測 {$timeStr} 盤中最低 {$low} 觸及停損 {$currentStop}");
+                $monitor->update(['exit_price' => $exitPrice, 'exit_time' => now()]);
+                $this->telegram->send(sprintf(
+                    "[隔日沖停損] %s %s 盤中低 %.2f 觸停損 %.2f｜出場 %.2f | 即時偵測 %s",
+                    $symbol, $name, $low, $currentStop, $exitPrice, $timeStr
+                ));
+                Log::info("OvernightPriceHit [{$timeStr}] {$symbol}：停損觸發（low={$low}）");
+                $triggered++;
+                continue;
+            }
+        }
+
+        return $triggered;
     }
 
     // -------------------------------------------------------------------------
@@ -184,7 +263,7 @@ class OvernightExitMonitorService
     // Haiku AI 判斷
     // -------------------------------------------------------------------------
 
-    private function askHaiku(string $slot, Candidate $candidate, CandidateMonitor $monitor, array $quote): array
+    private function askHaiku(string $slot, Candidate $candidate, CandidateMonitor $monitor, array $quote, ?int $yesterdayVolume = null): array
     {
         $fallback = ['action' => 'hold', 'adjusted_target' => null, 'adjusted_stop' => null, 'reasoning' => 'AI 不可用，維持現狀'];
 
@@ -224,10 +303,12 @@ class OvernightExitMonitorService
         $slotLabel = sprintf('%02d:%02d', $h, $m);
 
         // ── 量比（預估全日量 vs 昨量）──
-        $yesterdayVolume = DailyQuote::where('stock_id', $candidate->stock_id)
-            ->where('date', '<', $candidate->trade_date->format('Y-m-d'))
-            ->orderByDesc('date')
-            ->value('volume') ?? 0;
+        if ($yesterdayVolume === null) {
+            $yesterdayVolume = DailyQuote::where('stock_id', $candidate->stock_id)
+                ->where('date', '<', $candidate->trade_date->format('Y-m-d'))
+                ->orderByDesc('date')
+                ->value('volume') ?? 0;
+        }
 
         $slotMinutes = $h * 60 + $m;
         $elapsedMin  = max(1, $slotMinutes - 9 * 60); // 距 09:00 的分鐘數
@@ -262,7 +343,7 @@ class OvernightExitMonitorService
         }
 
         // ── 今日 5 分 K 聚合 ──
-        $candleSection = $this->buildCandleSection($candidate->stock_id, $candidate->trade_date->format('Y-m-d'));
+        $candleSection = $this->buildCandleSection($candidate->stock_id, $candidate->trade_date->format('Y-m-d'), $symbol);
 
         // ── 歷史建議 ──
         $prevAdviceSection = '';
@@ -404,7 +485,7 @@ USER;
     // 5 分 K 聚合（從 IntradaySnapshot 建構）
     // -------------------------------------------------------------------------
 
-    private function buildCandleSection(int $stockId, string $tradeDate): string
+    private function buildCandleSection(int $stockId, string $tradeDate, string $symbol = ''): string
     {
         $snapshots = IntradaySnapshot::where('stock_id', $stockId)
             ->where('trade_date', $tradeDate)
@@ -412,7 +493,7 @@ USER;
             ->get();
 
         if ($snapshots->isEmpty()) {
-            return '';
+            return $symbol ? $this->buildCandleSectionFromFugle($symbol) : '';
         }
 
         $candles = $this->aggregateToCandles($snapshots);
@@ -438,6 +519,34 @@ USER;
         );
 
         return "\n## T+1 今日 5 分 K\n" . implode("\n", $lines) . "\n\n" . $openingRange;
+    }
+
+    /**
+     * 無快照時用 Fugle 5 分 K API 補抓
+     */
+    private function buildCandleSectionFromFugle(string $symbol): string
+    {
+        $candles = $this->fugle->fetchCandles($symbol);
+
+        if (empty($candles)) {
+            return '';
+        }
+
+        $header = "時段    開       高       低       收       量";
+        $lines = [$header];
+        foreach ($candles as $c) {
+            $lines[] = sprintf('%s  %.2f  %.2f  %.2f  %.2f  %d張',
+                $c['time'], $c['open'], $c['high'], $c['low'], $c['close'], $c['volume']
+            );
+        }
+
+        $first = $candles[0];
+        $openingRange = sprintf(
+            "開盤區間（首根 5 分 K）: 高 %.2f / 低 %.2f",
+            $first['high'], $first['low']
+        );
+
+        return "\n## T+1 今日 5 分 K（Fugle）\n" . implode("\n", $lines) . "\n\n" . $openingRange;
     }
 
     private function aggregateToCandles(Collection $snapshots, int $periodMinutes = 5): array
