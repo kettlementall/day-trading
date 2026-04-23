@@ -327,7 +327,7 @@ class MonitorStocks extends Command
             $hour === 9 && $minute < 30 => 10,
             $hour === 9 || ($hour === 10 && $minute < 30) => 15,
             $hour >= 13 => 10,
-            default => 20,
+            default => 15,
         };
     }
 

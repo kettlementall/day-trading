@@ -27,8 +27,8 @@
 | 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情                                                 |
 | 15:00 | `stock:update-results`      | 更新當日當沖候選標的的盤後結果                                           |
 | **15:05** | **`stock:update-overnight-results`** | **更新隔日沖候選標的盤後實際結果（T+1 收盤後）** |
-| 15:30 | `stock:daily-review`        | 自動產出當日 AI 檢討報告 + 萃取教訓（依賴 15:00 結果回填）                     |
-| **15:35** | **`stock:daily-review --mode=overnight`** | **自動產出隔日沖 AI 檢討報告 + 萃取教訓** |
+| 15:30 | `stock:daily-review`        | 自動產出當日 AI 檢討報告（依賴 15:00 結果回填，不含教訓萃取）                     |
+| **15:35** | **`stock:daily-review --mode=overnight`** | **自動產出隔日沖 AI 檢討報告（不含教訓萃取）** |
 | 16:00 | `stock:fetch-institutional` | 抓取三大法人買賣超                                                 |
 | 16:30 | `stock:fetch-margin`        | 抓取融資融券                                                    |
 | **17:00** | **`stock:fetch-valuations`** | **從 TWSE 抓取本益比/殖利率/股價淨值比（BWIBBU_ALL），供隔日沖 Opus 估值判斷使用** |
@@ -55,7 +55,7 @@
                                                                 │
                          09:00 開始盤中快照 → 09:05 AI 開盤校準
                                                                 │
-                         09:05+ 規則式持續監控 + AI 動態頻率滾動判斷（10-20 分鐘）
+                         09:05+ 規則式持續監控 + AI 動態頻率滾動判斷（10-15 分鐘）
                                                                 │
                                                        13:25 強制平倉 → 15:00 盤後結果回填
 ```
@@ -389,7 +389,7 @@ API 失敗時，取 Haiku 信度前 15 名，預設 `intraday_strategy = 'moment
 |------|---------|-----------|------|
 | Haiku 批量預篩 | `ANTHROPIC_HAIKU_MODEL` | claude-haiku-4-5-20251001 | 每批 15 檔，速度/成本優先 |
 | Opus 精審 | `ANTHROPIC_SCREENING_MODEL` | claude-opus-4-6 | 深度推理，每檔獨立 call，最多 30 檔 |
-| 盤中校準/滾動 | `ANTHROPIC_INTRADAY_MODEL` | claude-sonnet-4-6 | 快照每 30 秒，AI 建議每 10-20 分鐘，速度優先 |
+| 盤中校準/滾動 | `ANTHROPIC_INTRADAY_MODEL` | claude-sonnet-4-6 | 快照每 30 秒，AI 建議每 10-15 分鐘，速度優先 |
 | 新聞情緒分析 | `ANTHROPIC_SENTIMENT_MODEL` | claude-haiku-4-5 | 高頻量大，簡單分類任務 |
 | 每日檢討 | `ANTHROPIC_MODEL` | claude-opus-4-6 | 深度分析，一天一次 |
 
@@ -555,10 +555,10 @@ AI 滾動建議隨時可透過 `adjustments.stop` 動態調整停損（鎖利）
 |------|------|------|
 | 09:05-09:30 | 每 10 分鐘 | 開盤最劇烈，需快速反應 |
 | 09:30-10:30 | 每 15 分鐘 | 早盤仍活躍 |
-| 10:30-13:00 | 每 20 分鐘 | 盤中趨緩 |
+| 10:30-13:00 | 每 15 分鐘 | 盤中仍需留意趨勢轉弱 |
 | 13:00-13:25 | 每 10 分鐘 | 尾盤平倉決策 |
 
-一天約 20 次定期 AI call（不含緊急觸發），Sonnet 約 NT$15-25/天。
+一天約 23 次定期 AI call（不含緊急觸發），Sonnet 約 NT$18-28/天。
 
 #### Prompt 架構（System/User 分離 + Prompt Caching）
 
