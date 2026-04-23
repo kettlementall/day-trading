@@ -29,9 +29,9 @@
 | **15:05** | **`stock:update-overnight-results`** | **更新隔日沖候選標的盤後實際結果（T+1 收盤後）** |
 | 15:30 | `stock:daily-review`        | 自動產出當日 AI 檢討報告（依賴 15:00 結果回填，不含教訓萃取）                     |
 | **15:35** | **`stock:daily-review --mode=overnight`** | **自動產出隔日沖 AI 檢討報告（不含教訓萃取）** |
-| 16:00 | `stock:fetch-institutional` | 抓取三大法人買賣超                                                 |
-| 16:30 | `stock:fetch-margin`        | 抓取融資融券                                                    |
-| **17:00** | **`stock:fetch-valuations`** | **從 TWSE 抓取本益比/殖利率/股價淨值比（BWIBBU_ALL），供隔日沖 Opus 估值判斷使用** |
+| 16:30 | `stock:fetch-institutional` | 抓取三大法人買賣超（TWSE 約 16:15~16:30 上線）                          |
+| 17:00 | `stock:fetch-margin`        | 抓取融資融券                                                    |
+| **17:15** | **`stock:fetch-valuations`** | **從 TWSE 抓取本益比/殖利率/股價淨值比（BWIBBU_ALL），供隔日沖 Opus 估值判斷使用** |
 | 18:00 | `news:fetch`                | 盤後新聞抓取                                                    |
 | 18:15 | `news:compute-indices`      | 計算新聞指數                                                    |
 | 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 結果未回填重跑）                   |

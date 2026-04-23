@@ -31,11 +31,11 @@ function scheduledCommand(string $command, string $label, bool $selfNotify = fal
 // 每日 14:30 收盤後抓取行情資料
 scheduledCommand('stock:fetch-daily', '每日行情抓取', selfNotify: true)->dailyAt('14:30');
 
-// 每日 16:00 抓取三大法人
-scheduledCommand('stock:fetch-institutional', '三大法人抓取', selfNotify: true)->dailyAt('16:00');
+// 每日 16:30 抓取三大法人（TWSE 通常 16:15~16:30 才上線）
+scheduledCommand('stock:fetch-institutional', '三大法人抓取', selfNotify: true)->dailyAt('16:30');
 
-// 每日 16:30 抓取融資融券
-scheduledCommand('stock:fetch-margin', '融資融券抓取', selfNotify: true)->dailyAt('16:30');
+// 每日 17:00 抓取融資融券
+scheduledCommand('stock:fetch-margin', '融資融券抓取', selfNotify: true)->dailyAt('17:00');
 
 // 每日 08:00 執行 AI 選股（規則式寬篩 + AI 審核）
 // 原 stock:screen-candidates 保留可手動執行
@@ -103,9 +103,9 @@ foreach ([
         ->dailyAt($time)->weekdays();
 }
 
-// 17:00 抓取 TWSE 本益比/殖利率/股價淨值比（TWSE 每日收盤後更新）
+// 17:15 抓取 TWSE 本益比/殖利率/股價淨值比（TWSE 每日收盤後更新）
 scheduledCommand('stock:fetch-valuations', 'TWSE 估值資料抓取', selfNotify: true)
-    ->dailyAt('17:00')->weekdays();
+    ->dailyAt('17:15')->weekdays();
 
 // 15:05 隔日沖結果回填（T+1 收盤後記錄實際開高低收 + 跳空數據）
 scheduledCommand('stock:update-overnight-results', '隔日沖結果回填')
