@@ -167,6 +167,9 @@
       </div>
     </template>
 
+    <el-alert v-else-if="searched && !loading && rateLimited" type="warning" :closable="false" show-icon style="margin-top: 12px">
+      API 請求過於頻繁（429），請稍後再試
+    </el-alert>
     <el-empty v-else-if="searched && !loading" description="查無資料" />
   </div>
 </template>
@@ -192,6 +195,7 @@ const searched = ref(false)
 const costInput = ref('')
 const analyzing = ref(false)
 const aiResult = ref(null)
+const rateLimited = ref(false)
 
 onMounted(() => {
   const sym = route.query.symbol
@@ -206,11 +210,13 @@ async function fetchQuote() {
   if (!sym) return
   loading.value = true
   searched.value = true
+  rateLimited.value = false
   try {
     const { data } = await getQuote(sym)
     quote.value = data
-  } catch {
+  } catch (e) {
     quote.value = null
+    if (e.response?.status === 429) rateLimited.value = true
   } finally {
     loading.value = false
   }
