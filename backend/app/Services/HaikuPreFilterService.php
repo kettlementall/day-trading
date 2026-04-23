@@ -15,6 +15,7 @@ use App\Models\UsMarketIndex;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use App\Services\TelegramService;
 
 class HaikuPreFilterService
 {
@@ -76,6 +77,9 @@ class HaikuPreFilterService
                         'score'           => 0,
                     ]);
                 }
+                app(TelegramService::class)->send(
+                    "⚠️ Haiku 預篩批次失敗（{$batch->count()} 檔預設排除）：" . mb_substr($e->getMessage(), 0, 100)
+                );
             }
             usleep(200_000); // 200ms，避免 rate limit
         }
