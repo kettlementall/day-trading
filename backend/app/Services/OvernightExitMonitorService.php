@@ -78,6 +78,7 @@ class OvernightExitMonitorService
             if ($currentTarget > 0 && $high >= $currentTarget) {
                 $this->transition($monitor, CandidateMonitor::STATUS_TARGET_HIT,
                     "{$slot} 盤中最高 {$high} 達到目標 {$currentTarget}");
+                $monitor->update(['exit_price' => $currentTarget, 'exit_time' => now()]);
                 $summary['target_hit']++;
                 $this->telegram->send(sprintf(
                     "[隔日沖達標] %s %s 盤中高 %.2f 達目標 %.2f | %s",
@@ -91,6 +92,7 @@ class OvernightExitMonitorService
             if ($currentStop > 0 && $low <= $currentStop) {
                 $this->transition($monitor, CandidateMonitor::STATUS_STOP_HIT,
                     "{$slot} 盤中最低 {$low} 觸及停損 {$currentStop}");
+                $monitor->update(['exit_price' => $currentStop, 'exit_time' => now()]);
                 $summary['stop_hit']++;
                 $this->telegram->send(sprintf(
                     "[隔日沖停損] %s %s 盤中低 %.2f 觸停損 %.2f | %s",
@@ -128,6 +130,7 @@ class OvernightExitMonitorService
     {
         $monitor->logAiAdvice('exit', $advice['reasoning']);
         $this->transition($monitor, CandidateMonitor::STATUS_CLOSED, "{$slot} AI 建議提前出場：{$advice['reasoning']}");
+        $monitor->update(['exit_time' => now()]);
         $summary['exited']++;
         $this->telegram->send(sprintf(
             "[隔日沖AI出場] %s %s | %s | %s",
