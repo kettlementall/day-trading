@@ -76,10 +76,11 @@ class StockScreener
             $minPrice = $screenConfig['min_price'] ?? 10;
             if ($closes[0] < $minPrice) continue;
 
-            // 5 日均振幅太低（< 0.5%）→ 波動根本不夠當沖
+            // 5 日均振幅太低 → 波動不夠當沖（當沖 2.5%，隔日沖 0.5%）
             $recent5Amplitudes = array_slice($amplitudes, 0, 5);
             $avgAmplitude5 = count($recent5Amplitudes) > 0 ? array_sum($recent5Amplitudes) / count($recent5Amplitudes) : 0;
-            $minAmplitude = $screenConfig['min_amplitude'] ?? 0.5;
+            $defaultMinAmp = $mode === 'overnight' ? 0.5 : 2.5;
+            $minAmplitude = $screenConfig['min_amplitude'] ?? $defaultMinAmp;
             if ($avgAmplitude5 < $minAmplitude) continue;
 
             // 5 日均量不足（< 200 張）→ 流動性不足無法進出場

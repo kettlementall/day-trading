@@ -66,13 +66,28 @@ class UpdateCandidateResults extends Command
                 ]);
                 $targetReachable = $hitTarget;
             } else {
-                // 無 monitor 時用原始價格比對日 K
-                $hitTarget = $high >= $targetPrice;
-                $hitStopLoss = $low <= $stopLoss;
+                // 無 monitor 時用原始價格比對日 K + 時序推斷
                 $effectiveTarget = $targetPrice;
                 $effectiveStop = $stopLoss;
                 $buyReachable = $low <= $suggestedBuy;
-                $targetReachable = $high >= $targetPrice;
+                $hitTarget = $high >= $targetPrice;
+                $hitStopLoss = $low <= $stopLoss;
+                $targetReachable = $hitTarget;
+
+                // 時序驗證：用 OHLC 推斷 buy 和 target 的先後順序
+                // 同時碰到 buy 和 target 時，需判斷哪個先被觸及
+                if ($buyReachable && $targetReachable && $suggestedBuy > 0) {
+                    if ($open >= $targetPrice) {
+                        // 開盤就超過目標 → target 先到，buy 是之後下跌才碰到 → 假獲利
+                        $hitTarget = false;
+                        $targetReachable = false;
+                    } elseif ($open > $suggestedBuy && $close < $open && $open >= $targetPrice * 0.99) {
+                        // 開盤在 buy 上方且接近 target，開高走低 → 大概率 target 先到再跌破 buy
+                        $hitTarget = false;
+                        $targetReachable = false;
+                    }
+                    // 開盤 ≤ buy：正常順序（先買後到目標），不需調整
+                }
             }
 
             $maxProfit = $suggestedBuy > 0

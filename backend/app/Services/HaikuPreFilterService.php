@@ -68,12 +68,12 @@ class HaikuPreFilterService
                 $this->applyBatchResults($batch, $results);
             } catch (\Exception $e) {
                 Log::error('HaikuPreFilterService batch error: ' . $e->getMessage());
-                // 批次失敗時全部標記通過（寧可多送 Opus 也不漏掉好股）
+                // 批次失敗時標記排除（避免未經審核的標的進入 Opus）
                 foreach ($batch as $candidate) {
                     $candidate->update([
-                        'haiku_selected'  => true,
-                        'haiku_reasoning' => 'Haiku 批次失敗，預設通過',
-                        'score'           => 50,
+                        'haiku_selected'  => false,
+                        'haiku_reasoning' => 'Haiku 批次失敗，預設排除',
+                        'score'           => 0,
                     ]);
                 }
             }
@@ -250,7 +250,7 @@ SYSTEM;
             ])
             ->post('https://api.anthropic.com/v1/messages', [
                 'model'      => $this->model,
-                'max_tokens' => 1024,
+                'max_tokens' => 4096,
                 'system'     => [
                     [
                         'type'          => 'text',
