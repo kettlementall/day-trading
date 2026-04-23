@@ -102,6 +102,11 @@
           </el-tag>
         </div>
 
+        <!-- AI 排除原因（折疊外直接顯示） -->
+        <div v-if="item.ai_selected === false && item.ai_reasoning" class="reject-reason">
+          {{ item.ai_reasoning }}
+        </div>
+
         <!-- 三個關鍵價格 + 監控調整 -->
         <div class="card-prices">
           <div class="price-item">
@@ -554,6 +559,13 @@ function outcomeClass(outcome) {
   flex-wrap: wrap;
   gap: 5px;
   margin-bottom: 8px;
+}
+
+.reject-reason {
+  font-size: 12px;
+  color: #f56c6c;
+  line-height: 1.5;
+  margin-bottom: 6px;
 }
 
 .card-prices {
