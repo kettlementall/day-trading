@@ -55,6 +55,12 @@
           <div class="stat-value">{{ stats.valid_entry_rate }}%</div>
           <div class="stat-label">有效進場率</div>
         </div>
+        <div v-if="stats.win_rate_after_entry !== undefined" class="stat-card">
+          <div class="stat-value" :class="stats.win_rate_after_entry >= 50 ? 'highlight-up' : 'highlight-down'">
+            {{ stats.win_rate_after_entry }}%
+          </div>
+          <div class="stat-label">進場後勝率</div>
+        </div>
         <div class="stat-card">
           <div class="stat-value highlight-up">{{ stats.avg_mfe }}%</div>
           <div class="stat-label">平均 MFE</div>

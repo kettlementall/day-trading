@@ -138,14 +138,24 @@
           </div>
         </div>
 
-        <!-- 監控狀態 badge（折疊外） -->
-        <span
-          v-if="item.monitor && monitorStatusVisible(item.monitor.status)"
-          class="monitor-badge"
-          :class="monitorBadgeClass(item.monitor.status)"
-        >
-          {{ monitorStatusLabel(item.monitor.status) }}
-        </span>
+        <!-- 監控狀態 badge + 最新 AI 摘要（折疊外） -->
+        <div v-if="item.monitor && monitorStatusVisible(item.monitor.status)" class="monitor-summary">
+          <span
+            class="monitor-badge"
+            :class="monitorBadgeClass(item.monitor.status)"
+          >
+            {{ monitorStatusLabel(item.monitor.status) }}
+            <span v-if="item.monitor.exit_time && isTerminalStatus(item.monitor.status)" class="monitor-time">
+              {{ formatExitTime(item.monitor.exit_time) }}
+            </span>
+          </span>
+          <span v-if="latestAdvice(item.monitor)" class="monitor-latest-advice" :class="'log-' + latestAdvice(item.monitor).action">
+            {{ latestAdvice(item.monitor).time }} {{ monitorActionLabel(latestAdvice(item.monitor).action) }}：{{ latestAdvice(item.monitor).notes }}
+          </span>
+          <span v-if="item.monitor.ai_advice_log?.length > 1" class="monitor-advice-count" @click.stop="toggleExpand(item.id)">
+            共 {{ item.monitor.ai_advice_log.length }} 筆判斷
+          </span>
+        </div>
 
         <!-- 折疊區域 -->
         <div v-show="isExpanded(item.id)">
@@ -356,6 +366,22 @@ function monitorBadgeClass(status) {
 
 function monitorActionLabel(action) {
   return { hold: '維持', adjust: '調整', exit: '出場' }[action] || action
+}
+
+function isTerminalStatus(status) {
+  return ['target_hit', 'stop_hit', 'trailing_stop', 'closed'].includes(status)
+}
+
+function formatExitTime(exitTime) {
+  if (!exitTime) return ''
+  const d = dayjs(exitTime)
+  return d.format('HH:mm')
+}
+
+function latestAdvice(monitor) {
+  const logs = monitor?.ai_advice_log
+  if (!logs?.length) return null
+  return logs[logs.length - 1]
 }
 
 function supportLevels(item) {
@@ -668,6 +694,38 @@ function outcomeClass(outcome) {
   padding: 1px 7px;
   border-radius: 4px;
   display: inline-block;
+}
+
+.monitor-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.monitor-latest-advice {
+  font-size: 11px;
+  line-height: 1.4;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monitor-advice-count {
+  font-size: 10px;
+  color: #909399;
+  white-space: nowrap;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.monitor-time {
+  font-weight: 400;
+  opacity: 0.75;
+  margin-left: 2px;
 }
 
 .badge-holding { background: #ecf5ff; color: #409eff; }

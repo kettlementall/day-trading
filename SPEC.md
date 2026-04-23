@@ -744,6 +744,7 @@ expected_value = avg(所有 buy_reachable 為 true 的 profit)
 |------|------|----------|
 | AI 通過率 | `ai_approval_rate` | AI 選中（`ai_selected`）數 / 候選總數 × 100 |
 | 有效進場率 | `valid_entry_rate` | `valid_entry = true` 數 / 已驗證數 × 100 |
+| 進場後勝率 | `win_rate_after_entry` | 有效進場中，`monitor_status` 為 `target_hit` 或 `trailing_stop` 的比率 × 100 |
 | 平均 MFE | `avg_mfe` | 持有期間最大有利偏移（%）平均 |
 | 平均 MAE | `avg_mae` | 持有期間最大不利偏移（%）平均 |
 | 弱勢轉換率 | `weak_to_price_rate` | 弱勢走勢到達停損的比率 |

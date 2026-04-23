@@ -141,8 +141,14 @@ class BacktestService
                 ? round($skippedWeak->count() / $withMonitor->count() * 100, 1)
                 : 0;
 
-            // 只算有效進場的期望值
+            // 進場後勝率：有效進場中，結果為 target_hit 或 trailing_stop 的比率
             if ($validEntries->isNotEmpty()) {
+                $winAfterEntry = $validEntries->filter(function ($c) {
+                    return in_array($c->result->monitor_status, ['target_hit', 'trailing_stop']);
+                })->count();
+                $metrics['win_rate_after_entry'] = round($winAfterEntry / $validEntries->count() * 100, 1);
+
+                // 只算有效進場的期望值
                 $validProfits = [];
                 foreach ($validEntries as $c) {
                     $r = $c->result;
