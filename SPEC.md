@@ -36,7 +36,7 @@
 | 18:15 | `news:compute-indices`      | 計算新聞指數                                                    |
 | 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 結果未回填重跑）                   |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
-| **T+1 09:05–13:15** | **`stock:monitor-overnight-exit --slot={time}`** | **隔日沖 T+1 出場監控，每 15 分鐘一次（09:05/09:15 開盤快速檢查；Fugle 即時報價：目標/停損觸發自動終止；Haiku 滾動判斷 hold/adjust/exit）** |
+| **T+1 09:05–13:15** | **`stock:monitor-overnight-exit --slot={time}`** | **隔日沖 T+1 出場監控，每 15 分鐘一次（09:05/09:15 開盤快速檢查；Fugle 即時報價：目標/停損觸發自動終止；Sonnet 滾動判斷 hold/adjust/exit）** |
 | **週日 22:00** | **`stock:compute-strategy-stats`** | **計算隔日沖/當沖策略量化績效統計（30/60 天窗口）** |
 
 > `stock:backtest --validated` 已停用自動排程。指令保留可手動執行回測指標檢視。
@@ -72,7 +72,7 @@
                                                         │
                   13:00–13:25 使用者下單建倉（T+0）
                                                         │
-                  T+1 09:05~13:15 每 15 分鐘出場監控（Fugle + Haiku 滾動）
+                  T+1 09:05~13:15 每 15 分鐘出場監控（Fugle + Sonnet 滾動）
                                                         │
                   T+1 15:05 盤後結果回填 → 15:35 AI 隔日沖檢討
 ```
@@ -913,11 +913,11 @@ overnight 模式的物理篩選上限為 **top 100**（`max_candidates = 100`，
 |------|------|------------|
 | `high >= current_target` | 自動達標 | `target_hit`（終止） |
 | `low <= current_stop` | 自動觸停損 | `stop_hit`（終止）；`exit_price = min(stop, open)`（跳空跌破停損時以開盤價計） |
-| 無觸發 | 呼叫 Haiku AI 滾動判斷 | 依 Haiku 回應決定 |
+| 無觸發 | 呼叫 Sonnet AI 滾動判斷 | 依 Sonnet 回應決定 |
 
 > **即時到價檢查**：除了每 15 分鐘的排程監控，`stock:monitor-intraday` 每 30 秒快照後也會呼叫 `OvernightExitMonitorService::checkPriceHits()` 做純規則到價檢查（不含 AI），確保目標/停損觸發不會有 15 分鐘延遲。
 
-#### Haiku 滾動判斷
+#### Sonnet 滾動判斷
 
 Prompt 包含：時段標籤（09:05~13:15）、昨日收盤（建倉參考）、建議買入價、原始目標/停損、當前目標/停損、Fugle 開高低收及量、開盤跳空%、距離買入%、5 分 K 線（快照或 Fugle fallback）、先前調整紀錄（最多3筆）。
 

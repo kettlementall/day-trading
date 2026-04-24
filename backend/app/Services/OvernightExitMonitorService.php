@@ -21,7 +21,7 @@ class OvernightExitMonitorService
         private TelegramService $telegram,
     ) {
         $this->apiKey = config('services.anthropic.api_key', '');
-        $this->model  = config('services.anthropic.haiku_model', 'claude-haiku-4-5-20251001');
+        $this->model  = config('services.anthropic.overnight_model', 'claude-sonnet-4-6');
     }
 
     /**
@@ -115,7 +115,7 @@ class OvernightExitMonitorService
             }
 
             // ── AI 滾動判斷 ───────────────────────────────────────────
-            $advice = $this->askHaiku($slot, $candidate, $monitor, $quote, $yesterdayVolumes[$candidate->stock_id] ?? 0);
+            $advice = $this->askSonnet($slot, $candidate, $monitor, $quote, $yesterdayVolumes[$candidate->stock_id] ?? 0);
 
             match ($advice['action']) {
                 'exit' => $this->handleExit($monitor, $slot, $advice, $summary, $symbol, $name),
@@ -260,10 +260,10 @@ class OvernightExitMonitorService
     }
 
     // -------------------------------------------------------------------------
-    // Haiku AI 判斷
+    // Sonnet AI 判斷
     // -------------------------------------------------------------------------
 
-    private function askHaiku(string $slot, Candidate $candidate, CandidateMonitor $monitor, array $quote, ?int $yesterdayVolume = null): array
+    private function askSonnet(string $slot, Candidate $candidate, CandidateMonitor $monitor, array $quote, ?int $yesterdayVolume = null): array
     {
         $fallback = ['action' => 'hold', 'adjusted_target' => null, 'adjusted_stop' => null, 'reasoning' => 'AI 不可用，維持現狀'];
 
@@ -455,7 +455,7 @@ USER;
                 ]);
 
             if (!$response->successful()) {
-                Log::warning("OvernightExitMonitor Haiku {$symbol}: HTTP {$response->status()}");
+                Log::warning("OvernightExitMonitor Sonnet {$symbol}: HTTP {$response->status()}");
                 return $fallback;
             }
 
@@ -465,7 +465,7 @@ USER;
             $data = json_decode($text, true);
 
             if (!is_array($data) || !isset($data['action'])) {
-                Log::warning("OvernightExitMonitor Haiku {$symbol}: 無法解析回應");
+                Log::warning("OvernightExitMonitor Sonnet {$symbol}: 無法解析回應");
                 return $fallback;
             }
 
@@ -476,7 +476,7 @@ USER;
                 'reasoning'       => $data['reasoning'] ?? '',
             ];
         } catch (\Exception $e) {
-            Log::error("OvernightExitMonitor Haiku {$symbol}: " . $e->getMessage());
+            Log::error("OvernightExitMonitor Sonnet {$symbol}: " . $e->getMessage());
             return $fallback;
         }
     }
