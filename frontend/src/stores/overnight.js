@@ -6,11 +6,15 @@ import dayjs from 'dayjs'
 export const useOvernightStore = defineStore('overnight', () => {
   const candidates = ref([])
   // 12:50 前看前一批（trade_date = T），12:50 後看今日批（trade_date = T+1）
-  const currentDate = ref(
-    dayjs().hour() < 12 || (dayjs().hour() === 12 && dayjs().minute() < 50)
-      ? dayjs().format('YYYY-MM-DD')
-      : dayjs().add(1, 'day').format('YYYY-MM-DD')
-  )
+  // 需跳過週末，否則週五 12:50 後會拿週六去查導致顯示休市日
+  function initCurrentDate() {
+    let d = dayjs().hour() < 12 || (dayjs().hour() === 12 && dayjs().minute() < 50)
+      ? dayjs()
+      : dayjs().add(1, 'day')
+    while (d.day() === 0 || d.day() === 6) d = d.add(1, 'day')
+    return d.format('YYYY-MM-DD')
+  }
+  const currentDate = ref(initCurrentDate())
   const loading = ref(false)
   const lastUpdatedAt = ref('')
   const isHoliday = ref(false)

@@ -72,11 +72,13 @@ scheduledCommand('news:compute-indices', '新聞指數(18:15)', selfNotify: true
 
 // 盤中即時監控：command 內部每 30 秒 loop，scheduler 每分鐘觸發作為當機重啟保底
 // withoutOverlapping(60)：若 process 存活中，新觸發直接跳過；異常中斷後最多 60 分鐘內重啟
+// runInBackground：避免長時間 loop 阻塞 scheduler，導致同分鐘的其他排程（如隔日沖出場監控）被卡住
 Schedule::command('stock:monitor-intraday')
     ->everyMinute()
     ->between('9:00', '13:30')
     ->weekdays()
     ->withoutOverlapping(60)
+    ->runInBackground()
     ->appendOutputTo($scheduleLog);
 
 // ---- 隔日沖選股流程（每個交易日執行）----
