@@ -23,9 +23,6 @@ class TelegramService
             return false;
         }
 
-        $hostname = 'msi';
-        $message = "[{$hostname}]\n" . $message;
-
         try {
             $response = Http::timeout(10)
                 ->post("https://api.telegram.org/bot{$this->token}/sendMessage", [
