@@ -2,65 +2,40 @@
 
 namespace App\Console\Commands;
 
+use App\Services\FugleRealtimeClient;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Http;
 
 class StockQuote extends Command
 {
     protected $signature = 'stock:quote {symbol} {cost?}';
     protected $description = '即時查詢個股報價與5分K走勢';
 
-    private string $apiKey;
+    public function __construct(private FugleRealtimeClient $fugle)
+    {
+        parent::__construct();
+    }
 
     public function handle(): int
     {
         $symbol = $this->argument('symbol');
         $cost   = $this->argument('cost') ? (float) $this->argument('cost') : null;
-        $this->apiKey = config('services.fugle.api_key', '');
-
-        if (!$this->apiKey) {
-            $this->error('FUGLE_API_KEY 未設定');
-            return self::FAILURE;
-        }
 
         // ── 抓取即時報價 ──
-        $quote = $this->fetchJson("/stock/intraday/quote/{$symbol}");
+        $quote = $this->fugle->fetchRawQuote($symbol);
         if (!$quote || empty($quote['symbol'])) {
             $this->error("無法取得 {$symbol} 報價");
             return self::FAILURE;
         }
 
         // ── 抓取 5 分 K ──
-        sleep(1); // Fugle rate limit
-        $candles = $this->fetchJson("/stock/intraday/candles/{$symbol}", ['timeframe' => '5']);
+        usleep(150000); // 同 FugleRealtimeClient REQUEST_DELAY
+        $candles = $this->fugle->fetchRawCandles($symbol);
 
         // ── 顯示 ──
         $this->displayQuote($quote, $cost);
         $this->displayCandles($candles, (float) ($quote['referencePrice'] ?? 0));
 
         return self::SUCCESS;
-    }
-
-    private function fetchJson(string $path, array $query = []): ?array
-    {
-        try {
-            $response = Http::timeout(10)
-                ->withHeaders(['X-API-KEY' => $this->apiKey])
-                ->get("https://api.fugle.tw/marketdata/v1.0{$path}", $query);
-
-            if ($response->status() === 429) {
-                $this->warn('Rate limit，5 秒後重試...');
-                sleep(5);
-                $response = Http::timeout(10)
-                    ->withHeaders(['X-API-KEY' => $this->apiKey])
-                    ->get("https://api.fugle.tw/marketdata/v1.0{$path}", $query);
-            }
-
-            return $response->successful() ? $response->json() : null;
-        } catch (\Exception $e) {
-            $this->error("API 錯誤: {$e->getMessage()}");
-            return null;
-        }
     }
 
     private function displayQuote(array $q, ?float $cost): void

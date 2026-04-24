@@ -5,18 +5,16 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\IntradaySnapshot;
 use App\Models\Stock;
+use App\Services\FugleRealtimeClient;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Http;
 
 class QuoteController extends Controller
 {
-    private string $apiKey;
-    private const API_BASE = 'https://api.fugle.tw/marketdata/v1.0';
     private const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
 
-    public function __construct()
+    public function __construct(private FugleRealtimeClient $fugle)
     {
-        $this->apiKey = config('services.fugle.api_key', '');
     }
 
     public function show(string $symbol): JsonResponse
@@ -30,7 +28,7 @@ class QuoteController extends Controller
 
         if ($dbQuote) {
             // DB 有資料，嘗試補抓 candles（graceful failure）
-            $dbQuote['candles'] = $this->fetchCandles($symbol);
+            $dbQuote['candles'] = $this->fetchCandlesForSymbol($symbol);
 
             return response()->json($dbQuote);
         }
@@ -91,26 +89,16 @@ class QuoteController extends Controller
      */
     private function fetchFromApi(string $symbol): JsonResponse
     {
-        $headers = ['X-API-KEY' => $this->apiKey];
+        $quote = $this->fugle->fetchRawQuote($symbol);
 
-        $quoteResp = Http::timeout(10)->withHeaders($headers)
-            ->get(self::API_BASE . "/stock/intraday/quote/{$symbol}");
-
-        if (!$quoteResp->successful()) {
-            return response()->json(['error' => '無法取得報價'], $quoteResp->status());
+        if (!$quote) {
+            return response()->json(['error' => '無法取得報價'], 502);
         }
-
-        $quote = $quoteResp->json();
         if (empty($quote['symbol'])) {
             return response()->json(['error' => '查無此代號'], 404);
         }
 
-        usleep(200000); // 200ms delay for rate limit
-
-        $candleResp = Http::timeout(10)->withHeaders($headers)
-            ->get(self::API_BASE . "/stock/intraday/candles/{$symbol}", ['timeframe' => '5']);
-
-        $candles = $candleResp->successful() ? ($candleResp->json()['data'] ?? []) : [];
+        $candles = $this->fugle->fetchCandles($symbol);
 
         $total     = $quote['total'] ?? [];
         $prevClose = (float) ($quote['referencePrice'] ?? 0);
@@ -134,43 +122,17 @@ class QuoteController extends Controller
             'bids'         => array_slice($quote['bids'] ?? [], 0, 5),
             'asks'         => array_slice($quote['asks'] ?? [], 0, 5),
             'is_close'     => $quote['isClose'] ?? false,
-            'candles'      => array_map(fn($c) => [
-                'time'   => substr($c['date'] ?? '', 11, 5),
-                'open'   => (float) $c['open'],
-                'high'   => (float) $c['high'],
-                'low'    => (float) $c['low'],
-                'close'  => (float) $c['close'],
-                'volume' => (int) $c['volume'],
-            ], $candles),
+            'candles'      => $candles,
             'source'       => 'api',
         ]);
     }
 
     /**
-     * 嘗試從 API 抓取 5 分 K（失敗回空陣列）
+     * 嘗試抓取 5 分 K（失敗回空陣列）
      */
-    private function fetchCandles(string $symbol): array
+    private function fetchCandlesForSymbol(string $symbol): array
     {
-        try {
-            $resp = Http::timeout(10)
-                ->withHeaders(['X-API-KEY' => $this->apiKey])
-                ->get(self::API_BASE . "/stock/intraday/candles/{$symbol}", ['timeframe' => '5']);
-
-            if (!$resp->successful()) {
-                return [];
-            }
-
-            return array_map(fn($c) => [
-                'time'   => substr($c['date'] ?? '', 11, 5),
-                'open'   => (float) $c['open'],
-                'high'   => (float) $c['high'],
-                'low'    => (float) $c['low'],
-                'close'  => (float) $c['close'],
-                'volume' => (int) $c['volume'],
-            ], $resp->json()['data'] ?? []);
-        } catch (\Exception $e) {
-            return [];
-        }
+        return $this->fugle->fetchCandles($symbol);
     }
 
 
@@ -335,7 +297,7 @@ PROMPT;
         $changePct = $prevClose > 0 ? round(($close - $prevClose) / $prevClose * 100, 2) : 0;
 
         // 嘗試抓 candles
-        $candles = $this->fetchCandles($symbol);
+        $candles = $this->fetchCandlesForSymbol($symbol);
         $recentCandles = array_slice($candles, -12);
         $candleLines = array_map(function ($c) use ($prevClose) {
             $pct = $prevClose > 0 ? round(($c['close'] - $prevClose) / $prevClose * 100, 2) : 0;
@@ -367,20 +329,12 @@ PROMPT;
      */
     private function getAnalyzeDataFromApi(string $symbol): ?array
     {
-        $headers = ['X-API-KEY' => $this->apiKey];
-
-        $quoteResp = Http::timeout(10)->withHeaders($headers)
-            ->get(self::API_BASE . "/stock/intraday/quote/{$symbol}");
-        if (!$quoteResp->successful() || empty($quoteResp->json('symbol'))) {
+        $quote = $this->fugle->fetchRawQuote($symbol);
+        if (!$quote || empty($quote['symbol'])) {
             return null;
         }
-        $quote = $quoteResp->json();
 
-        usleep(200000);
-
-        $candleResp = Http::timeout(10)->withHeaders($headers)
-            ->get(self::API_BASE . "/stock/intraday/candles/{$symbol}", ['timeframe' => '5']);
-        $candles = $candleResp->successful() ? ($candleResp->json()['data'] ?? []) : [];
+        $candles = $this->fugle->fetchCandles($symbol);
 
         $total     = $quote['total'] ?? [];
         $prevClose = (float) ($quote['referencePrice'] ?? 0);
@@ -392,9 +346,8 @@ PROMPT;
 
         $recentCandles = array_slice($candles, -12);
         $candleLines = array_map(function ($c) use ($prevClose) {
-            $t = substr($c['date'] ?? '', 11, 5);
-            $pct = $prevClose > 0 ? round(((float)$c['close'] - $prevClose) / $prevClose * 100, 2) : 0;
-            return "{$t} O:{$c['open']} H:{$c['high']} L:{$c['low']} C:{$c['close']} V:{$c['volume']} ({$pct}%)";
+            $pct = $prevClose > 0 ? round(($c['close'] - $prevClose) / $prevClose * 100, 2) : 0;
+            return "{$c['time']} O:{$c['open']} H:{$c['high']} L:{$c['low']} C:{$c['close']} V:{$c['volume']} ({$pct}%)";
         }, $recentCandles);
 
         $bids = array_slice($quote['bids'] ?? [], 0, 5);

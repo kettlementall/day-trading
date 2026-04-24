@@ -8,8 +8,12 @@ use Illuminate\Support\Facades\Log;
 
 class FugleRealtimeClient
 {
-    private const API_BASE    = 'https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote';
-    private const REQUEST_DELAY_US = 150000; // 150ms，避免超過 rate limit
+    private const API_BASE       = 'https://api.fugle.tw/marketdata/v1.0';
+    private const QUOTE_PATH     = '/stock/intraday/quote';
+    private const CANDLES_PATH   = '/stock/intraday/candles';
+    private const REQUEST_DELAY_US = 150000;  // 150ms，避免超過 rate limit
+    private const MAX_429_RETRIES  = 3;       // 429 backoff 最大重試次數
+    private const BACKOFF_BASE_US  = 500000;  // 500ms，每次 ×2（500ms → 1s → 2s）
 
     /** @var string[] 可用的 API key 清單 */
     private array $apiKeys = [];
@@ -76,24 +80,69 @@ class FugleRealtimeClient
     }
 
     /**
-     * 單檔報價抓取（429 自動換 key 重試一次）
+     * 帶 429 backoff retry 的 HTTP GET（所有 Fugle 請求的統一入口）
+     *
+     * 策略：429 → 先嘗試 rotate key 重試 → 仍 429 則 exponential backoff（最多 MAX_429_RETRIES 次）
      */
-    private function fetchSingleQuote(string $symbol): ?array
+    private function requestWithRetry(string $url, array $query = [], string $label = ''): ?\Illuminate\Http\Client\Response
     {
+        if (empty($this->apiKeys)) {
+            return null;
+        }
+
         $response = Http::timeout(10)
             ->withHeaders(['X-API-KEY' => $this->currentKey()])
-            ->get(self::API_BASE . '/' . $symbol);
+            ->get($url, $query);
 
-        // 429 rate limit → 嘗試換 key 重試
-        if ($response->status() === 429 && $this->rotateKey()) {
+        if ($response->status() !== 429) {
+            return $response;
+        }
+
+        // 第一次 429：嘗試換 key
+        if ($this->rotateKey()) {
             usleep(self::REQUEST_DELAY_US);
             $response = Http::timeout(10)
                 ->withHeaders(['X-API-KEY' => $this->currentKey()])
-                ->get(self::API_BASE . '/' . $symbol);
+                ->get($url, $query);
+
+            if ($response->status() !== 429) {
+                return $response;
+            }
         }
 
-        if (!$response->successful()) {
-            Log::warning("Fugle [{$symbol}] HTTP {$response->status()}: " . $response->body());
+        // 兩把 key 都 429：exponential backoff
+        for ($i = 0; $i < self::MAX_429_RETRIES; $i++) {
+            $sleepUs = self::BACKOFF_BASE_US * (2 ** $i); // 500ms, 1s, 2s
+            Log::info("Fugle [{$label}] 429 backoff retry #{$i}, sleep " . ($sleepUs / 1_000_000) . 's');
+            usleep($sleepUs);
+
+            // 交替嘗試兩把 key
+            $this->currentKeyIndex = $i % count($this->apiKeys);
+
+            $response = Http::timeout(10)
+                ->withHeaders(['X-API-KEY' => $this->currentKey()])
+                ->get($url, $query);
+
+            if ($response->status() !== 429) {
+                return $response;
+            }
+        }
+
+        return $response; // 最後一次的 response（仍是 429）
+    }
+
+    /**
+     * 單檔報價抓取（parsed）
+     */
+    private function fetchSingleQuote(string $symbol): ?array
+    {
+        $response = $this->requestWithRetry(
+            self::API_BASE . self::QUOTE_PATH . '/' . $symbol,
+            label: $symbol,
+        );
+
+        if (!$response || !$response->successful()) {
+            Log::warning("Fugle [{$symbol}] HTTP " . ($response?->status() ?? 'null') . ': ' . ($response?->body() ?? ''));
             return null;
         }
 
@@ -101,32 +150,39 @@ class FugleRealtimeClient
     }
 
     /**
-     * 抓取單檔 5 分 K 線（429 自動換 key 重試）
+     * 單檔報價抓取（原始 Fugle JSON，含 bids/asks/transaction 等完整欄位）
+     */
+    public function fetchRawQuote(string $symbol): ?array
+    {
+        $response = $this->requestWithRetry(
+            self::API_BASE . self::QUOTE_PATH . '/' . $symbol,
+            label: $symbol,
+        );
+
+        if (!$response || !$response->successful()) {
+            Log::warning("Fugle [{$symbol}] HTTP " . ($response?->status() ?? 'null') . ': ' . ($response?->body() ?? ''));
+            return null;
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * 抓取單檔 5 分 K 線（parsed）
      *
      * @return array[] 每筆含 time, open, high, low, close, volume
      */
     public function fetchCandles(string $symbol, int $timeframe = 5): array
     {
-        if (empty($this->apiKeys)) {
-            return [];
-        }
-
         try {
-            $url = 'https://api.fugle.tw/marketdata/v1.0/stock/intraday/candles/' . $symbol;
+            $response = $this->requestWithRetry(
+                self::API_BASE . self::CANDLES_PATH . '/' . $symbol,
+                ['timeframe' => $timeframe],
+                label: "{$symbol}/candles",
+            );
 
-            $response = Http::timeout(10)
-                ->withHeaders(['X-API-KEY' => $this->currentKey()])
-                ->get($url, ['timeframe' => $timeframe]);
-
-            if ($response->status() === 429 && $this->rotateKey()) {
-                usleep(self::REQUEST_DELAY_US);
-                $response = Http::timeout(10)
-                    ->withHeaders(['X-API-KEY' => $this->currentKey()])
-                    ->get($url, ['timeframe' => $timeframe]);
-            }
-
-            if (!$response->successful()) {
-                Log::warning("Fugle candles [{$symbol}] HTTP {$response->status()}");
+            if (!$response || !$response->successful()) {
+                Log::warning("Fugle candles [{$symbol}] HTTP " . ($response?->status() ?? 'null'));
                 return [];
             }
 
@@ -143,6 +199,29 @@ class FugleRealtimeClient
         } catch (\Exception $e) {
             Log::error("Fugle candles [{$symbol}]: " . $e->getMessage());
             return [];
+        }
+    }
+
+    /**
+     * 抓取單檔 5 分 K 線（原始 Fugle JSON）
+     */
+    public function fetchRawCandles(string $symbol, int $timeframe = 5): ?array
+    {
+        try {
+            $response = $this->requestWithRetry(
+                self::API_BASE . self::CANDLES_PATH . '/' . $symbol,
+                ['timeframe' => $timeframe],
+                label: "{$symbol}/candles",
+            );
+
+            if (!$response || !$response->successful()) {
+                return null;
+            }
+
+            return $response->json();
+        } catch (\Exception $e) {
+            Log::error("Fugle raw candles [{$symbol}]: " . $e->getMessage());
+            return null;
         }
     }
 
