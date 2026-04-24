@@ -332,7 +332,7 @@ API 不可用時，全部標記 `haiku_selected=true`，讓 Opus 自行判斷。
 
 - 每檔標的各自呼叫一次 Opus API
 - System prompt 快取（市場背景、新聞、教訓、任務說明）所有檔共用
-- Per-stock user message 包含完整資料（5日K線、5日法人、5日融資、個股特定新聞）
+- Per-stock user message 包含完整資料（10日K線、5日法人、5日融資融券、個股相關新聞）
 
 #### AI 決策資訊
 
@@ -342,7 +342,8 @@ API 不可用時，全部標記 `haiku_selected=true`，讓 Opus 自行判斷。
 | 近 5 日 K 線 | `daily_quotes` | 開高低收量、漲跌%、振幅% |
 | 近 5 日三大法人 | `institutional_trades` | 外資/投信/自營淨買賣張數 |
 | 近 5 日融資融券 | `margin_trades` | 融資增減/餘額、融券增減/餘額 |
-| 近期新聞標題 | `news_articles` | 近 2 日有產業標籤的新聞 |
+| 個股相關新聞 | `news_articles` | 近 3 日依產業/股名/代號配對的新聞（含情緒標籤） |
+| 近期新聞標題 | `news_articles` | system prompt 中近 2 日有產業標籤的新聞 |
 | 消息面指數 | `news_indices` | 整體情緒/恐慌/熱度 + 各產業情緒 |
 | 國際市場收盤 | `us_market_indices` | 台指期夜盤（最高權重）+ 美股五大指數 |
 | AI 歷史教訓 | `ai_lessons` | 近期選股教訓回饋 |

@@ -275,6 +275,23 @@ SYSTEM;
         )->implode("\n");
         $marginSection = $marginLines ?: '（無融資券資料）';
 
+        // 個股相關新聞（近 3 日，依類股 + 股票名稱/代號）
+        $stockNews = NewsArticle::where('fetched_date', '>=', now()->subDays(3)->toDateString())
+            ->where(fn($q) =>
+                $q->where('industry', $stock->industry)
+                  ->orWhere('title', 'like', "%{$stock->name}%")
+                  ->orWhere('title', 'like', "%{$stock->symbol}%")
+            )
+            ->orderByDesc('published_at')
+            ->limit($short ? 3 : 5)
+            ->get();
+        $stockNewsLines = $stockNews->map(fn($n) =>
+            '- [' . \Carbon\Carbon::parse($n->published_at)->format('m/d') . '] ' .
+            $n->title .
+            ($n->sentiment_label ? "（{$n->sentiment_label}）" : '')
+        )->implode("\n");
+        $stockNewsSection = $stockNewsLines ?: '（近期無相關新聞）';
+
         return <<<MSG
 ## 待評估標的：{$stock->symbol} {$stock->name}（{$stock->industry}）
 
@@ -290,6 +307,9 @@ Haiku 信度：{$candidate->score}　Haiku 理由：{$candidate->haiku_reasoning
 
 ### 近 5 日融資融券
 {$marginSection}
+
+### 個股相關新聞
+{$stockNewsSection}
 
 請依上述資料及市場背景，回覆此標的的 JSON 評估結果。
 MSG;
