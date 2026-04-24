@@ -245,40 +245,57 @@ SYSTEM;
 
     private function callApi(string $systemPrompt, string $userMessage): array
     {
-        $response = Http::timeout(90)
-            ->withHeaders([
-                'x-api-key'         => $this->apiKey,
-                'anthropic-version' => '2023-06-01',
-                'anthropic-beta'    => 'prompt-caching-2024-07-31',
-                'content-type'      => 'application/json',
-            ])
-            ->post('https://api.anthropic.com/v1/messages', [
-                'model'      => $this->model,
-                'max_tokens' => 4096,
-                'system'     => [
-                    [
-                        'type'          => 'text',
-                        'text'          => $systemPrompt,
-                        'cache_control' => ['type' => 'ephemeral'],
-                    ],
-                ],
-                'messages' => [
-                    ['role' => 'user', 'content' => $userMessage],
-                ],
-            ]);
+        $maxRetries = 2;
+        $lastException = null;
 
-        if (!$response->successful()) {
-            throw new \RuntimeException('Haiku API ' . $response->status() . ': ' . $response->body());
+        for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
+            if ($attempt > 0) {
+                $sleepSec = $attempt * 2; // 2s, 4s
+                Log::warning("HaikuPreFilterService: 重試第 {$attempt} 次（{$sleepSec}s 後）");
+                sleep($sleepSec);
+            }
+
+            try {
+                $response = Http::timeout(90)
+                    ->withHeaders([
+                        'x-api-key'         => $this->apiKey,
+                        'anthropic-version' => '2023-06-01',
+                        'anthropic-beta'    => 'prompt-caching-2024-07-31',
+                        'content-type'      => 'application/json',
+                    ])
+                    ->post('https://api.anthropic.com/v1/messages', [
+                        'model'      => $this->model,
+                        'max_tokens' => 4096,
+                        'system'     => [
+                            [
+                                'type'          => 'text',
+                                'text'          => $systemPrompt,
+                                'cache_control' => ['type' => 'ephemeral'],
+                            ],
+                        ],
+                        'messages' => [
+                            ['role' => 'user', 'content' => $userMessage],
+                        ],
+                    ]);
+
+                if (!$response->successful()) {
+                    throw new \RuntimeException('Haiku API ' . $response->status() . ': ' . $response->body());
+                }
+
+                $text   = $response->json('content.0.text', '');
+                $parsed = $this->parseBatchResponse($text);
+
+                if ($parsed === null) {
+                    throw new \RuntimeException('無法解析 Haiku 批次回應：' . mb_substr($text, 0, 300));
+                }
+
+                return $parsed;
+            } catch (\Exception $e) {
+                $lastException = $e;
+            }
         }
 
-        $text   = $response->json('content.0.text', '');
-        $parsed = $this->parseBatchResponse($text);
-
-        if ($parsed === null) {
-            throw new \RuntimeException('無法解析 Haiku 批次回應：' . mb_substr($text, 0, 300));
-        }
-
-        return $parsed;
+        throw $lastException;
     }
 
     private function parseBatchResponse(string $text): ?array
