@@ -454,11 +454,33 @@ class MonitorService
             return;
         }
 
+        // A/B 級 WATCHING：AI 建議 entry + 策略切換 → 更新策略，下次 tick 用新條件判定
+        if ($action === 'entry'
+            && $monitor->status === CandidateMonitor::STATUS_WATCHING
+            && in_array($candidate->morning_grade, ['A', 'B'])
+        ) {
+            $newStrategy = $advice['strategy'] ?? null;
+            $validStrategies = ['breakout_fresh', 'breakout_retest', 'gap_pullback', 'bounce', 'momentum'];
+            if ($newStrategy && in_array($newStrategy, $validStrategies) && $newStrategy !== $candidate->intraday_strategy) {
+                $oldStrategy = $candidate->intraday_strategy;
+                $candidate->update(['intraday_strategy' => $newStrategy]);
+                $this->applyAdjustments($monitor, $advice);
+                $stock = $candidate->stock;
+                Log::info("MonitorService: {$stock->symbol} AI 策略切換 {$oldStrategy} → {$newStrategy}");
+                $this->telegram->send(sprintf(
+                    "[當沖策略切換] %s %s %s → %s | %s",
+                    $stock->symbol, $stock->name, $oldStrategy, $newStrategy, $notes
+                ));
+                $monitor->save();
+                return;
+            }
+        }
+
         match ($action) {
             'exit' => $this->exitByAiAdvice($monitor, $notes),
             'skip' => $this->skipByAiAdvice($monitor, $notes),
             'hold' => $this->applyAdjustments($monitor, $advice),
-            'entry' => null, // 非 C 升格的 entry：由規則式處理，這裡只記錄
+            'entry' => null, // 無策略切換的 entry：由規則式處理，這裡只記錄
             default => null,
         };
 

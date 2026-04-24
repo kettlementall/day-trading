@@ -546,6 +546,14 @@ TASK;
 1. 當前走勢是否已達或即將達到進場條件？（建議 entry / hold / skip）
 2. 支撐位或壓力位是否需根據今日盤中走勢調整？（在 adjustments 中提供 support / resistance）
 3. 日K趨勢是否支持當前操作方向？
+4. **策略切換**：若原策略條件明顯不適合當前盤勢（例如 gap_pullback 但價格持續上攻不回測），
+   你可以在回覆中加入 "strategy" 欄位建議切換策略。可用策略：
+   - breakout_fresh：突破壓力位追多
+   - breakout_retest：突破後回測確認進場
+   - gap_pullback：跳空後回拉至支撐進場
+   - bounce：觸及支撐反彈進場
+   - momentum：動能追多（接近或突破壓力即進場）
+   同時請在 adjustments 中更新對應的 support/resistance。
 TASK;
         }
 
@@ -576,6 +584,7 @@ TASK;
 {
   "action": "hold",
   "notes": "量能從 2.1x 降至 1.6x，支撐有效，繼續持有",
+  "strategy": null,
   "adjustments": {
     "target": null,
     "stop": null,
@@ -583,6 +592,7 @@ TASK;
     "resistance": null
   }
 }
+strategy 欄位僅在觀望中且需要切換策略時填寫，其餘情況為 null。
 MSG;
     }
 
