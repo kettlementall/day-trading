@@ -203,6 +203,46 @@ class FugleRealtimeClient
     }
 
     /**
+     * 抓取歷史日 K 線（Fugle Historical Candles API）
+     *
+     * @return array [['date'=>'2026-04-24','open'=>...,'high'=>...,'low'=>...,'close'=>...,'volume'=>...], ...]
+     */
+    public function fetchDailyCandles(string $symbol, int $days = 5): array
+    {
+        try {
+            $from = now()->subDays($days * 2)->format('Y-m-d'); // 多抓以應對假日
+            $response = $this->requestWithRetry(
+                self::API_BASE . '/stock/historical/candles/' . $symbol,
+                ['from' => $from, 'fields' => 'open,high,low,close,volume,change'],
+                label: "{$symbol}/historical",
+            );
+
+            if (!$response || !$response->successful()) {
+                Log::warning("Fugle historical [{$symbol}] HTTP " . ($response?->status() ?? 'null'));
+                return [];
+            }
+
+            $data = $response->json()['data'] ?? [];
+
+            // API 回傳由新到舊，取最近 N 筆
+            return array_slice(array_map(fn($c) => [
+                'date'           => $c['date'] ?? '',
+                'open'           => (float) ($c['open'] ?? 0),
+                'high'           => (float) ($c['high'] ?? 0),
+                'low'            => (float) ($c['low'] ?? 0),
+                'close'          => (float) ($c['close'] ?? 0),
+                'volume'         => (int) ($c['volume'] ?? 0),
+                'change_percent' => isset($c['change']) && isset($c['close']) && $c['close'] > 0
+                    ? round(($c['change']) / ($c['close'] - $c['change']) * 100, 2)
+                    : 0,
+            ], $data), 0, $days);
+        } catch (\Exception $e) {
+            Log::error("Fugle historical [{$symbol}]: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
      * 抓取單檔 5 分 K 線（原始 Fugle JSON）
      */
     public function fetchRawCandles(string $symbol, int $timeframe = 5): ?array

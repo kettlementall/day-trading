@@ -18,6 +18,21 @@
       <el-button type="primary" :loading="loading" @click="fetchQuote">查詢</el-button>
     </div>
 
+    <!-- 查詢紀錄 -->
+    <div class="history-tags" v-if="searchHistory.length">
+      <el-tag
+        v-for="item in searchHistory"
+        :key="item.symbol"
+        size="small"
+        class="history-tag"
+        closable
+        @click="quickSearch(item.symbol)"
+        @close="removeHistory(item.symbol)"
+      >
+        {{ item.symbol }} {{ item.name }}
+      </el-tag>
+    </div>
+
     <!-- 報價卡片 -->
     <template v-if="quote">
       <div class="quote-card">
@@ -111,34 +126,58 @@
           <el-button type="warning" :loading="analyzing" @click="doAnalyze">AI 分析</el-button>
         </div>
         <div v-if="aiResult" class="ai-result">
-          <div class="ai-action" :class="aiActionClass">
-            <span class="ai-action-label">{{ aiResult.action }}</span>
+          <div class="ai-pnl-row">
             <span class="ai-pnl" :class="aiResult.pnl_pct >= 0 ? 'up' : 'down'">
               帳面 {{ aiResult.pnl_pct >= 0 ? '+' : '' }}{{ aiResult.pnl_pct }}%
             </span>
           </div>
-          <div class="ai-levels" v-if="aiResult.stop_profit || aiResult.stop_loss">
-            <span v-if="aiResult.stop_profit" class="ai-level up">停利 {{ aiResult.stop_profit }}</span>
-            <span v-if="aiResult.stop_loss" class="ai-level down">停損 {{ aiResult.stop_loss }}</span>
+          <div class="ai-dual">
+            <div class="ai-dual-block">
+              <div class="ai-action" :class="actionClass(aiResult.short?.action)">
+                <span class="ai-action-label">短線 {{ aiResult.short?.action }}</span>
+              </div>
+              <div class="ai-levels" v-if="aiResult.short?.stop_profit || aiResult.short?.stop_loss">
+                <span v-if="aiResult.short?.stop_profit" class="ai-level up">停利 {{ aiResult.short.stop_profit }}</span>
+                <span v-if="aiResult.short?.stop_loss" class="ai-level down">停損 {{ aiResult.short.stop_loss }}</span>
+              </div>
+              <div class="ai-note">* 今日收盤前結束</div>
+              <div class="ai-text">{{ aiResult.short?.analysis }}</div>
+            </div>
+            <div class="ai-dual-block">
+              <div class="ai-action" :class="actionClass(aiResult.long?.action)">
+                <span class="ai-action-label">波段 {{ aiResult.long?.action }}</span>
+              </div>
+              <div class="ai-levels" v-if="aiResult.long?.stop_profit || aiResult.long?.stop_loss">
+                <span v-if="aiResult.long?.stop_profit" class="ai-level up">停利 {{ aiResult.long.stop_profit }}</span>
+                <span v-if="aiResult.long?.stop_loss" class="ai-level down">停損 {{ aiResult.long.stop_loss }}</span>
+              </div>
+              <div class="ai-note">* 可持有數天到數週</div>
+              <div class="ai-text">{{ aiResult.long?.analysis }}</div>
+            </div>
           </div>
-          <div class="ai-text">{{ cleanAnalysis }}</div>
         </div>
       </div>
 
-      <!-- 5分K 圖表 -->
-      <div class="quote-card" v-if="quote.candles?.length">
-        <h3>5 分 K 走勢</h3>
+      <!-- K 線圖表 -->
+      <div class="quote-card" v-if="quote.candles?.length || quote.daily_candles?.length">
+        <div class="chart-header">
+          <h3>{{ chartMode === 'intraday' ? '5 分 K 走勢' : '日 K 走勢' }}</h3>
+          <el-radio-group v-model="chartMode" size="small">
+            <el-radio-button value="intraday">5分K</el-radio-button>
+            <el-radio-button value="daily" :disabled="!quote.daily_candles?.length">日K</el-radio-button>
+          </el-radio-group>
+        </div>
         <v-chart :option="chartOption" autoresize style="height: 360px" />
       </div>
 
-      <!-- 5分K 表格 -->
-      <div class="quote-card" v-if="quote.candles?.length">
-        <h3>5 分 K 明細</h3>
+      <!-- K 線表格 -->
+      <div class="quote-card" v-if="activeCandles?.length">
+        <h3>{{ chartMode === 'intraday' ? '5 分 K 明細' : '日 K 明細' }}</h3>
         <div class="candle-table-wrap">
           <table class="candle-table">
             <thead>
               <tr>
-                <th>時間</th>
+                <th>{{ chartMode === 'intraday' ? '時間' : '日期' }}</th>
                 <th>開</th>
                 <th>高</th>
                 <th>低</th>
@@ -148,8 +187,8 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="c in quote.candles" :key="c.time">
-                <td>{{ c.time }}</td>
+              <tr v-for="c in activeCandles" :key="c.time || c.date">
+                <td>{{ c.time || c.date }}</td>
                 <td>{{ c.open.toFixed(2) }}</td>
                 <td>{{ c.high.toFixed(2) }}</td>
                 <td>{{ c.low.toFixed(2) }}</td>
@@ -195,7 +234,35 @@ const searched = ref(false)
 const costInput = ref('')
 const analyzing = ref(false)
 const aiResult = ref(null)
+const chartMode = ref('intraday')
+
+const activeCandles = computed(() => {
+  if (!quote.value) return []
+  return chartMode.value === 'daily' ? (quote.value.daily_candles || []) : (quote.value.candles || [])
+})
 const rateLimited = ref(false)
+
+const HISTORY_KEY = 'quote_search_history'
+const MAX_HISTORY = 10
+const searchHistory = ref(JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'))
+
+function saveHistory(symbol, name) {
+  const list = searchHistory.value.filter(h => h.symbol !== symbol)
+  list.unshift({ symbol, name: name || '' })
+  if (list.length > MAX_HISTORY) list.length = MAX_HISTORY
+  searchHistory.value = list
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(list))
+}
+
+function removeHistory(symbol) {
+  searchHistory.value = searchHistory.value.filter(h => h.symbol !== symbol)
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(searchHistory.value))
+}
+
+function quickSearch(symbol) {
+  symbolInput.value = symbol
+  fetchQuote()
+}
 
 onMounted(() => {
   const sym = route.query.symbol
@@ -214,6 +281,7 @@ async function fetchQuote() {
   try {
     const { data } = await getQuote(sym)
     quote.value = data
+    if (data?.symbol) saveHistory(data.symbol, data.name)
   } catch (e) {
     quote.value = null
     if (e.response?.status === 429) rateLimited.value = true
@@ -237,22 +305,13 @@ async function doAnalyze() {
   }
 }
 
-const aiActionClass = computed(() => {
-  if (!aiResult.value) return ''
-  const a = aiResult.value.action
-  if (a === '續抱') return 'action-hold'
-  if (a === '止損') return 'action-stop'
+function actionClass(action) {
+  if (!action) return ''
+  if (action === '續抱' || action === '加碼') return 'action-hold'
+  if (action === '止損') return 'action-stop'
+  if (action === '減碼') return 'action-reduce'
   return 'action-wait'
-})
-
-const cleanAnalysis = computed(() => {
-  if (!aiResult.value?.analysis) return ''
-  // 移除第一行（建議|xxx）和最後一行（停利/停損）
-  return aiResult.value.analysis
-    .replace(/^建議\|\S+\n?/, '')
-    .replace(/停利[:：]?\s*[\d.]+\s*停損[:：]?\s*[\d.]+\s*$/, '')
-    .trim()
-})
+}
 
 const priceClass = computed(() => {
   if (!quote.value) return ''
@@ -274,9 +333,9 @@ function formatNumber(n) {
 }
 
 const chartOption = computed(() => {
-  if (!quote.value?.candles?.length) return {}
-  const candles = quote.value.candles
-  const times = candles.map(c => c.time)
+  const candles = activeCandles.value
+  if (!candles?.length) return {}
+  const times = candles.map(c => c.time || c.date)
   const ohlc = candles.map(c => [c.open, c.close, c.low, c.high])
   const volumes = candles.map(c => ({
     value: c.volume,
@@ -340,6 +399,10 @@ const chartOption = computed(() => {
   box-shadow: 0 1px 3px rgba(0,0,0,.08);
 }
 .quote-card h3 { margin: 0 0 10px; font-size: 14px; color: #606266; }
+.history-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.history-tag { cursor: pointer; }
+.chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.chart-header h3 { margin: 0; }
 
 /* header */
 .quote-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
@@ -372,10 +435,15 @@ const chartOption = computed(() => {
 /* AI section */
 .ai-input-row { display: flex; gap: 8px; margin-bottom: 10px; }
 .ai-result { background: #fafafa; border-radius: 8px; padding: 12px; }
+.ai-pnl-row { margin-bottom: 10px; }
+.ai-dual { display: flex; gap: 12px; }
+.ai-dual-block { flex: 1; background: #fff; border-radius: 6px; padding: 10px; border: 1px solid #eee; }
+.ai-note { font-size: 11px; color: #909399; margin-top: 6px; }
 .ai-action { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .ai-action-label { font-size: 18px; font-weight: 700; padding: 2px 12px; border-radius: 4px; color: #fff; }
 .action-hold .ai-action-label { background: #ef5350; }
 .action-stop .ai-action-label { background: #26a69a; }
+.action-reduce .ai-action-label { background: #ff9800; }
 .action-wait .ai-action-label { background: #e6a23c; }
 .ai-pnl { font-size: 15px; font-weight: 600; }
 .ai-levels { display: flex; gap: 16px; margin-bottom: 8px; }

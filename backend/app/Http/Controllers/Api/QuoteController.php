@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\DailyQuote;
 use App\Models\IntradaySnapshot;
 use App\Models\Stock;
 use App\Services\FugleRealtimeClient;
@@ -29,6 +30,7 @@ class QuoteController extends Controller
         if ($dbQuote) {
             // DB 有資料，嘗試補抓 candles（graceful failure）
             $dbQuote['candles'] = $this->fetchCandlesForSymbol($symbol);
+            $dbQuote['daily_candles'] = $this->getDailyCandles($symbol);
 
             return response()->json($dbQuote);
         }
@@ -122,8 +124,9 @@ class QuoteController extends Controller
             'bids'         => array_slice($quote['bids'] ?? [], 0, 5),
             'asks'         => array_slice($quote['asks'] ?? [], 0, 5),
             'is_close'     => $quote['isClose'] ?? false,
-            'candles'      => $candles,
-            'source'       => 'api',
+            'candles'        => $candles,
+            'daily_candles'  => $this->getDailyCandles($quote['symbol']),
+            'source'         => 'api',
         ]);
     }
 
@@ -137,8 +140,46 @@ class QuoteController extends Controller
 
 
     /**
+     * 取得近 30 日日 K（先查 DB，fallback Fugle）
+     */
+    private function getDailyCandles(string $symbol): array
+    {
+        $stock = Stock::where('symbol', $symbol)->first();
+        if ($stock) {
+            $quotes = DailyQuote::where('stock_id', $stock->id)
+                ->orderByDesc('date')
+                ->limit(30)
+                ->get()
+                ->reverse()
+                ->values();
+
+            if ($quotes->isNotEmpty()) {
+                return $quotes->map(fn($q) => [
+                    'date'   => \Carbon\Carbon::parse($q->date)->format('m/d'),
+                    'open'   => (float) $q->open,
+                    'high'   => (float) $q->high,
+                    'low'    => (float) $q->low,
+                    'close'  => (float) $q->close,
+                    'volume' => (int) round($q->volume / 1000),
+                ])->toArray();
+            }
+        }
+
+        // Fallback: Fugle Historical API
+        $fugleDaily = $this->fugle->fetchDailyCandles($symbol, 30);
+        return array_map(fn($c) => [
+            'date'   => \Carbon\Carbon::parse($c['date'])->format('m/d'),
+            'open'   => $c['open'],
+            'high'   => $c['high'],
+            'low'    => $c['low'],
+            'close'  => $c['close'],
+            'volume' => (int) round($c['volume'] / 1000),
+        ], $fugleDaily);
+    }
+
+    /**
      * POST /api/quote/{symbol}/analyze
-     * AI 持倉分析：根據即時報價 + 成本價，給出續抱/止損/觀望建議
+     * AI 持倉分析：同時給出短線（當日）與波段（數天）兩個建議
      */
     public function analyze(string $symbol): JsonResponse
     {
@@ -178,6 +219,52 @@ class QuoteController extends Controller
 
         $pnlPct = $cost > 0 ? round(($close - $cost) / $cost * 100, 2) : 0;
 
+        // 近 5 日日 K 線（先查 DB，無資料再 fallback Fugle API）
+        $dailyKLines = [];
+        $stock = Stock::where('symbol', $symbol)->first();
+        if ($stock) {
+            $dailyQuotes = DailyQuote::where('stock_id', $stock->id)
+                ->orderByDesc('date')
+                ->limit(5)
+                ->get()
+                ->reverse();
+
+            if ($dailyQuotes->isNotEmpty()) {
+                $dailyKLines = ['日期  開  高  低  收  量(張)  漲%'];
+                foreach ($dailyQuotes as $q) {
+                    $dailyKLines[] = implode('  ', [
+                        \Carbon\Carbon::parse($q->date)->format('m/d'),
+                        (float) $q->open,
+                        (float) $q->high,
+                        (float) $q->low,
+                        (float) $q->close,
+                        round($q->volume / 1000),
+                        ((float) $q->change_percent) . '%',
+                    ]);
+                }
+            }
+        }
+
+        // DB 無資料 → Fugle Historical API fallback
+        if (empty($dailyKLines)) {
+            $fugleDaily = $this->fugle->fetchDailyCandles($symbol, 5);
+            if (!empty($fugleDaily)) {
+                $dailyKLines = ['日期  開  高  低  收  量(張)  漲%'];
+                foreach ($fugleDaily as $c) {
+                    $dailyKLines[] = implode('  ', [
+                        \Carbon\Carbon::parse($c['date'])->format('m/d'),
+                        $c['open'],
+                        $c['high'],
+                        $c['low'],
+                        $c['close'],
+                        round($c['volume'] / 1000),
+                        $c['change_percent'] . '%',
+                    ]);
+                }
+            }
+        }
+        $dailyKSection = !empty($dailyKLines) ? implode("\n", $dailyKLines) : '（無日K資料）';
+
         $now = now()->timezone('Asia/Taipei');
         $currentTime = $now->format('H:i');
         $marketClose = '13:30';
@@ -195,29 +282,48 @@ class QuoteController extends Controller
             "---",
             implode("\n", $bidLines),
             "",
+            "近5日日K：",
+            $dailyKSection,
+            "",
             "近期5分K：",
             implode("\n", $candleLines),
         ]);
 
         $systemPrompt = <<<'PROMPT'
-你是一位台股短線交易顧問。根據用戶提供的即時報價數據，分析以下面向後給出持倉建議：
+你是一位台股交易顧問。根據用戶提供的即時報價與近期日K數據，同時從「短線」和「波段」兩個角度分析持倉，一次給出兩個建議。
 
-1. 開盤型態：開高/開低/平開，跳空幅度
-2. 量價關係：量能集中時段、價漲量增或價跌量縮
-3. 趨勢方向：從5分K判斷上升/下降/震盪
-4. 關鍵價位：日高/日低/開盤價作為支撐壓力
-5. 外盤比：>55%偏多、<45%偏空
-6. 時間壓力：根據距收盤剩餘時間調整策略。尾盤（<30分鐘）流動性降低、波動加大，應更積極決斷，避免建議「繼續觀察」；若已收盤則僅就收盤結果評估隔日策略
+## 分析面向
+1. 近期走勢脈絡：從近5日日K判斷多空趨勢（連漲/連跌/盤整），今日走勢在近期脈絡中的意義
+2. 開盤型態：開高/開低/平開，跳空幅度
+3. 量價關係：量能集中時段、價漲量增或價跌量縮，今日量能與近日對比
+4. 趨勢方向：從5分K判斷盤中上升/下降/震盪
+5. 關鍵價位：日高/日低/開盤價/近日高低點作為支撐壓力
+6. 外盤比：>55%偏多、<45%偏空
 
-最後根據成本價，明確給出以下其中一個建議：
-- 續抱：說明理由，給出建議停利價和停損價
-- 止損：說明理由，給出建議出場價
-- 觀望：說明需要觀察的條件（尾盤時段應盡量避免此建議）
+## 短線建議（今日收盤前必須結束）
+- 重點：盤中走勢、時間壓力（尾盤<30分鐘應積極決斷）；若已收盤則評估收盤結果
+- 動作：續抱 / 止損 / 觀望
 
-回覆格式（嚴格遵守）：
-第一行：建議|續抱 或 建議|止損 或 建議|觀望
-第二行起：分析內容（簡潔扼要，150字內）
-最後一行（如適用）：停利:{價格} 停損:{價格}
+## 波段建議（可持有數天到數週）
+- 重點：日K趨勢、量價結構、關鍵支撐壓力位
+- 動作：續抱 / 減碼 / 止損 / 加碼 / 觀望
+
+## 回覆格式（嚴格遵守 JSON，不要加 markdown 標記）
+{
+  "short": {
+    "action": "續抱|止損|觀望",
+    "analysis": "短線分析（100字內）",
+    "stop_profit": 123.0,
+    "stop_loss": 118.0
+  },
+  "long": {
+    "action": "續抱|減碼|止損|加碼|觀望",
+    "analysis": "波段分析（100字內）",
+    "stop_profit": 130.0,
+    "stop_loss": 115.0
+  }
+}
+stop_profit/stop_loss 不適用時填 null。
 PROMPT;
 
         $anthropicKey = config('services.anthropic.api_key', '');
@@ -244,30 +350,24 @@ PROMPT;
 
         $text = $aiResp->json('content.0.text') ?? '';
 
-        // 解析建議類型
-        $action = '觀望';
-        if (preg_match('/建議\|(\S+)/', $text, $m)) {
-            $action = $m[1];
-        }
+        // 清理 markdown 包裹（```json ... ```）
+        $cleanText = preg_replace('/^```(?:json)?\s*\n?/i', '', trim($text));
+        $cleanText = preg_replace('/\n?```\s*$/', '', $cleanText);
 
-        // 解析停利停損
-        $stopProfit = null;
-        $stopLoss   = null;
-        if (preg_match('/停利[:：]?\s*([\d.]+)/', $text, $m)) {
-            $stopProfit = (float) $m[1];
-        }
-        if (preg_match('/停損[:：]?\s*([\d.]+)/', $text, $m)) {
-            $stopLoss = (float) $m[1];
-        }
+        // 解析 JSON 回應
+        $parsed = json_decode($cleanText, true);
+
+        $short = $parsed['short'] ?? null;
+        $long  = $parsed['long'] ?? null;
+
+        $fallback = ['action' => '觀望', 'analysis' => '無法解析 AI 回應', 'stop_profit' => null, 'stop_loss' => null];
 
         return response()->json([
-            'action'      => $action,
-            'analysis'    => $text,
-            'pnl_pct'     => $pnlPct,
-            'stop_profit' => $stopProfit,
-            'stop_loss'   => $stopLoss,
-            'current'     => $close,
-            'cost'        => $cost,
+            'short'   => $short ?: $fallback,
+            'long'    => $long ?: $fallback,
+            'pnl_pct' => $pnlPct,
+            'current' => $close,
+            'cost'    => $cost,
         ]);
     }
 
