@@ -19,11 +19,18 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="Telegram" width="130">
+      <el-table-column label="Telegram" min-width="160">
         <template #default="{ row }">
-          <span v-if="row.telegram_chat_id" style="font-size: 12px; color: #409eff">
-            {{ row.telegram_chat_id }}
-          </span>
+          <div v-if="row.telegram_chat_id" style="display: flex; align-items: center; gap: 6px">
+            <span style="font-size: 12px; color: #409eff">{{ row.telegram_chat_id }}</span>
+            <el-button
+              size="small"
+              :icon="ChatDotRound"
+              :loading="testingId === row.id"
+              @click="testTelegram(row)"
+              circle
+            />
+          </div>
           <span v-else style="color: #c0c4cc">—</span>
         </template>
       </el-table-column>
@@ -115,10 +122,10 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, ChatDotRound } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { useAuthStore } from '../stores/auth'
-import { getUsers, createUser, updateUser, deleteUser } from '../api'
+import { getUsers, createUser, updateUser, deleteUser, testTelegramUser } from '../api'
 
 const authStore = useAuthStore()
 
@@ -212,6 +219,20 @@ async function handleSave() {
     ElMessage.error(msg)
   } finally {
     saving.value = false
+  }
+}
+
+const testingId = ref(null)
+
+async function testTelegram(user) {
+  testingId.value = user.id
+  try {
+    await testTelegramUser(user.id)
+    ElMessage.success('測試訊息已發送')
+  } catch {
+    ElMessage.error('發送失敗，請確認 Chat ID 是否正確')
+  } finally {
+    testingId.value = null
   }
 }
 

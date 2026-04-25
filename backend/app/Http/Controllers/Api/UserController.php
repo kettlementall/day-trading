@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\TelegramService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -90,5 +91,22 @@ class UserController extends Controller
         $user->delete();
 
         return response()->json(null, 204);
+    }
+
+    public function testTelegram(User $user): JsonResponse
+    {
+        if (!$user->telegram_chat_id) {
+            return response()->json(['message' => '該用戶未設定 Telegram Chat ID'], 422);
+        }
+
+        $role = $user->role === 'admin' ? '管理員' : '觀看者';
+        $ok = app(TelegramService::class)->sendTo(
+            $user->telegram_chat_id,
+            "🧪 *Telegram 通知測試*\n\n👤 {$user->name}（{$role}）\n✅ 連線正常，此 Chat ID 可接收通知"
+        );
+
+        return $ok
+            ? response()->json(['message' => '測試訊息已發送'])
+            : response()->json(['message' => '發送失敗，請確認 Chat ID 是否正確'], 422);
     }
 }

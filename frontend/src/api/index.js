@@ -142,6 +142,9 @@ export const updateUser = (id, data) =>
 export const deleteUser = (id) =>
   api.delete(`/users/${id}`)
 
+export const testTelegramUser = (id) =>
+  api.post(`/users/${id}/test-telegram`)
+
 // 即時報價
 export const searchQuote = (q) =>
   api.get('/quote/search', { params: { q } })

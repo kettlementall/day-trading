@@ -68,6 +68,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/users',             [UserController::class, 'store']);
         Route::put('/users/{user}',       [UserController::class, 'update']);
         Route::delete('/users/{user}',    [UserController::class, 'destroy']);
+        Route::post('/users/{user}/test-telegram', [UserController::class, 'testTelegram']);
 
         // 手動同步
         Route::post('/data-sync', [DataSyncController::class, 'sync']);
