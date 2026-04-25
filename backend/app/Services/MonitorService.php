@@ -296,14 +296,23 @@ class MonitorService
         $this->transition($monitor, CandidateMonitor::STATUS_HOLDING, '進場確認');
 
         $this->telegram->send(sprintf(
-            "[當沖進場] %s %s %.2f | 量 %.1fx | 外盤 %.0f%% | 目標 %.2f / 停損 %.2f",
+            "🚨🚨🚨 *當沖進場* 🚨🚨🚨\n\n"
+            . "📌 *%s %s*\n"
+            . "💰 進場價：*%.2f*\n"
+            . "🎯 目標：*%.2f*（%+.1f%%）\n"
+            . "🛑 停損：*%.2f*（%+.1f%%）\n"
+            . "📊 量比：%.1fx ｜ 外盤：%.0f%%\n"
+            . "⏰ %s",
             $stock->symbol,
             $stock->name,
             $entryPrice,
+            $targetPrice,
+            ($targetPrice - $entryPrice) / $entryPrice * 100,
+            $stopPrice,
+            ($stopPrice - $entryPrice) / $entryPrice * 100,
             $latest->estimated_volume_ratio,
             $latest->external_ratio,
-            $targetPrice,
-            $stopPrice
+            now()->format('H:i')
         ));
     }
 
@@ -515,22 +524,37 @@ class MonitorService
 
         $stock = $monitor->candidate->stock;
         $sign = $profitPct >= 0 ? '+' : '';
+
+        $emoji = match ($exitStatus) {
+            'target_hit'    => '✅✅✅',
+            'stop_hit'      => '❌❌❌',
+            'trailing_stop' => '🟡🟡🟡',
+            'closed'        => '🔔',
+            default         => '📤',
+        };
         $tag = match ($exitStatus) {
-            'target_hit' => '當沖達標',
-            'stop_hit' => '當沖停損',
+            'target_hit'    => '當沖達標',
+            'stop_hit'      => '當沖停損',
             'trailing_stop' => '當沖停利',
-            'closed' => '當沖收盤',
-            default => '當沖出場',
+            'closed'        => '當沖收盤',
+            default         => '當沖出場',
         };
 
         $this->telegram->send(sprintf(
-            "[%s] %s %s %s%.1f%% @ %.2f | 持有 %dmin",
+            "%s *%s* %s\n\n"
+            . "📌 *%s %s*\n"
+            . "💰 進場：*%.2f* → 出場：*%.2f*\n"
+            . "📈 損益：*%s%.1f%%*\n"
+            . "⏱ 持有 %d 分鐘",
+            $emoji,
             $tag,
+            $emoji,
             $stock->symbol,
             $stock->name,
+            $entryPrice,
+            $exitPrice,
             $sign,
             $profitPct,
-            $exitPrice,
             $holdingMin
         ));
     }

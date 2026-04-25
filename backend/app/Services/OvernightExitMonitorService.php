@@ -90,9 +90,16 @@ class OvernightExitMonitorService
                     "{$slot} 盤中最高 {$high} 達到目標 {$currentTarget}");
                 $monitor->update(['exit_price' => $currentTarget, 'exit_time' => now()]);
                 $summary['target_hit']++;
+                $buyPrice = (float) $candidate->suggested_buy;
+                $profitPct = $buyPrice > 0 ? round(($currentTarget - $buyPrice) / $buyPrice * 100, 1) : 0;
                 $this->telegram->send(sprintf(
-                    "[隔日沖達標] %s %s 盤中高 %.2f 達目標 %.2f | %s",
-                    $symbol, $name, $high, $currentTarget, $slot
+                    "✅✅✅ *隔日沖達標* ✅✅✅\n\n"
+                    . "📌 *%s %s*\n"
+                    . "💰 買進：*%.2f* → 目標：*%.2f*\n"
+                    . "📈 損益：*+%.1f%%*\n"
+                    . "📊 盤中高 %.2f\n"
+                    . "⏰ %s",
+                    $symbol, $name, $buyPrice, $currentTarget, $profitPct, $high, $slot
                 ));
                 Log::info("OvernightExitMonitor [{$slot}] {$symbol}：目標達成（high={$high}）");
                 continue;
@@ -106,9 +113,16 @@ class OvernightExitMonitorService
                     "{$slot} 盤中最低 {$low} 觸及停損 {$currentStop}");
                 $monitor->update(['exit_price' => $exitPrice, 'exit_time' => now()]);
                 $summary['stop_hit']++;
+                $buyPrice = (float) $candidate->suggested_buy;
+                $profitPct = $buyPrice > 0 ? round(($exitPrice - $buyPrice) / $buyPrice * 100, 1) : 0;
                 $this->telegram->send(sprintf(
-                    "[隔日沖停損] %s %s 盤中低 %.2f 觸停損 %.2f｜出場 %.2f | %s",
-                    $symbol, $name, $low, $currentStop, $exitPrice, $slot
+                    "❌❌❌ *隔日沖停損* ❌❌❌\n\n"
+                    . "📌 *%s %s*\n"
+                    . "💰 買進：*%.2f* → 出場：*%.2f*\n"
+                    . "📈 損益：*%.1f%%*\n"
+                    . "📊 盤中低 %.2f｜停損 %.2f\n"
+                    . "⏰ %s",
+                    $symbol, $name, $buyPrice, $exitPrice, $profitPct, $low, $currentStop, $slot
                 ));
                 Log::info("OvernightExitMonitor [{$slot}] {$symbol}：停損觸發（low={$low}）");
                 continue;
@@ -169,9 +183,16 @@ class OvernightExitMonitorService
                 $this->transition($monitor, CandidateMonitor::STATUS_TARGET_HIT,
                     "即時偵測 {$timeStr} 盤中最高 {$high} 達到目標 {$currentTarget}");
                 $monitor->update(['exit_price' => $currentTarget, 'exit_time' => now()]);
+                $buyPrice = (float) $candidate->suggested_buy;
+                $profitPct = $buyPrice > 0 ? round(($currentTarget - $buyPrice) / $buyPrice * 100, 1) : 0;
                 $this->telegram->send(sprintf(
-                    "[隔日沖達標] %s %s 盤中高 %.2f 達目標 %.2f | 即時偵測 %s",
-                    $symbol, $name, $high, $currentTarget, $timeStr
+                    "✅✅✅ *隔日沖達標* ✅✅✅\n\n"
+                    . "📌 *%s %s*\n"
+                    . "💰 買進：*%.2f* → 目標：*%.2f*\n"
+                    . "📈 損益：*+%.1f%%*\n"
+                    . "📊 盤中高 %.2f\n"
+                    . "⏰ 即時偵測 %s",
+                    $symbol, $name, $buyPrice, $currentTarget, $profitPct, $high, $timeStr
                 ));
                 Log::info("OvernightPriceHit [{$timeStr}] {$symbol}：目標達成（high={$high}）");
                 $triggered++;
@@ -183,9 +204,16 @@ class OvernightExitMonitorService
                 $this->transition($monitor, CandidateMonitor::STATUS_STOP_HIT,
                     "即時偵測 {$timeStr} 盤中最低 {$low} 觸及停損 {$currentStop}");
                 $monitor->update(['exit_price' => $exitPrice, 'exit_time' => now()]);
+                $buyPrice = (float) $candidate->suggested_buy;
+                $profitPct = $buyPrice > 0 ? round(($exitPrice - $buyPrice) / $buyPrice * 100, 1) : 0;
                 $this->telegram->send(sprintf(
-                    "[隔日沖停損] %s %s 盤中低 %.2f 觸停損 %.2f｜出場 %.2f | 即時偵測 %s",
-                    $symbol, $name, $low, $currentStop, $exitPrice, $timeStr
+                    "❌❌❌ *隔日沖停損* ❌❌❌\n\n"
+                    . "📌 *%s %s*\n"
+                    . "💰 買進：*%.2f* → 出場：*%.2f*\n"
+                    . "📈 損益：*%.1f%%*\n"
+                    . "📊 盤中低 %.2f｜停損 %.2f\n"
+                    . "⏰ 即時偵測 %s",
+                    $symbol, $name, $buyPrice, $exitPrice, $profitPct, $low, $currentStop, $timeStr
                 ));
                 Log::info("OvernightPriceHit [{$timeStr}] {$symbol}：停損觸發（low={$low}）");
                 $triggered++;
@@ -212,7 +240,10 @@ class OvernightExitMonitorService
         $monitor->update(['exit_time' => now()]);
         $summary['exited']++;
         $this->telegram->send(sprintf(
-            "[隔日沖AI出場] %s %s | %s | %s",
+            "🔴🔴🔴 *隔日沖AI出場* 🔴🔴🔴\n\n"
+            . "📌 *%s %s*\n"
+            . "💡 %s\n"
+            . "⏰ %s",
             $symbol, $name, $advice['reasoning'], $slot
         ));
     }
@@ -247,8 +278,8 @@ class OvernightExitMonitorService
         if (!empty($advice['adjusted_target'])) $adjustParts[] = sprintf('目標→%.2f', $advice['adjusted_target']);
         if (!empty($advice['adjusted_stop']))   $adjustParts[] = sprintf('停損→%.2f', $advice['adjusted_stop']);
         $this->telegram->send(sprintf(
-            "[隔日沖AI調整] %s %s %s | %s | %s",
-            $symbol, $name, implode(' ', $adjustParts), $advice['reasoning'], $slot
+            "🟡 *隔日沖AI調整* %s %s\n\n%s\n💡 %s\n⏰ %s",
+            $symbol, $name, implode("\n", $adjustParts), $advice['reasoning'], $slot
         ));
     }
 
