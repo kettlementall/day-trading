@@ -7,6 +7,7 @@ use App\Models\CandidateMonitor;
 use App\Models\CandidateResult;
 use App\Models\DailyQuote;
 use App\Models\IntradaySnapshot;
+use App\Models\MarketHoliday;
 use Illuminate\Console\Command;
 
 class UpdateCandidateResults extends Command
@@ -17,6 +18,12 @@ class UpdateCandidateResults extends Command
     public function handle(): int
     {
         $date = $this->argument('date') ?? now()->format('Y-m-d');
+
+        // 排程執行時跳過休市日
+        if (!$this->argument('date') && MarketHoliday::isHoliday($date)) {
+            $this->info("{$date} 為休市日，跳過");
+            return self::SUCCESS;
+        }
 
         $candidates = Candidate::where('trade_date', $date)
             ->where('mode', 'intraday')

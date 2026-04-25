@@ -26,11 +26,49 @@ class AiScreenerService
 {
     private string $apiKey;
     private string $model;
+    private array $preloaded = [];
 
     public function __construct()
     {
         $this->apiKey = config('services.anthropic.api_key', '');
         $this->model = config('services.anthropic.screening_model', 'claude-opus-4-6');
+    }
+
+    /**
+     * 批次預載資料，消除逐檔 N+1 查詢
+     */
+    private function preloadData(Collection $candidates, string $tradeDate, string $mode): void
+    {
+        $stockIds = $candidates->pluck('stock_id')->unique()->values()->all();
+        $dateOp   = $mode === 'overnight' ? '<' : '<=';
+        $klineLimit = $mode === 'overnight' ? 10 : 10;
+
+        // 批次載入 DailyQuote（每檔取最近 N 日）
+        $allQuotes = DailyQuote::whereIn('stock_id', $stockIds)
+            ->where('date', $dateOp, $tradeDate)
+            ->orderByDesc('date')
+            ->get()
+            ->groupBy('stock_id');
+
+        $this->preloaded['quotes'] = $allQuotes->map(fn($q) => $q->take($klineLimit)->values());
+
+        // 批次載入法人（近 5 日，overnight 用 < tradeDate）
+        $allInst = InstitutionalTrade::whereIn('stock_id', $stockIds)
+            ->where('date', $dateOp, $tradeDate)
+            ->orderByDesc('date')
+            ->get()
+            ->groupBy('stock_id');
+
+        $this->preloaded['institutional'] = $allInst->map(fn($q) => $q->take(5)->values());
+
+        // 批次載入融資融券（近 5 日，overnight 用 < tradeDate）
+        $allMargin = MarginTrade::whereIn('stock_id', $stockIds)
+            ->where('date', $dateOp, $tradeDate)
+            ->orderByDesc('date')
+            ->get()
+            ->groupBy('stock_id');
+
+        $this->preloaded['margin'] = $allMargin->map(fn($q) => $q->take(5)->values());
     }
 
     /**
@@ -54,6 +92,9 @@ class AiScreenerService
             Log::warning('AiScreenerService: ANTHROPIC_API_KEY 未設定，使用 fallback');
             return $this->fallbackScreen($candidates);
         }
+
+        // 批次預載 DB 資料（消除逐檔 N+1 查詢）
+        $this->preloadData($candidates, $tradeDate, $mode);
 
         if ($mode === 'overnight') {
             $systemPrompt = $this->buildSystemPromptOvernight($tradeDate, $snapshotDate);
@@ -222,13 +263,9 @@ SYSTEM;
             ? implode('；', $candidate->reasons)
             : ($candidate->reasons ?? '');
 
-        // K 線：精簡模式只取 5 日
+        // K 線：使用預載資料，精簡模式只取 5 日
         $klineLimit = $short ? 5 : 10;
-        $quotes = DailyQuote::where('stock_id', $candidate->stock_id)
-            ->where('date', '<=', $tradeDate)
-            ->orderByDesc('date')
-            ->limit($klineLimit)
-            ->get();
+        $quotes = ($this->preloaded['quotes'][$candidate->stock_id] ?? collect())->take($klineLimit);
 
         $klineLines = ['日期  開  高  低  收  量(張)  漲%  振幅%'];
         foreach ($quotes as $q) {
@@ -245,12 +282,8 @@ SYSTEM;
         }
         $klineTsv = implode("\n", $klineLines);
 
-        // 法人近 5 日
-        $instTrades = InstitutionalTrade::where('stock_id', $candidate->stock_id)
-            ->where('date', '<=', $tradeDate)
-            ->orderByDesc('date')
-            ->limit(5)
-            ->get();
+        // 法人近 5 日（使用預載資料）
+        $instTrades = $this->preloaded['institutional'][$candidate->stock_id] ?? collect();
 
         $fmtLots = fn($v) => ($v >= 0 ? '+' : '') . round($v / 1000) . '張';
         $instLines = $instTrades->map(fn($t) =>
@@ -261,12 +294,8 @@ SYSTEM;
         )->implode("\n");
         $instSection = $instLines ?: '（無法人資料）';
 
-        // 融資融券近 5 日
-        $margins = MarginTrade::where('stock_id', $candidate->stock_id)
-            ->where('date', '<=', $tradeDate)
-            ->orderByDesc('date')
-            ->limit(5)
-            ->get();
+        // 融資融券近 5 日（使用預載資料）
+        $margins = $this->preloaded['margin'][$candidate->stock_id] ?? collect();
 
         $marginLines = $margins->map(fn($m) =>
             \Carbon\Carbon::parse($m->date)->format('m/d') . '  ' .
@@ -613,12 +642,8 @@ SYSTEM;
             ? implode('；', $candidate->reasons)
             : ($candidate->reasons ?? '');
 
-        // 近 10 日 K 線（tradeDate = T+1，date < tradeDate 即 T+0 以前）
-        $quotes = DailyQuote::where('stock_id', $candidate->stock_id)
-            ->where('date', '<', $tradeDate)
-            ->orderByDesc('date')
-            ->limit(10)
-            ->get();
+        // 近 10 日 K 線（使用預載資料）
+        $quotes = $this->preloaded['quotes'][$candidate->stock_id] ?? collect();
 
         $klineLines = ['日期  開  高  低  收  量(張)  漲%  振幅%'];
         foreach ($quotes as $q) {
@@ -824,12 +849,8 @@ SYSTEM;
               . ($sectorRank !== null ? "（類股排名第{$sectorRank}強）" : '')
             : "[{$industry}] 無類股資料";
 
-        // 近 5 日法人籌碼
-        $instTrades = InstitutionalTrade::where('stock_id', $candidate->stock_id)
-            ->where('date', '<', $tradeDate)
-            ->orderByDesc('date')
-            ->limit(5)
-            ->get();
+        // 近 5 日法人籌碼（使用預載資料）
+        $instTrades = $this->preloaded['institutional'][$candidate->stock_id] ?? collect();
 
         $fmtLots    = fn($v) => ($v >= 0 ? '+' : '') . round($v / 1000) . '張';
         $instLines  = $instTrades->map(fn($t) =>
@@ -840,12 +861,8 @@ SYSTEM;
         )->implode("\n");
         $instSection = $instLines ?: '（無法人資料）';
 
-        // 近 5 日融資融券
-        $margins = MarginTrade::where('stock_id', $candidate->stock_id)
-            ->where('date', '<', $tradeDate)
-            ->orderByDesc('date')
-            ->limit(5)
-            ->get();
+        // 近 5 日融資融券（使用預載資料）
+        $margins = $this->preloaded['margin'][$candidate->stock_id] ?? collect();
         $marginLines = $margins->map(fn($m) =>
             \Carbon\Carbon::parse($m->date)->format('m/d') . '  ' .
             '融資增減' . $fmtLots($m->margin_change) . '  餘額' . round($m->margin_balance / 1000) . '張  ' .

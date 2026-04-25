@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\MarketHoliday;
+use App\Models\SectorIndex;
 use App\Services\AiScreenerService;
 use App\Services\HaikuPreFilterService;
 use App\Services\StockScreener;
@@ -27,6 +28,21 @@ class AiScreenOvernightCandidates extends Command
         $tradeDate    = $this->getNextTradingDay($snapshotDate);
 
         $this->info("隔日沖選股：盤中日 {$snapshotDate}，目標交易日 {$tradeDate}");
+
+        // 等待類股指數就緒（依賴 12:45 的 stock:fetch-sector-indices）
+        $maxWait = 10; // 最多等 10 次 × 30 秒 = 5 分鐘
+        for ($i = 0; $i < $maxWait; $i++) {
+            if (SectorIndex::where('date', $snapshotDate)->exists()) {
+                break;
+            }
+            if ($i === 0) {
+                $this->warn("類股指數尚未就緒，等待中...");
+            }
+            sleep(30);
+        }
+        if (!SectorIndex::where('date', $snapshotDate)->exists()) {
+            $this->warn("類股指數未就緒，繼續選股（無類股資料）");
+        }
 
         // 清除舊的隔日沖候選（含 monitor），確保重跑不殘留
         $oldIds = Candidate::where('trade_date', $tradeDate)

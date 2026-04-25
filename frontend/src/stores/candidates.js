@@ -110,6 +110,7 @@ export const useCandidateStore = defineStore('candidates', () => {
 
   async function fetchCandidates(date, mode) {
     loading.value = true
+    monitors.value = []
     const targetMode = mode || currentMode.value
     try {
       const { data } = await getCandidates(date || currentDate.value, targetMode)

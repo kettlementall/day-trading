@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\DailyReview;
+use App\Models\MarketHoliday;
 use App\Services\DailyReviewService;
 use Illuminate\Console\Command;
 
@@ -19,6 +20,12 @@ class DailyReviewCommand extends Command
         if (!in_array($mode, ['intraday', 'overnight'])) {
             $this->error("--mode 必須為 intraday 或 overnight");
             return 1;
+        }
+
+        // 排程執行時跳過休市日（手動傳入 date 時不檢查）
+        if (!$this->argument('date') && MarketHoliday::isHoliday($date)) {
+            $this->info("{$date} 為休市日，跳過");
+            return 0;
         }
 
         // 已有報告就跳過（除非 --force）

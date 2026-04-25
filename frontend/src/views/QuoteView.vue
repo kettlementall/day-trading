@@ -224,6 +224,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { getQuote, analyzeQuote, searchQuote } from '../api'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -334,8 +335,10 @@ async function doAnalyze() {
   try {
     const { data } = await analyzeQuote(quote.value.symbol, cost)
     aiResult.value = data
-  } catch {
+  } catch (e) {
     aiResult.value = null
+    const msg = e.code === 'ECONNABORTED' ? 'AI 分析逾時，請稍後再試' : 'AI 分析失敗，請稍後再試'
+    ElMessage.error(msg)
   } finally {
     analyzing.value = false
   }

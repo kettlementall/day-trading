@@ -79,7 +79,7 @@
 
 ### 休市日檢查
 
-`stock:ai-screen` 和 `stock:monitor-intraday` 開頭檢查 `MarketHoliday::isHoliday()`，週末或國定假日自動跳過。
+`stock:ai-screen`、`stock:monitor-intraday`、`stock:update-results`、`stock:update-overnight-results`、`stock:daily-review` 開頭檢查 `MarketHoliday::isHoliday()`，週末或國定假日自動跳過（手動傳入 date 參數時不檢查）。
 
 休市日資料由 `stock:import-holidays {year}` 指令匯入（每年更新一次），定義在 `ImportMarketHolidays.php` 內。
 
@@ -333,6 +333,7 @@ API 不可用時，全部標記 `haiku_selected=true`，讓 Opus 自行判斷。
 - 每檔標的各自呼叫一次 Opus API
 - System prompt 快取（市場背景、新聞、教訓、任務說明）所有檔共用
 - Per-stock user message 包含完整資料（10日K線、5日法人、5日融資融券、個股相關新聞）
+- K 線/法人/融資融券資料於迴圈前批次預載（`preloadData()`），消除逐檔 N+1 查詢
 
 #### AI 決策資訊
 
@@ -778,6 +779,7 @@ expected_value = avg(所有 buy_reachable 為 true 的 profit)
 12:45  抓取類股指數（stock:fetch-sector-indices）
          │
 12:50  三階段 AI 選股（stock:ai-screen-overnight）
+         │  ← 啟動時等待類股指數就緒（最多 5 分鐘）
          │
          ├─ Step 1: StockScreener overnight 模式（物理門檻）
          ├─ Step 2: HaikuPreFilterService overnight 模式（→ 最多 20 檔）

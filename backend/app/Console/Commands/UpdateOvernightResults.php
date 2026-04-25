@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Candidate;
 use App\Models\CandidateResult;
 use App\Models\DailyQuote;
+use App\Models\MarketHoliday;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
@@ -16,6 +17,12 @@ class UpdateOvernightResults extends Command
     public function handle(): int
     {
         $tradeDate = $this->argument('date') ?? now()->format('Y-m-d');
+
+        // 排程執行時跳過休市日
+        if (!$this->argument('date') && MarketHoliday::isHoliday($tradeDate)) {
+            $this->info("{$tradeDate} 為休市日，跳過");
+            return self::SUCCESS;
+        }
 
         $candidates = Candidate::where('trade_date', $tradeDate)
             ->where('mode', 'overnight')
