@@ -4,17 +4,25 @@
 
     <!-- 搜尋列 -->
     <div class="search-bar">
-      <el-input
+      <el-autocomplete
         v-model="symbolInput"
-        placeholder="輸入股票代號，例如 2330"
+        :fetch-suggestions="handleSuggest"
+        placeholder="輸入股票代號或名稱，例如 2330 或 台積電"
         clearable
+        @select="handleSelect"
         @keyup.enter="fetchQuote"
         style="flex: 1"
+        :debounce="300"
+        value-key="label"
       >
         <template #prefix>
           <el-icon><Search /></el-icon>
         </template>
-      </el-input>
+        <template #default="{ item }">
+          <span class="suggest-symbol">{{ item.symbol }}</span>
+          <span class="suggest-name">{{ item.name }}</span>
+        </template>
+      </el-autocomplete>
       <el-button type="primary" :loading="loading" @click="fetchQuote">查詢</el-button>
     </div>
 
@@ -111,13 +119,13 @@
         </div>
       </div>
 
-      <!-- AI 持倉分析 -->
+      <!-- AI 線上問診 -->
       <div class="quote-card ai-section">
-        <h3>AI 持倉分析</h3>
+        <h3>AI 線上問診</h3>
         <div class="ai-input-row">
           <el-input
             v-model="costInput"
-            placeholder="輸入成本價"
+            placeholder="輸入平均成本價"
             type="number"
             style="flex: 1"
           >
@@ -140,7 +148,7 @@
                 <span v-if="aiResult.short?.stop_profit" class="ai-level up">停利 {{ aiResult.short.stop_profit }}</span>
                 <span v-if="aiResult.short?.stop_loss" class="ai-level down">停損 {{ aiResult.short.stop_loss }}</span>
               </div>
-              <div class="ai-note">* 今日收盤前結束</div>
+              <div class="ai-note">* 今日收盤前賣出</div>
               <div class="ai-text">{{ aiResult.short?.analysis }}</div>
             </div>
             <div class="ai-dual-block">
@@ -216,7 +224,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { getQuote, analyzeQuote } from '../api'
+import { getQuote, analyzeQuote, searchQuote } from '../api'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { CandlestickChart, BarChart } from 'echarts/charts'
@@ -264,6 +272,23 @@ function quickSearch(symbol) {
   fetchQuote()
 }
 
+async function handleSuggest(query, cb) {
+  if (!query || query.trim().length < 1) return cb([])
+  // 純數字直接不查（直接 enter 查詢即可）
+  if (/^\d+$/.test(query.trim())) return cb([])
+  try {
+    const { data } = await searchQuote(query.trim())
+    cb(data.map(s => ({ ...s, label: `${s.symbol} ${s.name}`, value: s.symbol })))
+  } catch {
+    cb([])
+  }
+}
+
+function handleSelect(item) {
+  symbolInput.value = item.symbol
+  fetchQuote()
+}
+
 onMounted(() => {
   const sym = route.query.symbol
   if (sym) {
@@ -273,12 +298,23 @@ onMounted(() => {
 })
 
 async function fetchQuote() {
-  const sym = symbolInput.value.trim()
+  let sym = symbolInput.value.trim()
   if (!sym) return
   loading.value = true
   searched.value = true
   rateLimited.value = false
   try {
+    // 非純數字 → 先搜尋名稱，取第一筆結果的代號
+    if (!/^\d{4,6}$/.test(sym)) {
+      const { data: results } = await searchQuote(sym)
+      if (results.length === 0) {
+        quote.value = null
+        loading.value = false
+        return
+      }
+      sym = results[0].symbol
+      symbolInput.value = `${results[0].symbol} ${results[0].name}`
+    }
     const { data } = await getQuote(sym)
     quote.value = data
     if (data?.symbol) saveHistory(data.symbol, data.name)
@@ -451,6 +487,10 @@ const chartOption = computed(() => {
 .ai-level.up { background: #fef0f0; color: #ef5350; }
 .ai-level.down { background: #f0f9eb; color: #26a69a; }
 .ai-text { font-size: 13px; line-height: 1.6; color: #303133; white-space: pre-wrap; }
+
+/* autocomplete suggestions */
+.suggest-symbol { font-weight: 600; margin-right: 8px; }
+.suggest-name { color: #909399; font-size: 13px; }
 
 /* colors */
 .up { color: #ef5350; }

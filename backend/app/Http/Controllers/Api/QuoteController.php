@@ -18,6 +18,28 @@ class QuoteController extends Controller
     {
     }
 
+    /**
+     * GET /api/quote/search?q=台積
+     * 股票名稱/代號模糊搜尋（供前端 autocomplete）
+     */
+    public function search(): JsonResponse
+    {
+        $q = trim(request('q', ''));
+        if (mb_strlen($q) < 1) {
+            return response()->json([]);
+        }
+
+        $stocks = Stock::where(function ($query) use ($q) {
+                $query->where('symbol', 'like', "{$q}%")
+                      ->orWhere('name', 'like', "%{$q}%");
+            })
+            ->orderByRaw("CASE WHEN symbol = ? THEN 0 WHEN symbol LIKE ? THEN 1 ELSE 2 END", [$q, "{$q}%"])
+            ->limit(10)
+            ->get(['symbol', 'name']);
+
+        return response()->json($stocks);
+    }
+
     public function show(string $symbol): JsonResponse
     {
         if (!preg_match('/^\d{4,6}$/', $symbol)) {

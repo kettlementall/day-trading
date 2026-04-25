@@ -143,6 +143,9 @@ export const deleteUser = (id) =>
   api.delete(`/users/${id}`)
 
 // 即時報價
+export const searchQuote = (q) =>
+  api.get('/quote/search', { params: { q } })
+
 export const getQuote = (symbol) =>
   api.get(`/quote/${symbol}`)
 

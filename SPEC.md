@@ -1129,8 +1129,9 @@ Admin 專用，提供：
 報價查詢採 **DB 優先** 策略，減少 API 呼叫並提升可靠性：
 
 ```
-使用者輸入股票代號
+使用者輸入股票代號或名稱（支援 autocomplete 模糊搜尋）
     │
+    ▼ 非純數字時先呼叫 /api/quote/search?q= 解析代號
     ▼ 查詢 IntradaySnapshot（今日最新）
 DB 有資料？──── 是 ──→ 用 DB 快照回傳主報價
     │                      │
@@ -1152,12 +1153,13 @@ DB 有資料？──── 是 ──→ 用 DB 快照回傳主報價
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
+| `GET` | `/api/quote/search?q=` | 股票名稱/代號模糊搜尋（autocomplete，回傳前 10 筆） |
 | `GET` | `/api/quote/{symbol}` | 取得即時報價 + 5分K |
-| `POST` | `/api/quote/{symbol}/analyze` | AI 持倉分析（需傳 `cost` 參數） |
+| `POST` | `/api/quote/{symbol}/analyze` | AI 線上問診（需傳 `cost` 參數） |
 
-兩個端點皆採用相同的 DB 優先策略。
+搜尋端點支援代號前綴匹配及名稱模糊匹配，前端使用 `el-autocomplete` 元件提供即時建議。三個端點皆採用相同的 DB 優先策略。
 
-### 8.3 AI 持倉分析
+### 8.3 AI 線上問診
 
 使用者輸入成本價後，系統將報價數據（OHLCV、外盤比、近5日日K、5分K、五檔）送至 Claude API，一次回傳短線與波段兩個建議：
 
