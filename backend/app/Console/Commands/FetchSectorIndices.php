@@ -93,6 +93,11 @@ class FetchSectorIndices extends Command
             $saved++;
         }
 
+        if ($actualDate !== $date) {
+            $this->warn("TWSE 回傳資料日期為 {$actualDate}（請求 {$date}），收盤指數尚未更新");
+            Log::info("FetchSectorIndices：API 回傳 {$actualDate}，請求 {$date}");
+        }
+
         // 找出漲跌幅前3名
         $topSectors = SectorIndex::where('date', $actualDate)
             ->orderByDesc('change_percent')

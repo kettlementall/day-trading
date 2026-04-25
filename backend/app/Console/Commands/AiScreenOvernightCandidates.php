@@ -29,18 +29,11 @@ class AiScreenOvernightCandidates extends Command
 
         $this->info("隔日沖選股：盤中日 {$snapshotDate}，目標交易日 {$tradeDate}");
 
-        // 等待類股指數就緒（依賴 12:45 的 stock:fetch-sector-indices）
-        $maxWait = 10; // 最多等 10 次 × 30 秒 = 5 分鐘
-        for ($i = 0; $i < $maxWait; $i++) {
-            if (SectorIndex::where('date', $snapshotDate)->exists()) {
-                break;
-            }
-            if ($i === 0) {
-                $this->warn("類股指數尚未就緒，等待中...");
-            }
-            sleep(30);
-        }
-        if (!SectorIndex::where('date', $snapshotDate)->exists()) {
+        // 確認類股指數可用（TWSE MI_INDEX 為收盤指數，盤中只有前一日資料）
+        $sectorDate = SectorIndex::latestDateOn($snapshotDate);
+        if ($sectorDate) {
+            $this->info("類股指數就緒（資料日期：{$sectorDate}）");
+        } else {
             $this->warn("類股指數未就緒，繼續選股（無類股資料）");
         }
 

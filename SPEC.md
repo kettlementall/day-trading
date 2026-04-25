@@ -779,7 +779,7 @@ expected_value = avg(所有 buy_reachable 為 true 的 profit)
 12:45  抓取類股指數（stock:fetch-sector-indices）
          │
 12:50  三階段 AI 選股（stock:ai-screen-overnight）
-         │  ← 啟動時等待類股指數就緒（最多 5 分鐘）
+         │  ← 類股指數為收盤指數，盤中取得的是前一日資料（自動 fallback）
          │
          ├─ Step 1: StockScreener overnight 模式（物理門檻）
          ├─ Step 2: HaikuPreFilterService overnight 模式（→ 最多 20 檔）
@@ -974,16 +974,21 @@ Fallback（API 失敗）：回傳 `{action: "hold"}`，維持現狀。
 
 ### 6.10 類股指數（SectorIndex）
 
-資料來源：TWSE OpenAPI `https://openapi.twse.com.tw/v1/indicesReport/MI_5MINS`
+資料來源：TWSE OpenAPI `https://openapi.twse.com.tw/v1/indicesReport/MI_INDEX`
 
 每日 **12:45** 由 `stock:fetch-sector-indices` 抓取並存入 `sector_indices` 表。
 
-涵蓋25個類股（IX0007–IX0056），包含：電子工業、半導體業、金融保險、鋼鐵工業等主要類股。
+> **注意：** TWSE MI_INDEX 為**收盤指數**，台股 13:30 收盤前 API 回傳的是前一交易日資料。
+> `updateOrCreate` 以 API 回傳的民國年日期為 key，因此 12:45 抓到的資料會存在前一日的 date 下。
+> 查詢方法已內建 fallback：指定日期無資料時自動使用最近一個有資料的交易日。
 
-`SectorIndex` 模型提供三個便利方法：
-- `getSectorSummary(string $date): string` — 所有類股漲跌幅（格式化供 AI prompt 使用）
-- `getChangeForIndustry(string $date, string $industry): ?float` — 取特定類股今日漲跌幅
-- `getRankForIndustry(string $date, string $industry): ?int` — 取類股強弱排名
+涵蓋 29 個類股，包含：電子工業、半導體業、金融保險、鋼鐵工業等主要類股。
+
+`SectorIndex` 模型提供便利方法：
+- `latestDateOn(string $date): ?string` — 取得指定日期（含）以前最近有資料的日期
+- `getSectorSummary(string $date): string` — 所有類股漲跌幅（自動 fallback，格式化供 AI prompt）
+- `getChangeForIndustry(string $date, string $industry): ?float` — 取特定類股漲跌幅（自動 fallback）
+- `getRankForIndustry(string $date, string $industry): ?int` — 取類股強弱排名（自動 fallback）
 
 ### 6.11 基本面估值（StockValuation）
 

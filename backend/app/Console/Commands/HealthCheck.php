@@ -90,13 +90,15 @@ class HealthCheck extends Command
             $checks[] = ['name' => '新聞指數', 'status' => 'ok', 'detail' => "已計算（整體 + {$industryCount} 個產業）"];
         }
 
-        // 2e. 類股指數（休市日跳過）
+        // 2e. 類股指數（TWSE 收盤指數，盤中只有前一日資料，用 latestDateOn 檢查）
         if (!$isHoliday) {
-            $sectorCount = SectorIndex::where('date', $date)->count();
-            if ($sectorCount === 0) {
-                $checks[] = ['name' => '類股指數', 'status' => 'warn', 'detail' => '0 筆（預期 25 個類股）'];
+            $sectorLatest = SectorIndex::latestDateOn($date);
+            if (!$sectorLatest) {
+                $checks[] = ['name' => '類股指數', 'status' => 'warn', 'detail' => '無任何類股資料'];
             } else {
-                $checks[] = ['name' => '類股指數', 'status' => 'ok', 'detail' => "{$sectorCount} 個類股"];
+                $sectorCount = SectorIndex::where('date', $sectorLatest)->count();
+                $dateNote = $sectorLatest !== $date ? "（資料日期：{$sectorLatest}）" : '';
+                $checks[] = ['name' => '類股指數', 'status' => 'ok', 'detail' => "{$sectorCount} 個類股{$dateNote}"];
             }
         }
 
