@@ -7,7 +7,12 @@ use App\Models\CandidateMonitor;
 use App\Models\DailyQuote;
 use App\Models\DailyReview;
 use App\Models\InstitutionalTrade;
+use App\Models\MarginTrade;
 use App\Models\MarketHoliday;
+use App\Models\NewsArticle;
+use App\Models\NewsIndex;
+use App\Models\SectorIndex;
+use App\Models\StockValuation;
 use App\Models\UsMarketIndex;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
@@ -54,6 +59,57 @@ class HealthCheck extends Command
             }
         }
 
+        // 2b. 融資融券（休市日跳過）
+        if (!$isHoliday) {
+            $marginCount = MarginTrade::where('date', $date)->count();
+            if ($marginCount === 0) {
+                $checks[] = ['name' => '融資融券', 'status' => 'error', 'detail' => "0 筆（預期 > 800）"];
+            } elseif ($marginCount < 800) {
+                $checks[] = ['name' => '融資融券', 'status' => 'warn', 'detail' => "{$marginCount} 筆（預期 > 800）"];
+            } else {
+                $checks[] = ['name' => '融資融券', 'status' => 'ok', 'detail' => "{$marginCount} 筆"];
+            }
+        }
+
+        // 2c. 新聞抓取
+        $newsCount = NewsArticle::where('fetched_date', $date)->count();
+        if ($newsCount === 0) {
+            $checks[] = ['name' => '新聞抓取', 'status' => $isHoliday ? 'warn' : 'error', 'detail' => "0 篇（預期 > 100）"];
+        } elseif ($newsCount < 100) {
+            $checks[] = ['name' => '新聞抓取', 'status' => 'warn', 'detail' => "{$newsCount} 篇（偏少）"];
+        } else {
+            $checks[] = ['name' => '新聞抓取', 'status' => 'ok', 'detail' => "{$newsCount} 篇"];
+        }
+
+        // 2d. 新聞指數
+        $newsIndexExists = NewsIndex::where('date', $date)->where('scope', 'overall')->exists();
+        if (!$newsIndexExists) {
+            $checks[] = ['name' => '新聞指數', 'status' => $isHoliday ? 'info' : 'warn', 'detail' => '今日未計算'];
+        } else {
+            $industryCount = NewsIndex::where('date', $date)->where('scope', 'industry')->count();
+            $checks[] = ['name' => '新聞指數', 'status' => 'ok', 'detail' => "已計算（整體 + {$industryCount} 個產業）"];
+        }
+
+        // 2e. 類股指數（休市日跳過）
+        if (!$isHoliday) {
+            $sectorCount = SectorIndex::where('date', $date)->count();
+            if ($sectorCount === 0) {
+                $checks[] = ['name' => '類股指數', 'status' => 'warn', 'detail' => '0 筆（預期 25 個類股）'];
+            } else {
+                $checks[] = ['name' => '類股指數', 'status' => 'ok', 'detail' => "{$sectorCount} 個類股"];
+            }
+        }
+
+        // 2f. 估值資料（休市日跳過）
+        if (!$isHoliday) {
+            $valuationCount = StockValuation::where('date', $date)->count();
+            if ($valuationCount === 0) {
+                $checks[] = ['name' => '估值資料', 'status' => 'warn', 'detail' => '0 筆（BWIBBU 未抓取）'];
+            } else {
+                $checks[] = ['name' => '估值資料', 'status' => 'ok', 'detail' => "{$valuationCount} 筆"];
+            }
+        }
+
         // 3. 價格合理性（休市日跳過）
         if (!$isHoliday) {
             $badPrices = DailyQuote::where('date', $date)
@@ -70,29 +126,41 @@ class HealthCheck extends Command
             }
         }
 
-        // 4. 候選標的
+        // 4. 候選標的（當沖）
         $nextTradeDate = now()->addWeekday()->format('Y-m-d');
-        $candidateCount = Candidate::where('trade_date', $nextTradeDate)->count();
-        $todayCandidateCount = Candidate::where('trade_date', $date)->count();
-        $resultCount = Candidate::where('trade_date', $date)->whereHas('result')->count();
+        $candidateCount = Candidate::where('trade_date', $nextTradeDate)->where('mode', 'intraday')->count();
+        $todayCandidateCount = Candidate::where('trade_date', $date)->where('mode', 'intraday')->count();
+        $resultCount = Candidate::where('trade_date', $date)->where('mode', 'intraday')->whereHas('result')->count();
         if ($todayCandidateCount > 0) {
-            $checks[] = ['name' => '今日候選結果', 'status' => $resultCount > 0 ? 'ok' : 'warn',
+            $checks[] = ['name' => '當沖候選結果', 'status' => $resultCount > 0 ? 'ok' : 'warn',
                 'detail' => "{$todayCandidateCount} 檔，已回填結果 {$resultCount} 筆"];
         }
         if ($candidateCount > 0) {
-            $checks[] = ['name' => '明日候選標的', 'status' => 'ok', 'detail' => "{$candidateCount} 檔（{$nextTradeDate}）"];
+            $checks[] = ['name' => '明日當沖候選', 'status' => 'ok', 'detail' => "{$candidateCount} 檔（{$nextTradeDate}）"];
         } else {
-            $checks[] = ['name' => '明日候選標的', 'status' => 'info', 'detail' => "尚未產出（{$nextTradeDate}）"];
+            $checks[] = ['name' => '明日當沖候選', 'status' => 'info', 'detail' => "尚未產出（{$nextTradeDate}）"];
         }
 
-        // 5. 卡住的 monitors 強制收尾
+        // 4b. 候選標的（隔日沖）
+        $overnightToday = Candidate::where('trade_date', $date)->where('mode', 'overnight')->count();
+        $overnightResultCount = Candidate::where('trade_date', $date)->where('mode', 'overnight')->whereHas('result')->count();
+        $overnightNext = Candidate::where('trade_date', $nextTradeDate)->where('mode', 'overnight')->count();
+        if ($overnightToday > 0) {
+            $checks[] = ['name' => '隔日沖候選結果', 'status' => $overnightResultCount > 0 ? 'ok' : 'warn',
+                'detail' => "{$overnightToday} 檔，已回填結果 {$overnightResultCount} 筆"];
+        }
+        if ($overnightNext > 0) {
+            $checks[] = ['name' => '明日隔日沖候選', 'status' => 'ok', 'detail' => "{$overnightNext} 檔（{$nextTradeDate}）"];
+        }
+
+        // 5. 卡住的 monitors 強制收尾（含當沖 trade_date=今日 + 隔日沖 trade_date<=今日）
         if (!$isHoliday) {
             $stuckMonitors = CandidateMonitor::whereIn('status', [
                     CandidateMonitor::STATUS_WATCHING,
                     CandidateMonitor::STATUS_ENTRY_SIGNAL,
                     CandidateMonitor::STATUS_HOLDING,
                 ])
-                ->whereHas('candidate', fn($q) => $q->where('trade_date', $date))
+                ->whereHas('candidate', fn($q) => $q->where('trade_date', '<=', $date))
                 ->get();
 
             if ($stuckMonitors->isNotEmpty()) {
@@ -117,24 +185,45 @@ class HealthCheck extends Command
             }
         }
 
-        // 5b. 候選結果未回填 → 重跑
+        // 5b. 當沖候選結果未回填 → 重跑
         if (!$isHoliday && $todayCandidateCount > 0 && $resultCount === 0 && $quoteCount > 0) {
             Artisan::call('stock:update-results', ['date' => $date]);
-            $retryCount = Candidate::where('trade_date', $date)->whereHas('result')->count();
-            $checks[] = ['name' => '結果補回填', 'status' => $retryCount > 0 ? 'ok' : 'warn',
+            $retryCount = Candidate::where('trade_date', $date)->where('mode', 'intraday')->whereHas('result')->count();
+            $checks[] = ['name' => '當沖結果補回填', 'status' => $retryCount > 0 ? 'ok' : 'warn',
                 'detail' => "重跑 update-results，回填 {$retryCount} 筆"];
         }
 
-        // 5c. AI 檢討報告未產出 → 補跑（檢查前一交易日）
+        // 5b2. 隔日沖候選結果未回填 → 重跑
+        if (!$isHoliday && $overnightToday > 0 && $overnightResultCount === 0 && $quoteCount > 0) {
+            Artisan::call('stock:update-overnight-results', ['date' => $date]);
+            $retryOvernightCount = Candidate::where('trade_date', $date)->where('mode', 'overnight')->whereHas('result')->count();
+            $checks[] = ['name' => '隔日沖結果補回填', 'status' => $retryOvernightCount > 0 ? 'ok' : 'warn',
+                'detail' => "重跑 update-overnight-results，回填 {$retryOvernightCount} 筆"];
+        }
+
+        // 5c. AI 當沖檢討報告未產出 → 補跑
         if (!$isHoliday) {
-            $hasReview = DailyReview::where('trade_date', $date)->exists();
+            $hasReview = DailyReview::where('trade_date', $date)->where('mode', 'intraday')->exists();
             if (!$hasReview && $todayCandidateCount > 0 && $resultCount > 0) {
                 Artisan::call('stock:daily-review', ['date' => $date]);
-                $hasReview = DailyReview::where('trade_date', $date)->exists();
-                $checks[] = ['name' => 'AI 檢討報告', 'status' => $hasReview ? 'ok' : 'warn',
+                $hasReview = DailyReview::where('trade_date', $date)->where('mode', 'intraday')->exists();
+                $checks[] = ['name' => '當沖 AI 檢討', 'status' => $hasReview ? 'ok' : 'warn',
                     'detail' => $hasReview ? '補跑成功' : '補跑失敗'];
             } elseif ($hasReview) {
-                $checks[] = ['name' => 'AI 檢討報告', 'status' => 'ok', 'detail' => '已產出'];
+                $checks[] = ['name' => '當沖 AI 檢討', 'status' => 'ok', 'detail' => '已產出'];
+            }
+        }
+
+        // 5c2. AI 隔日沖檢討報告未產出 → 補跑
+        if (!$isHoliday) {
+            $hasOvernightReview = DailyReview::where('trade_date', $date)->where('mode', 'overnight')->exists();
+            if (!$hasOvernightReview && $overnightToday > 0 && $overnightResultCount > 0) {
+                Artisan::call('stock:daily-review', ['date' => $date, '--mode' => 'overnight']);
+                $hasOvernightReview = DailyReview::where('trade_date', $date)->where('mode', 'overnight')->exists();
+                $checks[] = ['name' => '隔日沖 AI 檢討', 'status' => $hasOvernightReview ? 'ok' : 'warn',
+                    'detail' => $hasOvernightReview ? '補跑成功' : '補跑失敗'];
+            } elseif ($hasOvernightReview) {
+                $checks[] = ['name' => '隔日沖 AI 檢討', 'status' => 'ok', 'detail' => '已產出'];
             }
         }
 
@@ -217,6 +306,27 @@ class HealthCheck extends Command
                 }
             } catch (\Exception $e) {
                 $checks[] = ['name' => 'Telegram', 'status' => 'error', 'detail' => '連線失敗: ' . $e->getMessage()];
+            }
+        }
+
+        // 8. Log 檔案大小檢查
+        $logPath = storage_path('logs/laravel.log');
+        if (file_exists($logPath)) {
+            $logSizeMb = round(filesize($logPath) / 1024 / 1024, 1);
+            if ($logSizeMb > 500) {
+                $checks[] = ['name' => 'Log 大小', 'status' => 'error', 'detail' => "laravel.log {$logSizeMb}MB（超過 500MB，建議清理）"];
+            } elseif ($logSizeMb > 100) {
+                $checks[] = ['name' => 'Log 大小', 'status' => 'warn', 'detail' => "laravel.log {$logSizeMb}MB（超過 100MB）"];
+            } else {
+                $checks[] = ['name' => 'Log 大小', 'status' => 'ok', 'detail' => "laravel.log {$logSizeMb}MB"];
+            }
+        }
+
+        $schedulePath = storage_path('logs/schedule.log');
+        if (file_exists($schedulePath)) {
+            $schedSizeMb = round(filesize($schedulePath) / 1024 / 1024, 1);
+            if ($schedSizeMb > 100) {
+                $checks[] = ['name' => 'Schedule Log', 'status' => 'warn', 'detail' => "schedule.log {$schedSizeMb}MB（超過 100MB）"];
             }
         }
 

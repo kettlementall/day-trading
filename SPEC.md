@@ -34,7 +34,7 @@
 | **17:15** | **`stock:fetch-valuations`** | **從 TWSE 抓取本益比/殖利率/股價淨值比（BWIBBU_ALL），供隔日沖 Opus 估值判斷使用** |
 | 18:00 | `news:fetch`                | 盤後新聞抓取                                                    |
 | 18:15 | `news:compute-indices`      | 計算新聞指數                                                    |
-| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 結果未回填重跑）                   |
+| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + API 連通性 + Log 大小警告） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
 | **T+1 09:05–13:15** | **`stock:monitor-overnight-exit --slot={time}`** | **隔日沖 T+1 出場監控，每 15 分鐘一次（09:05/09:15 開盤快速檢查；Fugle 即時報價：目標/停損觸發自動終止；Sonnet 滾動判斷 hold/adjust/exit）** |
 | **週日 22:00** | **`stock:compute-strategy-stats`** | **計算隔日沖/當沖策略量化績效統計（30/60 天窗口）** |
