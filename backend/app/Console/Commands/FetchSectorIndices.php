@@ -112,8 +112,9 @@ class FetchSectorIndices extends Command
             ->map(fn ($s) => sprintf('%s %+.1f%%', $s->sector_name, $s->change_percent))
             ->implode(' | ');
 
-        app(TelegramService::class)->send(
-            "✅ *類股指數抓取* 完成\n📅 {$date} | 共 {$saved} 類\n🔺 {$topSectors}\n🔻 {$bottomSectors}"
+        app(TelegramService::class)->broadcast(
+            "✅ *類股指數抓取* 完成\n📅 {$date} | 共 {$saved} 類\n🔺 {$topSectors}\n🔻 {$bottomSectors}",
+            'system'
         );
 
         $this->info("完成，儲存 {$saved} 個類股指數。");

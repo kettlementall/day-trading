@@ -77,7 +77,7 @@ class FetchStockValuations extends Command
             $upserted++;
         }
 
-        app(TelegramService::class)->send("✅ *TWSE 估值資料抓取* 完成\n📅 {$date} | 共 {$upserted} 檔");
+        app(TelegramService::class)->broadcast("✅ *TWSE 估值資料抓取* 完成\n📅 {$date} | 共 {$upserted} 檔", 'system');
 
         $this->info("完成：更新 {$upserted} 檔估值資料");
         Log::info("FetchStockValuations {$date}：更新 {$upserted} 檔");

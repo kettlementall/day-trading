@@ -84,7 +84,7 @@ class FetchMarginTrades extends Command
                 $count++;
             }
 
-            app(TelegramService::class)->send("✅ *融資融券抓取* 完成\n📅 {$date} | 共 {$count} 筆");
+            app(TelegramService::class)->broadcast("✅ *融資融券抓取* 完成\n📅 {$date} | 共 {$count} 筆", 'system');
             $this->info("融資融券: 匯入 {$count} 筆");
         } catch (\Exception $e) {
             Log::error("Margin fetch error: " . $e->getMessage());

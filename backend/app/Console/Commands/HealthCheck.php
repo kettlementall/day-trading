@@ -372,13 +372,9 @@ class HealthCheck extends Command
 
         // 有異常時發送 Telegram 通知
         if ($hasIssues) {
-            $telegram = new TelegramService();
             $message = $this->buildTelegramMessage($date, $checks);
-            if ($telegram->send($message)) {
-                $this->info('已發送 Telegram 通知');
-            } else {
-                $this->warn('Telegram 通知發送失敗');
-            }
+            app(TelegramService::class)->broadcast($message, 'system');
+            $this->info('已發送 Telegram 通知');
         }
 
         return $hasIssues ? self::FAILURE : self::SUCCESS;

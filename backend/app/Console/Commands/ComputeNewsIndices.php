@@ -33,11 +33,11 @@ class ComputeNewsIndices extends Command
         $time = now()->format('H:i');
 
         if ($overall) {
-            app(TelegramService::class)->send(sprintf(
+            app(TelegramService::class)->broadcast(sprintf(
                 "✅ *新聞指數*(%s) 完成\n📅 %s | %d 篇 · %d 產業\n情緒 %.0f | 熱度 %.0f | 恐慌 %.0f | 國際 %.0f",
                 $time, $date, $overall->article_count, $industryCount,
                 $overall->sentiment, $overall->heatmap, $overall->panic, $overall->international
-            ));
+            ), 'system');
         }
 
         $this->info('新聞指數計算完成');

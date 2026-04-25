@@ -92,7 +92,7 @@ class OvernightExitMonitorService
                 $summary['target_hit']++;
                 $buyPrice = (float) $candidate->suggested_buy;
                 $profitPct = $buyPrice > 0 ? round(($currentTarget - $buyPrice) / $buyPrice * 100, 1) : 0;
-                $this->telegram->send(sprintf(
+                $this->telegram->broadcast(sprintf(
                     "✅✅✅ *隔日沖達標* ✅✅✅\n\n"
                     . "📌 *%s %s*\n"
                     . "💰 買進：*%.2f* → 目標：*%.2f*\n"
@@ -115,7 +115,7 @@ class OvernightExitMonitorService
                 $summary['stop_hit']++;
                 $buyPrice = (float) $candidate->suggested_buy;
                 $profitPct = $buyPrice > 0 ? round(($exitPrice - $buyPrice) / $buyPrice * 100, 1) : 0;
-                $this->telegram->send(sprintf(
+                $this->telegram->broadcast(sprintf(
                     "❌❌❌ *隔日沖停損* ❌❌❌\n\n"
                     . "📌 *%s %s*\n"
                     . "💰 買進：*%.2f* → 出場：*%.2f*\n"
@@ -185,7 +185,7 @@ class OvernightExitMonitorService
                 $monitor->update(['exit_price' => $currentTarget, 'exit_time' => now()]);
                 $buyPrice = (float) $candidate->suggested_buy;
                 $profitPct = $buyPrice > 0 ? round(($currentTarget - $buyPrice) / $buyPrice * 100, 1) : 0;
-                $this->telegram->send(sprintf(
+                $this->telegram->broadcast(sprintf(
                     "✅✅✅ *隔日沖達標* ✅✅✅\n\n"
                     . "📌 *%s %s*\n"
                     . "💰 買進：*%.2f* → 目標：*%.2f*\n"
@@ -206,7 +206,7 @@ class OvernightExitMonitorService
                 $monitor->update(['exit_price' => $exitPrice, 'exit_time' => now()]);
                 $buyPrice = (float) $candidate->suggested_buy;
                 $profitPct = $buyPrice > 0 ? round(($exitPrice - $buyPrice) / $buyPrice * 100, 1) : 0;
-                $this->telegram->send(sprintf(
+                $this->telegram->broadcast(sprintf(
                     "❌❌❌ *隔日沖停損* ❌❌❌\n\n"
                     . "📌 *%s %s*\n"
                     . "💰 買進：*%.2f* → 出場：*%.2f*\n"
@@ -239,7 +239,7 @@ class OvernightExitMonitorService
         $this->transition($monitor, CandidateMonitor::STATUS_CLOSED, "{$slot} AI 建議提前出場：{$advice['reasoning']}");
         $monitor->update(['exit_time' => now()]);
         $summary['exited']++;
-        $this->telegram->send(sprintf(
+        $this->telegram->broadcast(sprintf(
             "🔴🔴🔴 *隔日沖AI出場* 🔴🔴🔴\n\n"
             . "📌 *%s %s*\n"
             . "💡 %s\n"
@@ -277,7 +277,7 @@ class OvernightExitMonitorService
         $adjustParts = [];
         if (!empty($advice['adjusted_target'])) $adjustParts[] = sprintf('目標→%.2f', $advice['adjusted_target']);
         if (!empty($advice['adjusted_stop']))   $adjustParts[] = sprintf('停損→%.2f', $advice['adjusted_stop']);
-        $this->telegram->send(sprintf(
+        $this->telegram->broadcast(sprintf(
             "🟡 *隔日沖AI調整* %s %s\n\n%s\n💡 %s\n⏰ %s",
             $symbol, $name, implode("\n", $adjustParts), $advice['reasoning'], $slot
         ));

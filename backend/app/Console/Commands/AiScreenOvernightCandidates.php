@@ -101,7 +101,7 @@ class AiScreenOvernightCandidates extends Command
             );
         }
 
-        app(TelegramService::class)->send(implode("\n", $lines));
+        app(TelegramService::class)->broadcast(implode("\n", $lines));
 
         Log::info("AiScreenOvernightCandidates：{$snapshotDate} → {$tradeDate}，選入 {$selected} 檔");
 

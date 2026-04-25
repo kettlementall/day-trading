@@ -138,7 +138,7 @@ class AiScreenCandidates extends Command
             );
         }
 
-        $telegram->send(implode("\n", $lines));
+        $telegram->broadcast(implode("\n", $lines));
 
         return self::SUCCESS;
     }

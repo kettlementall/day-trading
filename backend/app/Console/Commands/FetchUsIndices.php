@@ -124,8 +124,9 @@ class FetchUsIndices extends Command
             ->map(fn ($idx) => sprintf('%s %s%.2f%%', $idx->name, $idx->change_percent >= 0 ? '+' : '', $idx->change_percent))
             ->implode(' | ');
 
-        app(TelegramService::class)->send(
-            "✅ *{$label}* 完成\n📅 {$date} | 共 {$count} 筆\n{$details}"
+        app(TelegramService::class)->broadcast(
+            "✅ *{$label}* 完成\n📅 {$date} | 共 {$count} 筆\n{$details}",
+            'system'
         );
 
         $this->info("完成，共抓取 {$count} 筆指數");

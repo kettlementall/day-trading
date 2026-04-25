@@ -58,8 +58,9 @@ class ExtractWeeklyLessons extends Command
 
         // Telegram 通知
         if ($totalLessons > 0) {
-            app(TelegramService::class)->send(
-                "📚 *週教訓萃取完成* ({$dateFrom}~{$dateTo})\n萃取 {$totalLessons} 條通用教訓"
+            app(TelegramService::class)->broadcast(
+                "📚 *週教訓萃取完成* ({$dateFrom}~{$dateTo})\n萃取 {$totalLessons} 條通用教訓",
+                'system'
             );
         }
 

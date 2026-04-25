@@ -19,6 +19,24 @@
           </el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="Telegram" width="130">
+        <template #default="{ row }">
+          <span v-if="row.telegram_chat_id" style="font-size: 12px; color: #409eff">
+            {{ row.telegram_chat_id }}
+          </span>
+          <span v-else style="color: #c0c4cc">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="TG 通知" width="90" align="center">
+        <template #default="{ row }">
+          <el-switch
+            :model-value="row.telegram_enabled"
+            @change="(val) => toggleTelegram(row, val)"
+            size="small"
+            :disabled="!row.telegram_chat_id"
+          />
+        </template>
+      </el-table-column>
       <el-table-column label="盤中監控" width="100" align="center">
         <template #default="{ row }">
           <el-switch
@@ -73,6 +91,9 @@
             :placeholder="isEditing ? '留空則不修改密碼' : '至少 8 個字元'"
           />
         </el-form-item>
+        <el-form-item label="Telegram ID" prop="telegram_chat_id">
+          <el-input v-model="form.telegram_chat_id" placeholder="Telegram Chat ID（選填）" />
+        </el-form-item>
         <el-form-item label="角色" prop="role">
           <el-select v-model="form.role" style="width: 100%">
             <el-option label="管理員" value="admin" />
@@ -110,7 +131,7 @@ const isEditing     = ref(false)
 const editingId     = ref(null)
 const formRef       = ref(null)
 
-const form = ref({ user_id: '', name: '', email: '', password: '', role: 'viewer' })
+const form = ref({ user_id: '', name: '', email: '', password: '', role: 'viewer', telegram_chat_id: '' })
 
 const formRules = {
   user_id: [{ required: true, message: '請輸入帳號 ID', trigger: 'blur' }],
@@ -159,14 +180,14 @@ async function fetchUsers() {
 function openCreate() {
   isEditing.value = false
   editingId.value = null
-  form.value = { user_id: '', name: '', email: '', password: '', role: 'viewer' }
+  form.value = { user_id: '', name: '', email: '', password: '', role: 'viewer', telegram_chat_id: '' }
   dialogVisible.value = true
 }
 
 function openEdit(user) {
   isEditing.value = true
   editingId.value = user.id
-  form.value = { user_id: user.user_id, name: user.name, email: user.email ?? '', password: '', role: user.role }
+  form.value = { user_id: user.user_id, name: user.name, email: user.email ?? '', password: '', role: user.role, telegram_chat_id: user.telegram_chat_id ?? '' }
   dialogVisible.value = true
 }
 
@@ -191,6 +212,15 @@ async function handleSave() {
     ElMessage.error(msg)
   } finally {
     saving.value = false
+  }
+}
+
+async function toggleTelegram(user, val) {
+  try {
+    await updateUser(user.id, { telegram_enabled: val })
+    user.telegram_enabled = val
+  } catch {
+    ElMessage.error('更新失敗')
   }
 }
 

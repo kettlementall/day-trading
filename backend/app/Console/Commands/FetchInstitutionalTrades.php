@@ -81,7 +81,7 @@ class FetchInstitutionalTrades extends Command
                 $count++;
             }
 
-            app(TelegramService::class)->send("✅ *三大法人抓取* 完成\n📅 {$sqlDate} | 共 {$count} 筆");
+            app(TelegramService::class)->broadcast("✅ *三大法人抓取* 完成\n📅 {$sqlDate} | 共 {$count} 筆", 'system');
 
             $this->info("三大法人: 匯入 {$count} 筆");
         } catch (\Exception $e) {

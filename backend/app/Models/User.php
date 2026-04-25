@@ -9,12 +9,13 @@ class User extends Authenticatable
 {
     use HasApiTokens;
 
-    protected $fillable = ['user_id', 'name', 'email', 'password', 'role', 'intraday_monitor_enabled'];
+    protected $fillable = ['user_id', 'name', 'email', 'password', 'role', 'telegram_chat_id', 'telegram_enabled', 'intraday_monitor_enabled'];
 
     protected $hidden = ['password'];
 
     protected $casts = [
         'password' => 'hashed',
+        'telegram_enabled' => 'boolean',
         'intraday_monitor_enabled' => 'boolean',
     ];
 

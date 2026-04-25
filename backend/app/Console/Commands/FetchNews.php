@@ -41,7 +41,7 @@ class FetchNews extends Command
         }
 
         $time = now()->format('H:i');
-        app(TelegramService::class)->send("✅ *新聞抓取*({$time}) 完成\n📅 {$date} | 共 {$totalCount} 篇");
+        app(TelegramService::class)->broadcast("✅ *新聞抓取*({$time}) 完成\n📅 {$date} | 共 {$totalCount} 篇", 'system');
 
         $this->info("新聞抓取完成，共 {$totalCount} 篇");
 

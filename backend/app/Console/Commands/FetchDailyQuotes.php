@@ -29,8 +29,9 @@ class FetchDailyQuotes extends Command
         $this->fetchTpex($rocDate);
 
         $total = $this->twseCount + $this->tpexCount;
-        app(TelegramService::class)->send(
-            "✅ *每日行情抓取* 完成\n📅 {$sqlDate} | 上市 {$this->twseCount} 筆 + 上櫃 {$this->tpexCount} 筆 = 共 {$total} 筆"
+        app(TelegramService::class)->broadcast(
+            "✅ *每日行情抓取* 完成\n📅 {$sqlDate} | 上市 {$this->twseCount} 筆 + 上櫃 {$this->tpexCount} 筆 = 共 {$total} 筆",
+            'system'
         );
 
         $this->info('每日行情抓取完成');

@@ -15,13 +15,13 @@ function scheduledCommand(string $command, string $label, bool $selfNotify = fal
     $event = Schedule::command($command)
         ->appendOutputTo($scheduleLog)
         ->onFailure(function () use ($label) {
-            app(TelegramService::class)->send("❌ *{$label}* 失敗，請檢查 logs");
+            app(TelegramService::class)->broadcast("❌ *{$label}* 失敗，請檢查 logs", 'system');
         });
 
     // 若 command 自行發送詳細通知，就不再發 generic 成功通知
     if (!$selfNotify) {
         $event->onSuccess(function () use ($label) {
-            app(TelegramService::class)->send("✅ *{$label}* 完成");
+            app(TelegramService::class)->broadcast("✅ *{$label}* 完成", 'system');
         });
     }
 

@@ -18,6 +18,8 @@ class UserController extends Controller
                 'name'       => $u->name,
                 'email'      => $u->email,
                 'role'       => $u->role,
+                'telegram_chat_id'         => $u->telegram_chat_id,
+                'telegram_enabled'         => $u->telegram_enabled ?? false,
                 'intraday_monitor_enabled' => $u->intraday_monitor_enabled ?? true,
                 'created_at' => $u->created_at,
             ])
@@ -32,6 +34,8 @@ class UserController extends Controller
             'email'    => 'nullable|email|unique:users',
             'password' => 'required|string|min:8',
             'role'     => 'required|in:admin,viewer',
+            'telegram_chat_id'         => 'nullable|string|max:50|unique:users,telegram_chat_id',
+            'telegram_enabled'         => 'sometimes|boolean',
             'intraday_monitor_enabled' => 'sometimes|boolean',
         ]);
 
@@ -43,6 +47,8 @@ class UserController extends Controller
             'name'    => $user->name,
             'email'   => $user->email,
             'role'    => $user->role,
+            'telegram_chat_id'         => $user->telegram_chat_id,
+            'telegram_enabled'         => $user->telegram_enabled,
             'intraday_monitor_enabled' => $user->intraday_monitor_enabled,
         ], 201);
     }
@@ -55,6 +61,8 @@ class UserController extends Controller
             'email'    => 'sometimes|nullable|email|unique:users,email,' . $user->id,
             'password' => 'sometimes|string|min:8',
             'role'     => 'sometimes|in:admin,viewer',
+            'telegram_chat_id'         => 'sometimes|nullable|string|max:50|unique:users,telegram_chat_id,' . $user->id,
+            'telegram_enabled'         => 'sometimes|boolean',
             'intraday_monitor_enabled' => 'sometimes|boolean',
         ]);
 
@@ -66,6 +74,8 @@ class UserController extends Controller
             'name'    => $user->name,
             'email'   => $user->email,
             'role'    => $user->role,
+            'telegram_chat_id'         => $user->telegram_chat_id,
+            'telegram_enabled'         => $user->telegram_enabled,
             'intraday_monitor_enabled' => $user->intraday_monitor_enabled,
         ]);
     }

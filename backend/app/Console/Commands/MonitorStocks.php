@@ -376,7 +376,7 @@ class MonitorStocks extends Command
                 ? round(($data['current_price'] - $data['prev_close']) / $data['prev_close'] * 100, 1)
                 : 0;
 
-            $this->telegram->send(sprintf(
+            $this->telegram->broadcast(sprintf(
                 "[當沖%s] %s %s %.2f (%+.1f%%) | 量 %s 股 | 監控 %s",
                 $label,
                 $symbol,
