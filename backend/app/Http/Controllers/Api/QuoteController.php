@@ -389,7 +389,10 @@ class QuoteController extends Controller
     "add_price": 118.0
   }
 }
-stop_profit/stop_loss/add_price 不適用時填 null。add_price 僅在 action 為「加碼」時必填。
+stop_profit/stop_loss/add_price 不適用時填 null。add_price 僅在 action 為「加碼」或「掛價加碼」時必填。
+
+## 用語規範
+- analysis 中提及時間時，用「本日」指今天，用「下一交易日」指下次開盤日，禁止使用「明日」「明天」（因為可能隔週末或連假）
 PROMPT;
 
         $anthropicKey = config('services.anthropic.api_key', '');
