@@ -312,16 +312,41 @@ class HealthCheck extends Command
         }
 
         // 8. Log 檔案大小檢查
-        $logPath = storage_path('logs/laravel.log');
-        if (file_exists($logPath)) {
-            $logSizeMb = round(filesize($logPath) / 1024 / 1024, 1);
-            if ($logSizeMb > 500) {
-                $checks[] = ['name' => 'Log 大小', 'status' => 'error', 'detail' => "laravel.log {$logSizeMb}MB（超過 500MB，建議清理）"];
-            } elseif ($logSizeMb > 100) {
-                $checks[] = ['name' => 'Log 大小', 'status' => 'warn', 'detail' => "laravel.log {$logSizeMb}MB（超過 100MB）"];
-            } else {
-                $checks[] = ['name' => 'Log 大小', 'status' => 'ok', 'detail' => "laravel.log {$logSizeMb}MB"];
+        $logDir = storage_path('logs');
+        $totalLogMb = 0;
+        $dailyLogFiles = glob($logDir . '/laravel-*.log');
+        $dailyLogCount = count($dailyLogFiles);
+
+        foreach ($dailyLogFiles as $file) {
+            $totalLogMb += filesize($file);
+        }
+
+        // 檢查舊的單一 laravel.log（切換 daily 前留下的）
+        $oldLogPath = $logDir . '/laravel.log';
+        if (file_exists($oldLogPath)) {
+            $oldLogMb = round(filesize($oldLogPath) / 1024 / 1024, 1);
+            if ($oldLogMb > 100) {
+                $checks[] = ['name' => 'Log 舊檔', 'status' => 'warn', 'detail' => "laravel.log {$oldLogMb}MB 未清理（已切換 daily，可手動刪除）"];
             }
+        }
+
+        // 檢查今日 daily log
+        $todayLogPath = $logDir . '/laravel-' . $date . '.log';
+        if (file_exists($todayLogPath)) {
+            $todayMb = round(filesize($todayLogPath) / 1024 / 1024, 1);
+            if ($todayMb > 50) {
+                $checks[] = ['name' => 'Log 今日', 'status' => 'warn', 'detail' => "laravel-{$date}.log {$todayMb}MB（單日超過 50MB，可能有異常大量寫入）"];
+            } else {
+                $checks[] = ['name' => 'Log 今日', 'status' => 'ok', 'detail' => "laravel-{$date}.log {$todayMb}MB"];
+            }
+        }
+
+        // 檢查 daily log 檔案數量（預期 <= 7 天）
+        $totalLogMb = round($totalLogMb / 1024 / 1024, 1);
+        if ($dailyLogCount > 10) {
+            $checks[] = ['name' => 'Log 輪替', 'status' => 'warn', 'detail' => "{$dailyLogCount} 個日誌檔（預期 ≤ 7），總計 {$totalLogMb}MB，輪替可能未正常運作"];
+        } elseif ($dailyLogCount > 0) {
+            $checks[] = ['name' => 'Log 輪替', 'status' => 'ok', 'detail' => "{$dailyLogCount} 個日誌檔，總計 {$totalLogMb}MB"];
         }
 
         $schedulePath = storage_path('logs/schedule.log');
