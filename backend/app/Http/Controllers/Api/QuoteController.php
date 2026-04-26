@@ -210,6 +210,12 @@ class QuoteController extends Controller
             return response()->json(['error' => '請輸入有效的成本價'], 422);
         }
 
+        $shares = (int) request('shares', 0);  // 持倉張數，0 = 未提供
+        $direction = request('direction', 'long'); // long or short
+        if (!in_array($direction, ['long', 'short'])) {
+            $direction = 'long';
+        }
+
         if (!preg_match('/^\d{4,6}$/', $symbol)) {
             return response()->json(['error' => '無效代號'], 422);
         }
@@ -239,7 +245,9 @@ class QuoteController extends Controller
         $bidLines  = $dbData['bid_lines'];
         $askLines  = $dbData['ask_lines'];
 
-        $pnlPct = $cost > 0 ? round(($close - $cost) / $cost * 100, 2) : 0;
+        $pnlPct = $cost > 0
+            ? round(($direction === 'short' ? ($cost - $close) : ($close - $cost)) / $cost * 100, 2)
+            : 0;
 
         // 近 20 日日 K 線（先查 DB，無資料再 fallback Fugle API）
         $dailyKLines = [];
@@ -319,7 +327,7 @@ class QuoteController extends Controller
             "現在時間：{$currentTime}　距收盤：{$minutesLeft}分鐘",
             "昨收：{$prevClose}　開：{$open}　高：{$high}　低：{$low}　現價：{$close}",
             "漲跌：{$changePct}%　成交量：{$volume}張　20日均量：{$avgVolume}張　外盤比：{$extRatio}%",
-            "成本價：{$cost}　帳面損益：{$pnlPct}%",
+            "持倉方向：" . ($direction === 'short' ? '做空' : '做多') . ($shares > 0 ? "　張數：{$shares}張" : '') . "　成本價：{$cost}　帳面損益：{$pnlPct}%",
             "",
             "五檔：",
             implode("\n", $askLines),
@@ -343,31 +351,37 @@ class QuoteController extends Controller
 4. 盤中趨勢：從全天5分K判斷上升/下降/震盪，關鍵轉折點
 5. 關鍵價位：日高/日低/開盤價/近20日高低點作為支撐壓力
 6. 外盤比：>55%偏多、<45%偏空
+7. 持倉方向：做多時價漲有利、做空時價跌有利，所有建議必須配合持倉方向
+8. 部位大小：若有提供張數，評估風險時考量部位規模
 
 ## 短線建議（今日收盤前必須結束）
 - 重點：盤中走勢、時間壓力（尾盤<30分鐘應積極決斷）；若已收盤則評估收盤結果
-- 動作：續抱 / 止損 / 觀望
+- 動作：續抱 / 加碼 / 止損 / 觀望
+- 加碼條件：趨勢明確且有明確支撐（做多）或壓力（做空）時才建議，必須給出加碼價位
 
 ## 波段建議（可持有數天到數週）
 - 重點：日K趨勢、量價結構、關鍵支撐壓力位
-- 動作：續抱 / 減碼 / 止損 / 加碼 / 觀望
+- 動作：續抱 / 加碼 / 減碼 / 止損 / 觀望
+- 加碼條件：中期趨勢未破且回測支撐（做多）或壓力（做空）時，必須給出加碼價位
 
 ## 回覆格式（嚴格遵守 JSON，不要加 markdown 標記）
 {
   "short": {
-    "action": "續抱|止損|觀望",
+    "action": "續抱|加碼|止損|觀望",
     "analysis": "短線分析（100字內）",
     "stop_profit": 123.0,
-    "stop_loss": 118.0
+    "stop_loss": 118.0,
+    "add_price": 120.0
   },
   "long": {
-    "action": "續抱|減碼|止損|加碼|觀望",
-    "analysis": "波段分析（100字內）",
+    "action": "續抱|加碼|減碼|止損|觀望",
+    "analysis": "波段分析（150字內）",
     "stop_profit": 130.0,
-    "stop_loss": 115.0
+    "stop_loss": 115.0,
+    "add_price": 118.0
   }
 }
-stop_profit/stop_loss 不適用時填 null。
+stop_profit/stop_loss/add_price 不適用時填 null。add_price 僅在 action 為「加碼」時必填。
 PROMPT;
 
         $anthropicKey = config('services.anthropic.api_key', '');
@@ -381,7 +395,7 @@ PROMPT;
             ])
             ->post(self::ANTHROPIC_API, [
                 'model'      => $model,
-                'max_tokens' => 512,
+                'max_tokens' => 768,
                 'messages'   => [
                     ['role' => 'user', 'content' => $dataBlock],
                 ],

@@ -125,12 +125,22 @@
         <div class="ai-input-row">
           <el-input
             v-model="costInput"
-            placeholder="輸入平均成本價"
+            placeholder="成本價"
             type="number"
             style="flex: 1"
           >
             <template #prefix>$</template>
           </el-input>
+          <el-input
+            v-model="sharesInput"
+            placeholder="張數（選填）"
+            type="number"
+            style="flex: 0.7"
+          />
+          <el-select v-model="directionInput" style="width: 90px">
+            <el-option label="做多" value="long" />
+            <el-option label="做空" value="short" />
+          </el-select>
           <el-button type="warning" :loading="analyzing" @click="doAnalyze">AI 分析</el-button>
         </div>
         <div v-if="aiResult" class="ai-result">
@@ -144,9 +154,10 @@
               <div class="ai-action" :class="actionClass(aiResult.short?.action)">
                 <span class="ai-action-label">短線 {{ aiResult.short?.action }}</span>
               </div>
-              <div class="ai-levels" v-if="aiResult.short?.stop_profit || aiResult.short?.stop_loss">
+              <div class="ai-levels" v-if="aiResult.short?.stop_profit || aiResult.short?.stop_loss || aiResult.short?.add_price">
                 <span v-if="aiResult.short?.stop_profit" class="ai-level up">停利 {{ aiResult.short.stop_profit }}</span>
                 <span v-if="aiResult.short?.stop_loss" class="ai-level down">停損 {{ aiResult.short.stop_loss }}</span>
+                <span v-if="aiResult.short?.add_price" class="ai-level add">加碼 {{ aiResult.short.add_price }}</span>
               </div>
               <div class="ai-note">* 今日收盤前賣出</div>
               <div class="ai-text">{{ aiResult.short?.analysis }}</div>
@@ -155,9 +166,10 @@
               <div class="ai-action" :class="actionClass(aiResult.long?.action)">
                 <span class="ai-action-label">波段 {{ aiResult.long?.action }}</span>
               </div>
-              <div class="ai-levels" v-if="aiResult.long?.stop_profit || aiResult.long?.stop_loss">
+              <div class="ai-levels" v-if="aiResult.long?.stop_profit || aiResult.long?.stop_loss || aiResult.long?.add_price">
                 <span v-if="aiResult.long?.stop_profit" class="ai-level up">停利 {{ aiResult.long.stop_profit }}</span>
                 <span v-if="aiResult.long?.stop_loss" class="ai-level down">停損 {{ aiResult.long.stop_loss }}</span>
+                <span v-if="aiResult.long?.add_price" class="ai-level add">加碼 {{ aiResult.long.add_price }}</span>
               </div>
               <div class="ai-note">* 可持有數天到數週</div>
               <div class="ai-text">{{ aiResult.long?.analysis }}</div>
@@ -241,6 +253,8 @@ const quote = ref(null)
 const loading = ref(false)
 const searched = ref(false)
 const costInput = ref('')
+const sharesInput = ref('')
+const directionInput = ref('long')
 const analyzing = ref(false)
 const aiResult = ref(null)
 const chartMode = ref('intraday')
@@ -333,7 +347,8 @@ async function doAnalyze() {
   if (!quote.value?.symbol) return
   analyzing.value = true
   try {
-    const { data } = await analyzeQuote(quote.value.symbol, cost)
+    const shares = parseInt(sharesInput.value) || 0
+    const { data } = await analyzeQuote(quote.value.symbol, cost, shares, directionInput.value)
     aiResult.value = data
   } catch (e) {
     aiResult.value = null
@@ -489,6 +504,7 @@ const chartOption = computed(() => {
 .ai-level { font-size: 13px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
 .ai-level.up { background: #fef0f0; color: #ef5350; }
 .ai-level.down { background: #f0f9eb; color: #26a69a; }
+.ai-level.add { background: #fdf6ec; color: #e6a23c; }
 .ai-text { font-size: 13px; line-height: 1.6; color: #303133; white-space: pre-wrap; }
 
 /* autocomplete suggestions */

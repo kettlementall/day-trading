@@ -152,8 +152,8 @@ export const searchQuote = (q) =>
 export const getQuote = (symbol) =>
   api.get(`/quote/${symbol}`)
 
-export const analyzeQuote = (symbol, cost) =>
-  api.post(`/quote/${symbol}/analyze`, { cost }, { timeout: 40000 })
+export const analyzeQuote = (symbol, cost, shares = 0, direction = 'long') =>
+  api.post(`/quote/${symbol}/analyze`, { cost, shares, direction }, { timeout: 40000 })
 
 // 系統規格
 export const getSpec = () =>
