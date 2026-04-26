@@ -159,7 +159,7 @@
                 <span v-if="aiResult.short?.stop_loss" class="ai-level down">停損 {{ aiResult.short.stop_loss }}</span>
                 <span v-if="aiResult.short?.add_price" class="ai-level add">加碼 {{ aiResult.short.add_price }}</span>
               </div>
-              <div class="ai-note">* {{ aiResult.short?.action?.startsWith('明日') ? '明日開盤操作建議' : '今日收盤前結束' }}</div>
+              <div class="ai-note">* {{ ['續抱','加碼','止損','觀望'].includes(aiResult.short?.action) ? '今日收盤前結束' : '下一交易日操作建議' }}</div>
               <div class="ai-text">{{ aiResult.short?.analysis }}</div>
             </div>
             <div class="ai-dual-block">
@@ -361,8 +361,9 @@ async function doAnalyze() {
 
 function actionClass(action) {
   if (!action) return ''
-  if (['續抱', '加碼', '明日觀察續抱', '明日掛價加碼'].includes(action)) return 'action-hold'
-  if (['止損', '明日停損', '明日開盤出場'].includes(action)) return 'action-stop'
+  if (['續抱', '加碼', '觀察續抱', '掛價加碼'].includes(action)) return 'action-hold'
+  if (['止損', '掛價停損'].includes(action)) return 'action-stop'
+  if (action.includes('出場')) return 'action-stop'
   if (action === '減碼') return 'action-reduce'
   return 'action-wait'
 }

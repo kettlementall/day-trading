@@ -319,12 +319,14 @@ class QuoteController extends Controller
 
         $now = now()->timezone('Asia/Taipei');
         $currentTime = $now->format('H:i');
+        $weekday = ['日', '一', '二', '三', '四', '五', '六'][$now->dayOfWeek];
+        $dateStr = $now->format('Y-m-d') . "（{$weekday}）";
         $marketClose = '13:30';
         $minutesLeft = max(0, $now->diffInMinutes(\Carbon\Carbon::parse("today {$marketClose}", 'Asia/Taipei'), false));
 
         $dataBlock = implode("\n", [
             "股票：{$symbol} {$name}",
-            "現在時間：{$currentTime}　距收盤：{$minutesLeft}分鐘",
+            "日期：{$dateStr}　現在時間：{$currentTime}　距收盤：{$minutesLeft}分鐘",
             "昨收：{$prevClose}　開：{$open}　高：{$high}　低：{$low}　現價：{$close}",
             "漲跌：{$changePct}%　成交量：{$volume}張　20日均量：{$avgVolume}張　外盤比：{$extRatio}%",
             "持倉方向：" . ($direction === 'short' ? '做空' : '做多') . ($shares > 0 ? "　張數：{$shares}張" : '') . "　成本價：{$cost}　帳面損益：{$pnlPct}%",
@@ -360,9 +362,10 @@ class QuoteController extends Controller
 - 動作：續抱 / 加碼 / 止損 / 觀望
 - 加碼條件：趨勢明確且有明確支撐（做多）或壓力（做空）時才建議，必須給出加碼價位
 ### 盤後（距收盤 = 0 分鐘）
-- 重點：評估今日收盤結果，給出明日開盤操作建議
-- 動作：明日開盤出場 / 明日觀察續抱 / 明日掛價加碼 / 明日停損
+- 重點：評估今日收盤結果，給出下一交易日開盤操作建議
+- 動作：下一交易日開盤出場 / 觀察續抱 / 掛價加碼 / 掛價停損
 - 若建議掛價加碼或停損，必須給出具體價位（填入 add_price 或 stop_loss）
+- 注意：若為週五盤後，下一交易日為週一，期間有週末風險（國際盤變化），建議應更保守
 
 ## 波段建議（可持有數天到數週）
 - 重點：日K趨勢、量價結構、關鍵支撐壓力位
@@ -372,7 +375,7 @@ class QuoteController extends Controller
 ## 回覆格式（嚴格遵守 JSON，不要加 markdown 標記）
 {
   "short": {
-    "action": "盤中：續抱|加碼|止損|觀望；盤後：明日開盤出場|明日觀察續抱|明日掛價加碼|明日停損",
+    "action": "盤中：續抱|加碼|止損|觀望；盤後：下一交易日開盤出場|觀察續抱|掛價加碼|掛價停損",
     "analysis": "短線分析（100字內）",
     "stop_profit": 123.0,
     "stop_loss": 118.0,
