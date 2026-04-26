@@ -241,6 +241,7 @@ class QuoteController extends Controller
         $extRatio  = $dbData['external_ratio'];
         $changePct = $dbData['change_pct'];
         $name      = $dbData['name'];
+        $tradeDate = $dbData['trade_date'];
         $candleLines = $dbData['candle_lines'];
         $bidLines  = $dbData['bid_lines'];
         $askLines  = $dbData['ask_lines'];
@@ -320,13 +321,22 @@ class QuoteController extends Controller
         $now = now()->timezone('Asia/Taipei');
         $currentTime = $now->format('H:i');
         $weekday = ['日', '一', '二', '三', '四', '五', '六'][$now->dayOfWeek];
-        $dateStr = $now->format('Y-m-d') . "（{$weekday}）";
+        $queryDateStr = $now->format('Y-m-d') . "（{$weekday}）";
+
+        $tradeDateCarbon = \Carbon\Carbon::parse($tradeDate);
+        $tradeWeekday = ['日', '一', '二', '三', '四', '五', '六'][$tradeDateCarbon->dayOfWeek];
+        $tradeDateStr = $tradeDateCarbon->format('Y-m-d') . "（{$tradeWeekday}）";
+
+        $isTradeDay = $now->format('Y-m-d') === $tradeDate;
         $marketClose = '13:30';
-        $minutesLeft = max(0, $now->diffInMinutes(\Carbon\Carbon::parse("today {$marketClose}", 'Asia/Taipei'), false));
+        $minutesLeft = $isTradeDay
+            ? max(0, $now->diffInMinutes(\Carbon\Carbon::parse("today {$marketClose}", 'Asia/Taipei'), false))
+            : 0;
 
         $dataBlock = implode("\n", [
             "股票：{$symbol} {$name}",
-            "日期：{$dateStr}　現在時間：{$currentTime}　距收盤：{$minutesLeft}分鐘",
+            "查詢時間：{$queryDateStr} {$currentTime}" . ($isTradeDay ? "　距收盤：{$minutesLeft}分鐘" : '　（非交易時段）'),
+            "報價交易日：{$tradeDateStr}" . (!$isTradeDay ? '　⚠ 以下報價為該交易日收盤資料，非即時' : ''),
             "昨收：{$prevClose}　開：{$open}　高：{$high}　低：{$low}　現價：{$close}",
             "漲跌：{$changePct}%　成交量：{$volume}張　20日均量：{$avgVolume}張　外盤比：{$extRatio}%",
             "持倉方向：" . ($direction === 'short' ? '做空' : '做多') . ($shares > 0 ? "　張數：{$shares}張" : '') . "　成本價：{$cost}　帳面損益：{$pnlPct}%",
@@ -392,7 +402,9 @@ class QuoteController extends Controller
 stop_profit/stop_loss/add_price 不適用時填 null。add_price 僅在 action 為「加碼」或「掛價加碼」時必填。
 
 ## 用語規範
-- analysis 中提及時間時，用「本日」指今天，用「下一交易日」指下次開盤日，禁止使用「明日」「明天」（因為可能隔週末或連假）
+- 提及報價資料時，使用「該交易日」或具體日期，不要用「今日」「本日」（查詢時間可能與交易日不同）
+- 提及未來操作時，使用「下一交易日」，禁止使用「明日」「明天」（可能隔週末或連假）
+- 若查詢時間與報價交易日不同（非交易時段查詢），短線建議應以「下一交易日」開盤為基準
 PROMPT;
 
         $anthropicKey = config('services.anthropic.api_key', '');
@@ -474,6 +486,7 @@ PROMPT;
 
         return [
             'name'           => $stock->name ?? '',
+            'trade_date'     => $snapshot->trade_date,
             'prev_close'     => $prevClose,
             'open'           => (float) $snapshot->open,
             'high'           => (float) $snapshot->high,
@@ -522,6 +535,7 @@ PROMPT;
 
         return [
             'name'           => $quote['name'] ?? '',
+            'trade_date'     => $quote['date'] ?? now()->format('Y-m-d'),
             'prev_close'     => $prevClose,
             'open'           => (float) ($quote['openPrice'] ?? 0),
             'high'           => (float) ($quote['highPrice'] ?? 0),
