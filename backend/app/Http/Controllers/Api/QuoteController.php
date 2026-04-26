@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\DailyQuote;
 use App\Models\IntradaySnapshot;
+use App\Models\SectorIndex;
 use App\Models\Stock;
 use App\Services\FugleRealtimeClient;
 use Illuminate\Http\JsonResponse;
@@ -333,12 +334,26 @@ class QuoteController extends Controller
             ? max(0, $now->diffInMinutes(\Carbon\Carbon::parse("today {$marketClose}", 'Asia/Taipei'), false))
             : 0;
 
-        $dataBlock = implode("\n", [
+        // 類股與大盤背景
+        $industry = $stock ? ($stock->industry ?? '') : '';
+        $sectorLine = '';
+        if ($industry) {
+            $sectorChg  = SectorIndex::getChangeForIndustry($tradeDate, $industry);
+            $sectorRank = SectorIndex::getRankForIndustry($tradeDate, $industry);
+            $totalSectors = SectorIndex::where('date', SectorIndex::latestDateOn($tradeDate))->count();
+            if ($sectorChg !== null) {
+                $sign = $sectorChg >= 0 ? '+' : '';
+                $sectorLine = "所屬類股：{$industry}　漲跌：{$sign}{$sectorChg}%　排名：{$sectorRank}/{$totalSectors}";
+            }
+        }
+
+        $dataBlock = implode("\n", array_filter([
             "股票：{$symbol} {$name}",
             "查詢時間：{$queryDateStr} {$currentTime}" . ($isTradeDay ? "　距收盤：{$minutesLeft}分鐘" : '　（非交易時段）'),
             "報價交易日：{$tradeDateStr}" . (!$isTradeDay ? '　⚠ 以下報價為該交易日收盤資料，非即時' : ''),
             "昨收：{$prevClose}　開：{$open}　高：{$high}　低：{$low}　現價：{$close}",
             "漲跌：{$changePct}%　成交量：{$volume}張　20日均量：{$avgVolume}張　外盤比：{$extRatio}%",
+            $sectorLine ?: null,
             "持倉方向：" . ($direction === 'short' ? '做空' : '做多') . ($shares > 0 ? "　張數：{$shares}張" : '') . "　成本價：{$cost}　帳面損益：{$pnlPct}%",
             "",
             "五檔：",
@@ -351,7 +366,7 @@ class QuoteController extends Controller
             "",
             "今日5分K：",
             implode("\n", $candleLines),
-        ]);
+        ], fn($v) => $v !== null));
 
         $systemPrompt = <<<'PROMPT'
 你是一位台股交易顧問。根據用戶提供的即時報價與近期日K數據，同時從「短線」和「波段」兩個角度分析持倉，一次給出兩個建議。
@@ -363,7 +378,8 @@ class QuoteController extends Controller
 4. 盤中趨勢：從全天5分K判斷上升/下降/震盪，關鍵轉折點
 5. 關鍵價位：日高/日低/開盤價/近20日高低點作為支撐壓力
 6. 外盤比：>55%偏多、<45%偏空
-7. 持倉方向：做多時價漲有利、做空時價跌有利，所有建議必須配合持倉方向
+7. 類股背景：個股漲跌幅 vs 所屬類股漲跌幅，判斷是個股因素還是類股連動。類股排名靠前代表族群強勢
+8. 持倉方向：做多時價漲有利、做空時價跌有利，所有建議必須配合持倉方向
 8. 部位大小：若有提供張數，評估風險時考量部位規模
 
 ## 短線建議
