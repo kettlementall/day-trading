@@ -241,13 +241,13 @@ class QuoteController extends Controller
 
         $pnlPct = $cost > 0 ? round(($close - $cost) / $cost * 100, 2) : 0;
 
-        // 近 5 日日 K 線（先查 DB，無資料再 fallback Fugle API）
+        // 近 20 日日 K 線（先查 DB，無資料再 fallback Fugle API）
         $dailyKLines = [];
         $stock = Stock::where('symbol', $symbol)->first();
         if ($stock) {
             $dailyQuotes = DailyQuote::where('stock_id', $stock->id)
                 ->orderByDesc('date')
-                ->limit(5)
+                ->limit(20)
                 ->get()
                 ->reverse();
 
@@ -269,7 +269,7 @@ class QuoteController extends Controller
 
         // DB 無資料 → Fugle Historical API fallback
         if (empty($dailyKLines)) {
-            $fugleDaily = $this->fugle->fetchDailyCandles($symbol, 5);
+            $fugleDaily = $this->fugle->fetchDailyCandles($symbol, 20);
             if (!empty($fugleDaily)) {
                 $dailyKLines = ['日期  開  高  低  收  量(張)  漲%'];
                 foreach ($fugleDaily as $c) {
@@ -287,6 +287,28 @@ class QuoteController extends Controller
         }
         $dailyKSection = !empty($dailyKLines) ? implode("\n", $dailyKLines) : '（無日K資料）';
 
+        // 20 日均量（DB 優先，不足 20 筆則 fallback Fugle）
+        $avgVolume = '—';
+        $dbAvgCount = 0;
+        if ($stock) {
+            $dbAvgCount = DailyQuote::where('stock_id', $stock->id)->orderByDesc('date')->limit(20)->count();
+            if ($dbAvgCount >= 20) {
+                $avg = DailyQuote::where('stock_id', $stock->id)
+                    ->orderByDesc('date')
+                    ->limit(20)
+                    ->avg('volume');
+                $avgVolume = round($avg / 1000);
+            }
+        }
+        if ($avgVolume === '—') {
+            // DB 不足 → 從 Fugle fallback 資料或重新抓
+            $fugleDailyForAvg = $fugleDaily ?? $this->fugle->fetchDailyCandles($symbol, 20);
+            if (!empty($fugleDailyForAvg)) {
+                $totalVol = array_sum(array_column($fugleDailyForAvg, 'volume'));
+                $avgVolume = round($totalVol / count($fugleDailyForAvg) / 1000);
+            }
+        }
+
         $now = now()->timezone('Asia/Taipei');
         $currentTime = $now->format('H:i');
         $marketClose = '13:30';
@@ -296,7 +318,7 @@ class QuoteController extends Controller
             "股票：{$symbol} {$name}",
             "現在時間：{$currentTime}　距收盤：{$minutesLeft}分鐘",
             "昨收：{$prevClose}　開：{$open}　高：{$high}　低：{$low}　現價：{$close}",
-            "漲跌：{$changePct}%　成交量：{$volume}張　外盤比：{$extRatio}%",
+            "漲跌：{$changePct}%　成交量：{$volume}張　20日均量：{$avgVolume}張　外盤比：{$extRatio}%",
             "成本價：{$cost}　帳面損益：{$pnlPct}%",
             "",
             "五檔：",
@@ -304,10 +326,10 @@ class QuoteController extends Controller
             "---",
             implode("\n", $bidLines),
             "",
-            "近5日日K：",
+            "近20日日K：",
             $dailyKSection,
             "",
-            "近期5分K：",
+            "今日5分K：",
             implode("\n", $candleLines),
         ]);
 
@@ -315,11 +337,11 @@ class QuoteController extends Controller
 你是一位台股交易顧問。根據用戶提供的即時報價與近期日K數據，同時從「短線」和「波段」兩個角度分析持倉，一次給出兩個建議。
 
 ## 分析面向
-1. 近期走勢脈絡：從近5日日K判斷多空趨勢（連漲/連跌/盤整），今日走勢在近期脈絡中的意義
+1. 中期趨勢：從近20日日K判斷多空趨勢（均線方向、高低點位移），今日走勢在中期脈絡中的位置
 2. 開盤型態：開高/開低/平開，跳空幅度
-3. 量價關係：量能集中時段、價漲量增或價跌量縮，今日量能與近日對比
-4. 趨勢方向：從5分K判斷盤中上升/下降/震盪
-5. 關鍵價位：日高/日低/開盤價/近日高低點作為支撐壓力
+3. 量價關係：今日量 vs 20日均量判斷量能強弱，量價配合度，5分K中量能集中的時段
+4. 盤中趨勢：從全天5分K判斷上升/下降/震盪，關鍵轉折點
+5. 關鍵價位：日高/日低/開盤價/近20日高低點作為支撐壓力
 6. 外盤比：>55%偏多、<45%偏空
 
 ## 短線建議（今日收盤前必須結束）
@@ -420,11 +442,10 @@ PROMPT;
 
         // 嘗試抓 candles
         $candles = $this->fetchCandlesForSymbol($symbol);
-        $recentCandles = array_slice($candles, -12);
         $candleLines = array_map(function ($c) use ($prevClose) {
             $pct = $prevClose > 0 ? round(($c['close'] - $prevClose) / $prevClose * 100, 2) : 0;
             return "{$c['time']} O:{$c['open']} H:{$c['high']} L:{$c['low']} C:{$c['close']} V:{$c['volume']} ({$pct}%)";
-        }, $recentCandles);
+        }, $candles);
 
         return [
             'name'           => $stock->name ?? '',
@@ -466,11 +487,10 @@ PROMPT;
         $extRatio  = ($volAtAsk + $volAtBid) > 0
             ? round($volAtAsk / ($volAtAsk + $volAtBid) * 100, 1) : 50;
 
-        $recentCandles = array_slice($candles, -12);
         $candleLines = array_map(function ($c) use ($prevClose) {
             $pct = $prevClose > 0 ? round(($c['close'] - $prevClose) / $prevClose * 100, 2) : 0;
             return "{$c['time']} O:{$c['open']} H:{$c['high']} L:{$c['low']} C:{$c['close']} V:{$c['volume']} ({$pct}%)";
-        }, $recentCandles);
+        }, $candles);
 
         $bids = array_slice($quote['bids'] ?? [], 0, 5);
         $asks = array_slice($quote['asks'] ?? [], 0, 5);
