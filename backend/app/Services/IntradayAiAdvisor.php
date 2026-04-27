@@ -438,7 +438,11 @@ PROMPT;
 ## 時間規則
 - 當沖部位必須在 13:30 收盤前平倉
 - 距收盤 ≤ 30 分鐘（尾盤）：不建議新進場；持有中應積極決斷，傾向出場而非繼續觀望
-- 距收盤 ≤ 15 分鐘：除非明確獲利且走勢強勁，否則應建議 exit
+- 距收盤 ≤ 15 分鐘：除非明確獲利且走勢強勁，否��應建議 exit
+
+## 價格限制
+- 目標價和停損價不可超過漲停價或低於跌停價（狀態行會提供漲跌停價）
+- 接近漲停時：目標價最高只能設到漲停價
 
 ## 策略: {$strategy}
 
@@ -467,6 +471,9 @@ SYSTEM;
         $currentPrice = $latest ? (float) $latest->current_price : 0;
         $dayHigh = $latest ? (float) $latest->high : 0;
         $dayLow = $latest ? (float) $latest->low : 0;
+        $prevClose = $latest ? (float) $latest->prev_close : 0;
+        $limitUpPrice = $prevClose > 0 ? round($prevClose * 1.10, 2) : 0;
+        $limitDownPrice = $prevClose > 0 ? round($prevClose * 0.90, 2) : 0;
 
         // 時間壓力
         $now = now()->timezone('Asia/Taipei');
@@ -515,6 +522,7 @@ SYSTEM;
                 $entry, $monitor->entry_time?->format('H:i') ?? '-', $profitPct);
             $statusLines[] = sprintf("目標 %.2f（%+.2f%%）| 停損 %.2f（%.2f%%）| 今日最高 %.2f（距今 %.2f%%）",
                 $resistance, $distTarget, $support, $distStop, $dayHigh, $distDayHigh);
+            $statusLines[] = sprintf("昨收 %.2f | 漲停 %.2f | 跌停 %.2f", $prevClose, $limitUpPrice, $limitDownPrice);
 
             $profitContext = $profitPct >= 2 ? '獲利中' : ($profitPct <= -1 ? '虧損中' : '持平');
             $taskSection = <<<TASK
@@ -540,6 +548,7 @@ TASK;
             $statusLines[] = sprintf("狀態: 觀望中 | 現價 %.2f | 距支撐 %.2f（%.2f%%）| 距壓力 %.2f（%+.2f%%）",
                 $currentPrice, $support, $distSupport, $resistance, $distResistance);
             $statusLines[] = "進場條件: {$entryTrigger} | 今日高低: {$dayHigh} / {$dayLow}";
+            $statusLines[] = sprintf("昨收 %.2f | 漲停 %.2f | 跌停 %.2f", $prevClose, $limitUpPrice, $limitDownPrice);
 
             $taskSection = <<<TASK
 ## 任務（觀望中）

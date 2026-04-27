@@ -589,15 +589,27 @@ class MonitorService
         $adjustments = $advice['adjustments'] ?? [];
         $updated = [];
 
+        // 漲跌停 clamp
+        $candidate = $monitor->candidate;
+        $latestSnapshot = IntradaySnapshot::where('stock_id', $candidate->stock_id)
+            ->where('trade_date', $candidate->trade_date)
+            ->orderByDesc('snapshot_time')
+            ->first();
+        $prevClose = $latestSnapshot ? (float) $latestSnapshot->prev_close : 0;
+        $limitUp = $prevClose > 0 ? round($prevClose * 1.10, 2) : PHP_FLOAT_MAX;
+        $limitDown = $prevClose > 0 ? round($prevClose * 0.90, 2) : 0;
+
         // 目標價調整（target 優先，resistance 為舊格式 fallback）
         $newTarget = $adjustments['target'] ?? $adjustments['resistance'] ?? null;
         if ($newTarget !== null) {
+            $newTarget = min((float) $newTarget, $limitUp);
             $monitor->current_target = $newTarget;
             $updated[] = "目標→{$newTarget}";
         }
-        // 停損價調整（stop 優先，support 為舊格式 fallback）
+        // 停損價調整（stop ��先，support 為舊格式 fallback）
         $newStop = $adjustments['stop'] ?? $adjustments['support'] ?? null;
         if ($newStop !== null) {
+            $newStop = max((float) $newStop, $limitDown);
             $monitor->current_stop = $newStop;
             $updated[] = "停損→{$newStop}";
         }
