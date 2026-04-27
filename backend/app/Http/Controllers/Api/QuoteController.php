@@ -207,11 +207,13 @@ class QuoteController extends Controller
             $periodVol = max(0, $accVolNow - $prevAccVol);
             $prevAccVol = $accVolNow;
 
+            $prices = array_map(fn($s) => (float) $s->current_price, $snaps);
+
             $candles[] = [
                 'time'   => $time,
                 'open'   => (float) $first->current_price,
-                'high'   => max(array_map(fn($s) => (float) $s->high, $snaps)),
-                'low'    => min(array_map(fn($s) => (float) $s->low, $snaps)),
+                'high'   => max($prices),
+                'low'    => min($prices),
                 'close'  => (float) $last->current_price,
                 'volume' => (int) round($periodVol / 1000),
             ];

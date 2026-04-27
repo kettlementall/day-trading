@@ -630,10 +630,11 @@ MSG;
             $first = $snaps[0];
             $last = $snaps[count($snaps) - 1];
 
+            $prices = array_map(fn($s) => (float) $s->current_price, $snaps);
             $open = (float) $first->current_price;
             $close = (float) $last->current_price;
-            $high = max(array_map(fn($s) => (float) $s->high, $snaps));
-            $low = min(array_map(fn($s) => (float) $s->low, $snaps));
+            $high = max($prices);
+            $low = min($prices);
 
             $accVolNow = (int) $last->accumulated_volume;
             $periodVolShares = max(0, $accVolNow - $prevAccVol);
