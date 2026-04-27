@@ -123,7 +123,11 @@ class QuoteController extends Controller
             return response()->json(['error' => '查無此代號'], 404);
         }
 
-        $candles = $this->fugle->fetchCandles($symbol);
+        $candles = \Illuminate\Support\Facades\Cache::remember(
+            "candles:{$symbol}",
+            60,
+            fn() => $this->fugle->fetchCandles($symbol)
+        );
 
         $total     = $quote['total'] ?? [];
         $prevClose = (float) ($quote['referencePrice'] ?? 0);
@@ -154,11 +158,66 @@ class QuoteController extends Controller
     }
 
     /**
-     * 嘗試抓取 5 分 K（失敗回空陣列）
+     * 取得 5 分 K：候選標的從 DB snapshot 聚合，其餘走 Fugle API + 60 秒 cache
      */
     private function fetchCandlesForSymbol(string $symbol): array
     {
-        return $this->fugle->fetchCandles($symbol);
+        $stock = Stock::where('symbol', $symbol)->first();
+        if ($stock) {
+            $today = now()->format('Y-m-d');
+            $snapshots = IntradaySnapshot::where('stock_id', $stock->id)
+                ->where('trade_date', $today)
+                ->orderBy('snapshot_time')
+                ->get();
+
+            if ($snapshots->count() >= 2) {
+                return $this->aggregateSnapshotsToCandles($snapshots);
+            }
+        }
+
+        // 非候選標的：Fugle API + 60 秒 cache
+        return \Illuminate\Support\Facades\Cache::remember(
+            "candles:{$symbol}",
+            60,
+            fn() => $this->fugle->fetchCandles($symbol)
+        );
+    }
+
+    /**
+     * 從 IntradaySnapshot 聚合為前端格式的 5 分 K
+     */
+    private function aggregateSnapshotsToCandles(\Illuminate\Support\Collection $snapshots): array
+    {
+        $buckets = [];
+        foreach ($snapshots as $snap) {
+            $time = $snap->snapshot_time;
+            $slot = (int) floor((int) $time->format('i') / 5) * 5;
+            $key = $time->format('H') . ':' . str_pad($slot, 2, '0', STR_PAD_LEFT);
+            $buckets[$key][] = $snap;
+        }
+        ksort($buckets);
+
+        $candles = [];
+        $prevAccVol = 0;
+
+        foreach ($buckets as $time => $snaps) {
+            $first = $snaps[0];
+            $last = $snaps[count($snaps) - 1];
+            $accVolNow = (int) $last->accumulated_volume;
+            $periodVol = max(0, $accVolNow - $prevAccVol);
+            $prevAccVol = $accVolNow;
+
+            $candles[] = [
+                'time'   => $time,
+                'open'   => (float) $first->current_price,
+                'high'   => max(array_map(fn($s) => (float) $s->high, $snaps)),
+                'low'    => min(array_map(fn($s) => (float) $s->low, $snaps)),
+                'close'  => (float) $last->current_price,
+                'volume' => (int) round($periodVol / 1000),
+            ];
+        }
+
+        return $candles;
     }
 
 
@@ -188,8 +247,12 @@ class QuoteController extends Controller
             }
         }
 
-        // Fallback: Fugle Historical API
-        $fugleDaily = $this->fugle->fetchDailyCandles($symbol, 30);
+        // Fallback: Fugle Historical API（cache 5 分鐘）
+        $fugleDaily = \Illuminate\Support\Facades\Cache::remember(
+            "daily_candles:{$symbol}",
+            300,
+            fn() => $this->fugle->fetchDailyCandles($symbol, 30)
+        );
         return array_map(fn($c) => [
             'date'   => \Carbon\Carbon::parse($c['date'])->format('m/d'),
             'open'   => $c['open'],
@@ -532,7 +595,7 @@ PROMPT;
             return null;
         }
 
-        $candles = $this->fugle->fetchCandles($symbol);
+        $candles = $this->fetchCandlesForSymbol($symbol);
 
         $total     = $quote['total'] ?? [];
         $prevClose = (float) ($quote['referencePrice'] ?? 0);
