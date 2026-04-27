@@ -413,11 +413,14 @@ class QuoteController extends Controller
             }
         }
 
+        $limitUpPrice = $prevClose > 0 ? round($prevClose * 1.10, 2) : 0;
+        $limitDownPrice = $prevClose > 0 ? round($prevClose * 0.90, 2) : 0;
+
         $dataBlock = implode("\n", array_filter([
             "股票：{$symbol} {$name}",
             "查詢時間：{$queryDateStr} {$currentTime}" . ($isTradeDay ? "　距收盤：{$minutesLeft}分鐘" : '　（非交易時段）'),
             "報價交易日：{$tradeDateStr}" . (!$isTradeDay ? '　⚠ 以下報價為該交易日收盤資料，非即時' : ''),
-            "昨收：{$prevClose}　開：{$open}　高：{$high}　低：{$low}　現價：{$close}",
+            "昨收：{$prevClose}　開：{$open}　高：{$high}　低：{$low}　現價：{$close}　漲停：{$limitUpPrice}　跌停：{$limitDownPrice}",
             "漲跌：{$changePct}%　成交量：{$volume}張　20日均量：{$avgVolume}張　外盤比：{$extRatio}%",
             $sectorLine ?: null,
             "持倉方向：" . ($direction === 'short' ? '做空' : '做多') . ($shares > 0 ? "　張數：{$shares}張" : '') . "　成本價：{$cost}　帳面損益：{$pnlPct}%",
@@ -482,6 +485,10 @@ class QuoteController extends Controller
   }
 }
 stop_profit/stop_loss/add_price 不適用時填 null。add_price 僅在 action 為「加碼」或「掛價加碼」時必填。
+
+## 價格限制
+- stop_profit、stop_loss、add_price 不可超過漲停價或低於跌停價
+- 接近漲停時，stop_profit 最高只能設到漲停價
 
 ## 用語規範
 - 提及報價資料時，使用「該交易日」或具體日期，不要用「今日」「本日」（查詢時間可能與交易日不同）
