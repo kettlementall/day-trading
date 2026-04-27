@@ -63,7 +63,7 @@
       </div>
       <div class="monitor-list">
         <div
-          v-for="m in store.monitors"
+          v-for="m in sortedMonitors"
           :key="m.id"
           class="monitor-item"
           :class="'monitor-' + m.status"
@@ -353,7 +353,7 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, reactive } from 'vue'
+import { computed, onMounted, onUnmounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useCandidateStore } from '../stores/candidates'
 import { useAuthStore } from '../stores/auth'
@@ -361,6 +361,10 @@ import { useAuthStore } from '../stores/auth'
 const store = useCandidateStore()
 const authStore = useAuthStore()
 const router = useRouter()
+
+const sortedMonitors = computed(() =>
+  [...store.monitors].sort((a, b) => (a.status === 'skipped') - (b.status === 'skipped'))
+)
 
 const expandedIds = reactive(new Set())
 
