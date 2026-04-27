@@ -163,6 +163,26 @@ class CandidateController extends Controller
                     $profitPct = round(($currentPrice - (float) $monitor->entry_price) / (float) $monitor->entry_price * 100, 2);
                 }
 
+                // 距離百分比
+                $target = (float) ($monitor->current_target ?? 0);
+                $stop = (float) ($monitor->current_stop ?? 0);
+                $distTarget = ($currentPrice && $target > 0) ? round(($target - $currentPrice) / $currentPrice * 100, 2) : null;
+                $distStop = ($currentPrice && $stop > 0) ? round(($currentPrice - $stop) / $currentPrice * 100, 2) : null;
+
+                // 持有時間
+                $holdingMinutes = null;
+                if ($monitor->entry_time && in_array($monitor->status, ['holding', 'entry_signal'])) {
+                    $holdingMinutes = (int) $monitor->entry_time->diffInMinutes(now());
+                }
+
+                // 進場條件描述
+                $entryTrigger = match ($candidate->intraday_strategy ?? 'momentum') {
+                    'breakout_fresh', 'momentum' => $target > 0 ? "突破 {$target}" : '突破壓力位',
+                    'breakout_retest', 'gap_pullback' => $stop > 0 ? "回測 {$stop} 止穩" : '回測支撐止穩',
+                    'bounce' => $stop > 0 ? "觸及 {$stop} 反彈" : '觸及支撐反彈',
+                    default => '突破壓力位',
+                };
+
                 return [
                     'id' => $monitor->id,
                     'candidate_id' => $candidate->id,
@@ -170,6 +190,7 @@ class CandidateController extends Controller
                     'name' => $stock->name,
                     'status' => $monitor->status,
                     'strategy' => $candidate->intraday_strategy,
+                    'entry_trigger' => $entryTrigger,
                     'entry_price' => $monitor->entry_price,
                     'entry_time' => $monitor->entry_time?->format('H:i'),
                     'exit_price' => $monitor->exit_price,
@@ -178,6 +199,9 @@ class CandidateController extends Controller
                     'current_stop' => $monitor->current_stop,
                     'current_price' => $currentPrice,
                     'profit_pct' => $profitPct,
+                    'dist_target_pct' => $distTarget,
+                    'dist_stop_pct' => $distStop,
+                    'holding_minutes' => $holdingMinutes,
                     'limit_up' => $latestSnapshot?->limit_up ?? false,
                     'limit_down' => $latestSnapshot?->limit_down ?? false,
                     'skip_reason' => $monitor->skip_reason,

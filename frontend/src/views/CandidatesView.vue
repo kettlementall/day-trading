@@ -57,7 +57,8 @@
       <div class="monitor-header">
         <h3 class="monitor-title">盤中監控</h3>
         <span class="monitor-count">
-          活躍 <strong>{{ store.activeMonitors.length }}</strong> /
+          持有 <strong>{{ store.monitors.filter(m => m.status === 'holding').length }}</strong>
+          觀望 <strong>{{ store.monitors.filter(m => m.status === 'watching').length }}</strong>
           完成 <strong>{{ store.completedMonitors.length }}</strong>
         </span>
       </div>
@@ -66,55 +67,114 @@
           v-for="m in sortedMonitors"
           :key="m.id"
           class="monitor-item"
-          :class="'monitor-' + m.status"
+          :class="['monitor-' + m.status, { 'monitor-finished': isFinished(m.status) }]"
         >
-          <div class="monitor-item-top">
-            <div class="monitor-stock">
+          <!-- 已結束：收合一行 -->
+          <template v-if="isFinished(m.status)">
+            <div class="monitor-finished-row">
               <span class="stock-symbol">{{ m.symbol }}</span>
               <span class="stock-name">{{ m.name }}</span>
-            </div>
-            <div class="monitor-tags">
-              <el-tag v-if="m.limit_up" size="small" type="danger" round>漲停</el-tag>
-              <el-tag v-else-if="m.limit_down" size="small" type="info" round>跌停</el-tag>
-              <el-tag size="small" :type="monitorStatusType(m.status)" round>
-                {{ monitorStatusLabel(m.status) }}<template v-if="m.status === 'skipped' && skipTime(m)"> {{ skipTime(m) }}</template>
-              </el-tag>
-            </div>
-          </div>
-          <div class="monitor-item-body">
-            <div v-if="m.current_price" class="monitor-price">
-              <span class="label">現價</span>
-              <span class="value" :class="{ 'price-limit-up': m.limit_up, 'price-limit-down': m.limit_down }">{{ m.current_price }}</span>
-            </div>
-            <div v-if="m.profit_pct !== null" class="monitor-price">
-              <span class="label">損益</span>
-              <span class="value" :class="m.profit_pct >= 0 ? 'price-up' : 'price-down'">
+              <el-tag size="small" :type="monitorStatusType(m.status)" round>{{ monitorStatusLabel(m.status) }}</el-tag>
+              <span v-if="m.profit_pct !== null" class="finished-pnl" :class="m.profit_pct >= 0 ? 'price-up' : 'price-down'">
                 {{ m.profit_pct >= 0 ? '+' : '' }}{{ m.profit_pct }}%
               </span>
+              <span v-if="m.entry_price" class="finished-detail">{{ m.entry_price }}→{{ m.exit_price || '-' }}</span>
+              <span v-if="m.entry_time" class="finished-detail">{{ m.entry_time }}-{{ m.exit_time || '-' }}</span>
             </div>
-            <div v-if="m.entry_price" class="monitor-price">
-              <span class="label">進場</span>
-              <span class="value">{{ m.entry_price }}</span>
+          </template>
+
+          <!-- 跳過：收合一行 -->
+          <template v-else-if="m.status === 'skipped'">
+            <div class="monitor-finished-row">
+              <span class="stock-symbol">{{ m.symbol }}</span>
+              <span class="stock-name">{{ m.name }}</span>
+              <el-tag size="small" type="info" round>跳過</el-tag>
+              <span class="finished-detail">{{ m.skip_reason }}</span>
             </div>
-            <div v-if="m.current_target" class="monitor-price">
-              <span class="label">目標</span>
-              <span class="value price-up">{{ m.current_target }}</span>
+          </template>
+
+          <!-- HOLDING：持有中 -->
+          <template v-else-if="m.status === 'holding' || m.status === 'entry_signal'">
+            <div class="monitor-item-top">
+              <div class="monitor-stock">
+                <span class="stock-symbol">{{ m.symbol }}</span>
+                <span class="stock-name">{{ m.name }}</span>
+                <el-tag size="small" class="strategy-tag">{{ strategyLabel(m.strategy) }}</el-tag>
+              </div>
+              <div class="monitor-tags">
+                <el-tag v-if="m.limit_up" size="small" type="danger" round>漲停</el-tag>
+                <el-tag size="small" :type="monitorStatusType(m.status)" round>
+                  {{ monitorStatusLabel(m.status) }}
+                  <template v-if="m.holding_minutes"> {{ m.holding_minutes }}分</template>
+                </el-tag>
+              </div>
             </div>
-            <div v-if="m.current_stop" class="monitor-price">
-              <span class="label">停損</span>
-              <span class="value price-down">{{ m.current_stop }}</span>
+            <!-- 大字損益 -->
+            <div class="holding-hero">
+              <span class="holding-pnl" :class="m.profit_pct >= 0 ? 'price-up' : 'price-down'">
+                {{ m.profit_pct >= 0 ? '+' : '' }}{{ m.profit_pct }}%
+              </span>
+              <span class="holding-price" :class="{ 'price-limit-up': m.limit_up }">{{ m.current_price }}</span>
             </div>
-          </div>
-          <div v-if="m.skip_reason" class="monitor-reason">{{ m.skip_reason }}</div>
-          <div v-if="m.last_ai_advice && m.last_ai_advice.action !== 'skip'" class="monitor-ai">
-            <span class="monitor-ai-label">AI<template v-if="m.last_ai_advice.time"> {{ m.last_ai_advice.time }}</template>:</span> {{ m.last_ai_advice.notes }}
-            <span v-if="m.last_ai_advice.adjustments?.target" class="monitor-ai-adj price-up">
-              目標→{{ m.last_ai_advice.adjustments.target }}
-            </span>
-            <span v-if="m.last_ai_advice.adjustments?.stop" class="monitor-ai-adj price-down">
-              停損→{{ m.last_ai_advice.adjustments.stop }}
-            </span>
-          </div>
+            <!-- 進度條：停損 → 現價 → 目標 -->
+            <div v-if="holdingGaugePct(m) !== null" class="holding-gauge">
+              <div class="gauge-labels">
+                <span class="price-down">停損 {{ m.current_stop }}</span>
+                <span>進場 {{ m.entry_price }}</span>
+                <span class="price-up">目標 {{ m.current_target }}</span>
+              </div>
+              <div class="gauge-bar">
+                <div class="gauge-fill" :style="{ width: holdingGaugePct(m) + '%' }"
+                     :class="m.profit_pct >= 0 ? 'gauge-profit' : 'gauge-loss'"></div>
+                <div class="gauge-marker" :style="{ left: holdingGaugePct(m) + '%' }"></div>
+              </div>
+              <div class="gauge-dist">
+                <span class="price-down">距停損 {{ m.dist_stop_pct }}%</span>
+                <span class="price-up">距目標 {{ m.dist_target_pct }}%</span>
+              </div>
+            </div>
+            <!-- AI 評語 -->
+            <div v-if="m.last_ai_advice && m.last_ai_advice.action !== 'skip'" class="monitor-ai" @click="toggleAi(m.id)">
+              <span class="monitor-ai-label">AI {{ m.last_ai_advice.time?.substring(0,5) || '' }}</span>
+              <span v-if="m.last_ai_advice.adjustments?.target" class="monitor-ai-adj price-up">目標→{{ m.last_ai_advice.adjustments.target }}</span>
+              <span v-if="m.last_ai_advice.adjustments?.stop" class="monitor-ai-adj price-down">停損→{{ m.last_ai_advice.adjustments.stop }}</span>
+              <div class="monitor-ai-notes" :class="{ expanded: expandedAiIds.has(m.id) }">{{ m.last_ai_advice.notes }}</div>
+            </div>
+          </template>
+
+          <!-- WATCHING：觀望中 -->
+          <template v-else>
+            <div class="monitor-item-top">
+              <div class="monitor-stock">
+                <span class="stock-symbol">{{ m.symbol }}</span>
+                <span class="stock-name">{{ m.name }}</span>
+                <el-tag size="small" class="strategy-tag">{{ strategyLabel(m.strategy) }}</el-tag>
+              </div>
+              <div class="monitor-tags">
+                <el-tag v-if="m.limit_up" size="small" type="danger" round>漲停</el-tag>
+                <el-tag size="small" :type="monitorStatusType(m.status)" round>{{ monitorStatusLabel(m.status) }}</el-tag>
+              </div>
+            </div>
+            <div class="watching-body">
+              <div class="watching-price">
+                <span class="watching-current" :class="{ 'price-limit-up': m.limit_up, 'price-limit-down': m.limit_down }">{{ m.current_price || '-' }}</span>
+              </div>
+              <div class="watching-condition">
+                <span class="watching-trigger">{{ m.entry_trigger }}</span>
+              </div>
+              <div class="watching-levels">
+                <span v-if="m.dist_stop_pct !== null" class="price-down">支撐 {{ m.current_stop }}（{{ m.dist_stop_pct }}%）</span>
+                <span v-if="m.dist_target_pct !== null" class="price-up">壓力 {{ m.current_target }}（{{ m.dist_target_pct }}%）</span>
+              </div>
+            </div>
+            <!-- AI 評語 -->
+            <div v-if="m.last_ai_advice && m.last_ai_advice.action !== 'skip'" class="monitor-ai" @click="toggleAi(m.id)">
+              <span class="monitor-ai-label">AI {{ m.last_ai_advice.time?.substring(0,5) || '' }}</span>
+              <span v-if="m.last_ai_advice.adjustments?.target" class="monitor-ai-adj price-up">目標→{{ m.last_ai_advice.adjustments.target }}</span>
+              <span v-if="m.last_ai_advice.adjustments?.stop" class="monitor-ai-adj price-down">停損→{{ m.last_ai_advice.adjustments.stop }}</span>
+              <div class="monitor-ai-notes" :class="{ expanded: expandedAiIds.has(m.id) }">{{ m.last_ai_advice.notes }}</div>
+            </div>
+          </template>
         </div>
       </div>
     </div>
@@ -362,9 +422,15 @@ const store = useCandidateStore()
 const authStore = useAuthStore()
 const router = useRouter()
 
+const monitorStatusOrder = { holding: 0, entry_signal: 1, watching: 2, target_hit: 3, trailing_stop: 4, stop_hit: 5, closed: 6, skipped: 7, pending: 8 }
 const sortedMonitors = computed(() =>
-  [...store.monitors].sort((a, b) => (a.status === 'skipped') - (b.status === 'skipped'))
+  [...store.monitors].sort((a, b) => (monitorStatusOrder[a.status] ?? 9) - (monitorStatusOrder[b.status] ?? 9))
 )
+const expandedAiIds = reactive(new Set())
+function toggleAi(id) {
+  if (expandedAiIds.has(id)) expandedAiIds.delete(id)
+  else expandedAiIds.add(id)
+}
 
 const expandedIds = reactive(new Set())
 
@@ -455,6 +521,26 @@ function monitorStatusLabel(status) {
     trailing_stop: '停利', closed: '收盤平倉', skipped: '已跳過',
   }
   return map[status] || status
+}
+
+function strategyLabel(s) {
+  const map = { breakout_fresh: '突破', breakout_retest: '回測', gap_pullback: '跳空回拉', bounce: '反彈', momentum: '動能' }
+  return map[s] || s || ''
+}
+
+function isFinished(status) {
+  return ['target_hit', 'stop_hit', 'trailing_stop', 'closed'].includes(status)
+}
+
+function holdingGaugePct(m) {
+  if (!m.entry_price || !m.current_stop || !m.current_target) return null
+  const entry = parseFloat(m.entry_price)
+  const stop = parseFloat(m.current_stop)
+  const target = parseFloat(m.current_target)
+  const price = parseFloat(m.current_price)
+  const range = target - stop
+  if (range <= 0) return null
+  return Math.max(0, Math.min(100, ((price - stop) / range) * 100))
 }
 
 function gradeTagType(grade) {
@@ -817,6 +903,8 @@ function gradeLabel(grade) {
 .monitor-count {
   font-size: 12px;
   color: #606266;
+  display: flex;
+  gap: 8px;
 }
 
 .monitor-list {
@@ -831,6 +919,10 @@ function gradeLabel(grade) {
   padding: 10px 12px;
   border-left: 3px solid #dcdfe6;
 }
+.monitor-item.monitor-finished {
+  padding: 6px 12px;
+  opacity: 0.75;
+}
 
 .monitor-item.monitor-watching { border-left-color: #409eff; }
 .monitor-item.monitor-entry_signal { border-left-color: #e6a23c; }
@@ -838,10 +930,16 @@ function gradeLabel(grade) {
 .monitor-item.monitor-target_hit { border-left-color: #67c23a; }
 .monitor-item.monitor-stop_hit { border-left-color: #f56c6c; }
 .monitor-item.monitor-trailing_stop { border-left-color: #e6a23c; }
+.monitor-item.monitor-skipped { border-left-color: #dcdfe6; padding: 6px 12px; opacity: 0.6; }
 
 .monitor-tags {
   display: flex;
   gap: 4px;
+}
+
+.strategy-tag {
+  margin-left: 6px;
+  font-size: 11px !important;
 }
 
 .price-limit-up {
@@ -864,33 +962,110 @@ function gradeLabel(grade) {
   margin-bottom: 6px;
 }
 
-.monitor-item-body {
+/* 已結束/跳過 一行式 */
+.monitor-finished-row {
   display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.monitor-finished-row .stock-name { color: #909399; }
+.finished-pnl { font-weight: 700; font-size: 14px; margin-left: auto; }
+.finished-detail { font-size: 12px; color: #909399; }
+
+/* HOLDING 大字損益 */
+.holding-hero {
+  display: flex;
+  align-items: baseline;
   gap: 12px;
-  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.holding-pnl {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+.holding-price {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
 }
 
-.monitor-price .label {
+/* 進度條 gauge */
+.holding-gauge {
+  margin-bottom: 6px;
+}
+.gauge-labels {
+  display: flex;
+  justify-content: space-between;
   font-size: 11px;
   color: #909399;
-  display: block;
+  margin-bottom: 3px;
+}
+.gauge-bar {
+  position: relative;
+  height: 6px;
+  background: #f0f0f0;
+  border-radius: 3px;
+  overflow: visible;
+}
+.gauge-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.gauge-fill.gauge-profit { background: linear-gradient(90deg, #e6a23c, #67c23a); }
+.gauge-fill.gauge-loss { background: linear-gradient(90deg, #f56c6c, #e6a23c); }
+.gauge-marker {
+  position: absolute;
+  top: -3px;
+  width: 3px;
+  height: 12px;
+  background: #303133;
+  border-radius: 2px;
+  transform: translateX(-50%);
+}
+.gauge-dist {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-top: 2px;
 }
 
-.monitor-price .value {
-  font-size: 14px;
-  font-weight: 600;
+/* WATCHING */
+.watching-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
 }
-
-.monitor-reason {
-  margin-top: 4px;
+.watching-current {
+  font-size: 18px;
+  font-weight: 700;
+  color: #303133;
+}
+.watching-condition {
+  flex: 1;
+}
+.watching-trigger {
   font-size: 12px;
-  color: #909399;
+  color: #606266;
+  background: #f5f7fa;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.watching-levels {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
 }
 
+/* AI 評語 */
 .monitor-ai {
-  margin-top: 4px;
+  margin-top: 6px;
   font-size: 12px;
   color: #409eff;
+  cursor: pointer;
 }
 .monitor-ai-label {
   font-weight: 600;
@@ -899,6 +1074,19 @@ function gradeLabel(grade) {
   margin-left: 6px;
   font-weight: 600;
   font-size: 11px;
+}
+.monitor-ai-notes {
+  margin-top: 3px;
+  color: #606266;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.monitor-ai-notes.expanded {
+  -webkit-line-clamp: unset;
+  overflow: visible;
 }
 
 .loading-wrap, .empty-wrap {
