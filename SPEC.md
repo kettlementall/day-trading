@@ -1024,6 +1024,7 @@ Fallback（API 失敗）：回傳 `{action: "hold"}`，維持現狀。
 候選頁（`CandidatesView.vue`）新增當日沖/隔日沖切換 Tab：
 - 切換後呼叫 `GET /api/candidates?date=...&mode=overnight`
 - 隔日沖卡片額外顯示：`gap_potential_percent`（預測跳空幅度）、`overnight_reasoning`（完整策略說明）、`overnight_strategy` 進場類型標籤
+- 當沖/隔日沖均載入 `monitor` 關聯，若 AI 監控調整了目標價或停損價（`current_target` / `current_stop` 與原始值不同），卡片上以粗體顯示調整後價格，原始價格以刪除線灰字標示於右側
 
 ### 6.13 Phase 2（未來規劃）
 

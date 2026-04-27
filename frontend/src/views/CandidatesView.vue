@@ -169,11 +169,23 @@
           </div>
           <div class="price-item">
             <span class="label">目標獲利</span>
-            <span class="value price-up">{{ item.target_price }}</span>
+            <span class="value price-up">
+              <template v-if="item.monitor && item.monitor.current_target && item.monitor.current_target != item.target_price">
+                <span class="price-adjusted">{{ item.monitor.current_target }}</span>
+                <span class="price-original">{{ item.target_price }}</span>
+              </template>
+              <template v-else>{{ item.target_price }}</template>
+            </span>
           </div>
           <div class="price-item">
             <span class="label">停損</span>
-            <span class="value">{{ item.stop_loss }}</span>
+            <span class="value price-down">
+              <template v-if="item.monitor && item.monitor.current_stop && item.monitor.current_stop != item.stop_loss">
+                <span class="price-adjusted">{{ item.monitor.current_stop }}</span>
+                <span class="price-original">{{ item.stop_loss }}</span>
+              </template>
+              <template v-else>{{ item.stop_loss }}</template>
+            </span>
           </div>
           <div class="price-item">
             <span class="label">風報比</span>
@@ -564,6 +576,17 @@ function gradeLabel(grade) {
   display: block;
   font-size: 15px;
   font-weight: 600;
+}
+
+.price-adjusted {
+  font-weight: 600;
+}
+
+.price-original {
+  font-size: 11px;
+  color: #c0c4cc;
+  text-decoration: line-through;
+  margin-left: 4px;
 }
 
 .card-tags {

@@ -23,7 +23,7 @@ class CandidateController extends Controller
             $mode = 'intraday';
         }
 
-        $relations = $mode === 'overnight' ? ['stock', 'result', 'monitor'] : ['stock', 'result'];
+        $relations = ['stock', 'result', 'monitor'];
 
         $query = Candidate::with($relations)
             ->where('trade_date', $date)
