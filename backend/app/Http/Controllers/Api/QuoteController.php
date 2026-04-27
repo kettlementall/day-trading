@@ -328,6 +328,7 @@ class QuoteController extends Controller
         $tradeWeekday = ['日', '一', '二', '三', '四', '五', '六'][$tradeDateCarbon->dayOfWeek];
         $tradeDateStr = $tradeDateCarbon->format('Y-m-d') . "（{$tradeWeekday}）";
 
+        $tradeDate = $tradeDate instanceof \Carbon\Carbon ? $tradeDate->format('Y-m-d') : (string) $tradeDate;
         $isTradeDay = $now->format('Y-m-d') === $tradeDate;
         $marketClose = '13:30';
         $minutesLeft = $isTradeDay
