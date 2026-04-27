@@ -589,23 +589,17 @@ class MonitorService
         $adjustments = $advice['adjustments'] ?? [];
         $updated = [];
 
-        // HOLDING 狀態調整
-        if (isset($adjustments['target'])) {
-            $monitor->current_target = $adjustments['target'];
-            $updated[] = "目標→{$adjustments['target']}";
+        // 目標價調整（target 優先，resistance 為舊格式 fallback）
+        $newTarget = $adjustments['target'] ?? $adjustments['resistance'] ?? null;
+        if ($newTarget !== null) {
+            $monitor->current_target = $newTarget;
+            $updated[] = "目標→{$newTarget}";
         }
-        if (isset($adjustments['stop'])) {
-            $monitor->current_stop = $adjustments['stop'];
-            $updated[] = "停損→{$adjustments['stop']}";
-        }
-        // WATCHING 狀態支撐/壓力調整（更新 current_stop/target 供進場條件使用）
-        if (isset($adjustments['support'])) {
-            $monitor->current_stop = $adjustments['support'];
-            $updated[] = "支撐→{$adjustments['support']}";
-        }
-        if (isset($adjustments['resistance'])) {
-            $monitor->current_target = $adjustments['resistance'];
-            $updated[] = "壓力→{$adjustments['resistance']}";
+        // 停損價調整（stop 優先，support 為舊格式 fallback）
+        $newStop = $adjustments['stop'] ?? $adjustments['support'] ?? null;
+        if ($newStop !== null) {
+            $monitor->current_stop = $newStop;
+            $updated[] = "停損→{$newStop}";
         }
 
         if (!empty($updated)) {

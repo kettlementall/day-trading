@@ -544,7 +544,7 @@ TASK;
             $taskSection = <<<TASK
 ## 任務（觀望中）
 1. 當前走勢是否已達或即將達到進場條件？（建議 entry / hold / skip）
-2. 支撐位或壓力位是否需根據今日盤中走勢調整？（在 adjustments 中提供 support / resistance）
+2. 目標價（壓力位）或停損價（支撐位）是否需根據今日盤中走勢調整？（在 adjustments.target / adjustments.stop 中填寫新值，不調整則填 null）
 3. 日K趨勢是否支持當前操作方向？
 4. **策略切換**：若原策略條件明顯不適合當前盤勢（例如 gap_pullback 但價格持續上攻不回測），
    你可以在回覆中加入 "strategy" 欄位建議切換策略。可用策略：
@@ -553,7 +553,7 @@ TASK;
    - gap_pullback：跳空後回拉至支撐進場
    - bounce：觸及支撐反彈進場
    - momentum：動能追多（接近或突破壓力即進場）
-   同時請在 adjustments 中更新對應的 support/resistance。
+   同時請在 adjustments 中更新對應的 target/stop。
 TASK;
         }
 
@@ -587,11 +587,10 @@ TASK;
   "strategy": null,
   "adjustments": {
     "target": null,
-    "stop": null,
-    "support": null,
-    "resistance": null
+    "stop": null
   }
 }
+adjustments.target = 新目標價（壓力位），adjustments.stop = 新停損價（支撐位），不調整則為 null。
 strategy 欄位僅在觀望中且需要切換策略時填寫，其餘情況為 null。
 MSG;
     }
