@@ -107,7 +107,7 @@
           </div>
           <div v-if="m.skip_reason" class="monitor-reason">{{ m.skip_reason }}</div>
           <div v-if="m.last_ai_advice && m.last_ai_advice.action !== 'skip'" class="monitor-ai">
-            <span class="monitor-ai-label">AI:</span> {{ m.last_ai_advice.notes }}
+            <span class="monitor-ai-label">AI<template v-if="m.last_ai_advice.time"> {{ m.last_ai_advice.time }}</template>:</span> {{ m.last_ai_advice.notes }}
             <span v-if="m.last_ai_advice.adjustments?.target" class="monitor-ai-adj price-up">
               目標→{{ m.last_ai_advice.adjustments.target }}
             </span>
