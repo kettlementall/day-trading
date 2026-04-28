@@ -100,7 +100,10 @@ class MonitorService
                     'ai_calibration' => $cal,
                 ]);
 
-                $candidate->update([
+                // 套用策略覆蓋（AI 校準可調整策略）
+                $strategyOverride = $cal['strategy_override'] ?? null;
+                $validStrategies = ['breakout_fresh', 'breakout_retest', 'gap_pullback', 'bounce', 'momentum', 'gap_reversal'];
+                $candidateUpdates = [
                     'morning_confirmed' => in_array($grade, ['A', 'B']),
                     'morning_grade' => $grade,
                     'morning_score' => ($candidate->score + ($candidate->ai_score_adjustment ?? 0)),
@@ -108,7 +111,11 @@ class MonitorService
                         'ai_calibration' => 'grade_' . $grade,
                         'notes' => $cal['notes'] ?? '',
                     ],
-                ]);
+                ];
+                if ($strategyOverride && in_array($strategyOverride, $validStrategies)) {
+                    $candidateUpdates['intraday_strategy'] = $strategyOverride;
+                }
+                $candidate->update($candidateUpdates);
 
                 $this->telegram->broadcast(sprintf(
                     "[當沖校準%s] %s %s %s | %s | 支撐 %s / 壓力 %s",
@@ -251,6 +258,12 @@ class MonitorService
 
         // 策略特定條件
         $strategy = $candidate->intraday_strategy ?? 'momentum';
+        // 正規化無效策略名（如 AI 回傳 "breakout_momentum" 等非標準名）
+        $validStrategies = ['breakout_fresh', 'breakout_retest', 'gap_pullback', 'bounce', 'momentum', 'gap_reversal'];
+        if (!in_array($strategy, $validStrategies)) {
+            $strategy = 'momentum';
+        }
+
         $support = (float) ($monitor->current_stop ?? $candidate->reference_support ?? 0);
         $resistance = (float) ($monitor->current_target ?? $candidate->reference_resistance ?? 0);
 

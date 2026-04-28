@@ -80,7 +80,7 @@
               </span>
               <span v-if="m.entry_price" class="finished-detail">{{ m.entry_price }}→{{ m.exit_price || '-' }}</span>
               <span v-if="m.entry_time" class="finished-detail">{{ m.entry_time }}-{{ m.exit_time || '-' }}</span>
-              <span v-if="m.exit_reason" class="finished-reason">{{ m.exit_reason }}</span>
+              <span v-if="m.exit_reason" class="finished-reason" :class="{ expanded: expandedReasonIds.has(m.id) }" @click.stop="toggleReason(m.id)">{{ m.exit_reason }}</span>
             </div>
           </template>
 
@@ -428,9 +428,14 @@ const sortedMonitors = computed(() =>
   [...store.monitors].sort((a, b) => (monitorStatusOrder[a.status] ?? 9) - (monitorStatusOrder[b.status] ?? 9))
 )
 const expandedAiIds = reactive(new Set())
+const expandedReasonIds = reactive(new Set())
 function toggleAi(id) {
   if (expandedAiIds.has(id)) expandedAiIds.delete(id)
   else expandedAiIds.add(id)
+}
+function toggleReason(id) {
+  if (expandedReasonIds.has(id)) expandedReasonIds.delete(id)
+  else expandedReasonIds.add(id)
 }
 
 const expandedIds = reactive(new Set())
@@ -963,17 +968,32 @@ function gradeLabel(grade) {
   margin-bottom: 6px;
 }
 
-/* 已結束/跳過 一行式 */
+/* 已結束/跳過 */
 .monitor-finished-row {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
+  flex-wrap: wrap;
 }
 .monitor-finished-row .stock-name { color: #909399; }
 .finished-pnl { font-weight: 700; font-size: 14px; margin-left: auto; }
 .finished-detail { font-size: 12px; color: #909399; }
-.finished-reason { font-size: 11px; color: #b0b3b8; font-style: italic; }
+.finished-reason {
+  font-size: 11px;
+  color: #b0b3b8;
+  font-style: italic;
+  flex-basis: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.finished-reason.expanded {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+}
 
 /* HOLDING 大字損益 */
 .holding-hero {

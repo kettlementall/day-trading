@@ -363,6 +363,10 @@ class IntradayAiAdvisor
 
 等級 A/B/C 的標的，請設定進場條件（C 級用於紙上追蹤）。
 
+## strategy_override 可用值
+只能填以下其中之一，或 null：
+breakout_fresh | breakout_retest | gap_pullback | bounce | momentum | gap_reversal
+
 ## 回覆格式（JSON array，不要加 markdown 標記）
 [
   {
@@ -374,7 +378,9 @@ class IntradayAiAdvisor
     "entry_conditions": {
       "min_volume_ratio": 1.5,
       "min_external_ratio": 55,
-      "price_rule": "站穩 30.0 以上"
+      "target": 31.0,
+      "stop_loss": 29.0,
+      "price_rule": "站穩 30.0 以上，追價上限 31.0"
     },
     "notes": "前日漲停鎖住，開盤量比4.2，外盤比78%，強力推薦"
   },

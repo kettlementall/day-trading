@@ -538,6 +538,10 @@ AI 依開盤數據將每檔標的分為四級：
 
 共同前提條件：量能充足（預估量比 ≥ AI 設定值）、外盤比合理（≥ AI 設定值）、非弱勢走勢（連續 3+ 根下跌且下跌量 > 上漲量 × 1.5 判定為 weakness，不進場）。
 
+**策略正規化**：AI 回傳無效策略名時（如 "breakout_momentum"），自動 fallback 為 momentum。
+
+**strategy_override 套用**：AI 校準結果的 `strategy_override` 欄位若為合法策略名，會覆寫候選標的的 `intraday_strategy`。
+
 **gap_reversal 特殊規則**：跳過 weakness 軌跡檢查（超跌反彈不適用常規走勢分類）。
 
 #### 動態目標/停損公式
@@ -630,7 +634,7 @@ AI 滾動建議隨時可透過 `adjustments.stop` 動態調整停損（鎖利）
 | action | 狀態 | 效果 |
 |--------|------|------|
 | `hold` | 任意 | 套用 adjustments（若有）|
-| `exit` | HOLDING | 立即以現價出場（trailing_stop）|
+| `exit` | HOLDING | 立即以現價出場（獲利→trailing_stop / 虧損→closed）|
 | `skip` | WATCHING | 轉為 skipped，放棄追蹤 |
 | `entry` | WATCHING | C 級且 < 11:00 → 升格 B；其餘僅記錄 |
 
