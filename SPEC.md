@@ -470,7 +470,7 @@ pending → watching → entry_signal → holding → target_hit
                                             → stop_hit
                                             → trailing_stop
                                             → closed (時間停損/強制平倉)
-         → skipped (AI 校準否決)
+         → skipped (AI 校準否決 / 收盤未進場)
 ```
 
 | 狀態 | 說明 |
@@ -483,7 +483,9 @@ pending → watching → entry_signal → holding → target_hit
 | `stop_hit` | 觸停損出場 |
 | `trailing_stop` | 移動停利觸發 |
 | `closed` | 時間停損或 13:25 強制平倉 |
-| `skipped` | AI 校準否決，不參與 |
+| `skipped` | AI 校準否決 / 收盤前未進場 |
+
+**初始化**：`MonitorService::initializeMonitors()` 使用 `firstOrCreate`（非 `updateOrCreate`），確保 scheduler 重啟時不會把已進場的 monitor 重置回 pending。
 
 ### AI 開盤校準（09:05）— 分級制
 
@@ -525,15 +527,15 @@ AI 依開盤數據將每檔標的分為四級：
 ```
 目標價 = round(進場價 × (1 + 5日均振幅% × 0.6), 2)
 目標價 = min(目標價, 進場價 × 1.08)              // 振幅公式上限
-若 AI 校準壓力位 > 進場價 且 ≤ 進場價 × 1.10:
+若 AI 校準壓力位 > 進場價 且 ≤ 漲停價（昨收 × 1.10）:
     目標價 = max(目標價, AI 壓力位)              // AI 值可突破公式上限
-目標價 = min(目標價, 進場價 × 1.10)             // 絕對上限
+目標價 = min(目標價, 漲停價)                    // 不可超過漲停
 
 停損價 = round(進場價 × (1 - 5日均振幅% × 0.55), 2)
 停損價 = max(停損價, 進場價 × 0.97)             // 下限 3%
 ```
 
-AI 滾動建議隨時可透過 `adjustments.stop` 動態調整停損（鎖利）；WATCHING 狀態可透過 `adjustments.support` / `resistance` 更新支撐/壓力，影響下次進場判定。
+AI 滾動建議隨時可透過 `adjustments.stop` 動態調整停損（鎖利）；**HOLDING 狀態停損只能往上調（鎖利），AI 試圖降低停損會被忽略（防止放大風險）**。WATCHING 狀態可透過 `adjustments.support` / `resistance` 更新支撐/壓力，影響下次進場判定。
 
 ### 出場判定
 
@@ -547,7 +549,8 @@ AI 滾動建議隨時可透過 `adjustments.stop` 動態調整停損（鎖利）
 | 獲利 >2% 時提高停損 | 動態停損至進場價 +0.5% |
 | 獲利 >4% 時進一步收緊停損 | 動態停損至進場價 +2%（鎖利） |
 | 持有 >90 分鐘且仍虧損中 | `closed`（時間停損） |
-| 13:25 | `closed`（強制平倉） |
+| 13:25（HOLDING） | `closed`（強制平倉） |
+| 13:25（WATCHING/ENTRY_SIGNAL） | `skipped`（收盤未進場） |
 
 ### AI 滾動建議（依時段動態頻率）
 

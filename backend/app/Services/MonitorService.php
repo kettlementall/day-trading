@@ -29,7 +29,8 @@ class MonitorService
         $monitors = collect();
 
         foreach ($candidates as $candidate) {
-            $monitor = CandidateMonitor::updateOrCreate(
+            // 只對尚未建立的 monitor 初始化；已存在的不覆蓋狀態（避免重啟後重置為 pending）
+            $monitor = CandidateMonitor::firstOrCreate(
                 ['candidate_id' => $candidate->id],
                 ['status' => CandidateMonitor::STATUS_PENDING]
             );
@@ -180,10 +181,16 @@ class MonitorService
                 continue;
             }
 
-            // 13:25 強制平倉
+            // 13:25 強制平倉（holding 和 watching 都該結束）
             $now = now();
-            if ($now->format('H:i') >= '13:25' && $monitor->status === CandidateMonitor::STATUS_HOLDING) {
-                $this->exitPosition($monitor, $latestSnapshot->current_price, 'closed', '13:25 強制平倉');
+            if ($now->format('H:i') >= '13:25') {
+                if ($monitor->status === CandidateMonitor::STATUS_HOLDING) {
+                    $this->exitPosition($monitor, $latestSnapshot->current_price, 'closed', '13:25 強制平倉');
+                } else {
+                    // watching / entry_signal 尾盤未進場 → 跳過
+                    $this->transition($monitor, CandidateMonitor::STATUS_SKIPPED, '13:25 收盤未進場');
+                    $monitor->update(['skip_reason' => '收盤前未達進場條件']);
+                }
                 continue;
             }
 
@@ -291,12 +298,11 @@ class MonitorService
         $targetPrice = round($entryPrice * (1 + $avgAmplitude * 0.6 / 100), 2);
         $targetPrice = min($targetPrice, round($entryPrice * 1.08, 2));  // 振幅公式上限
 
-        // 若 AI 校準壓力位更高（≤1.10），以 AI 為準（可超越振幅公式上限）
+        // 若 AI 校準壓力位更高且在漲停以內，以 AI 為準（可超越振幅公式上限）
         $aiResistance = (float) $monitor->current_target;
-        if ($aiResistance > $entryPrice && $aiResistance <= $entryPrice * 1.10) {
+        if ($aiResistance > $entryPrice && $aiResistance <= $limitUp) {
             $targetPrice = max($targetPrice, $aiResistance);
         }
-        $targetPrice = min($targetPrice, round($entryPrice * 1.10, 2));  // 絕對上限
         $targetPrice = min($targetPrice, $limitUp);  // 不可超過漲停
 
         $stopPrice = round($entryPrice * (1 - $avgAmplitude * 0.55 / 100), 2);
@@ -340,8 +346,11 @@ class MonitorService
      */
     private function evaluateEntrySignal(CandidateMonitor $monitor, Candidate $candidate, string $date): void
     {
-        // 如果停留在 entry_signal 超過 5 分鐘仍未確認，回到 watching
+        // entry_signal 狀態目前由 evaluateWatching 直接轉 holding，
+        // 此方法處理異常情況：如果卡在 entry_signal 超過 5 分鐘，回到 watching
         if ($monitor->entry_time && $monitor->entry_time->diffInMinutes(now()) > 5) {
+            $stock = $candidate->stock;
+            Log::info("MonitorService: {$stock->symbol} entry_signal 超時 5 分鐘，回到觀望");
             $this->transition($monitor, CandidateMonitor::STATUS_WATCHING, '進場訊號超時，回到觀望');
             $monitor->update(['entry_price' => null, 'entry_time' => null]);
         }
@@ -636,12 +645,18 @@ class MonitorService
             $monitor->current_target = $newTarget;
             $updated[] = "目標→{$newTarget}";
         }
-        // 停損價調整（stop ��先，support 為舊格式 fallback）
+        // 停損價調整（stop 優先，support 為舊格式 fallback）
         $newStop = $adjustments['stop'] ?? $adjustments['support'] ?? null;
         if ($newStop !== null) {
             $newStop = max((float) $newStop, $limitDown);
-            $monitor->current_stop = $newStop;
-            $updated[] = "停損→{$newStop}";
+            // HOLDING 狀態：停損只能往上調（鎖利），不能往下調（放大風險）
+            $currentStop = (float) ($monitor->current_stop ?? 0);
+            if ($monitor->status === CandidateMonitor::STATUS_HOLDING && $currentStop > 0 && $newStop < $currentStop) {
+                Log::info("MonitorService: AI 試圖降低停損 {$currentStop} → {$newStop}，已忽略");
+            } else {
+                $monitor->current_stop = $newStop;
+                $updated[] = "停損→{$newStop}";
+            }
         }
 
         if (!empty($updated)) {
