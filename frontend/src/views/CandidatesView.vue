@@ -152,13 +152,15 @@
                 <el-tag size="small" class="strategy-tag">{{ strategyLabel(m.strategy) }}</el-tag>
               </div>
               <div class="monitor-tags">
+                <el-tag v-if="m.morning_grade" size="small" :type="gradeTagType(m.morning_grade)" round>{{ m.morning_grade }}</el-tag>
                 <el-tag v-if="m.limit_up" size="small" type="danger" round>漲停</el-tag>
                 <el-tag size="small" :type="monitorStatusType(m.status)" round>{{ monitorStatusLabel(m.status) }}</el-tag>
               </div>
             </div>
             <div class="watching-body">
               <div class="watching-price">
-                <span class="watching-current" :class="{ 'price-limit-up': m.limit_up, 'price-limit-down': m.limit_down }">{{ m.current_price || '-' }}</span>
+                <span class="watching-current" :class="{ 'price-limit-up': m.limit_up, 'price-limit-down': m.limit_down, 'price-up': !m.limit_up && !m.limit_down && m.change_percent > 0, 'price-down': !m.limit_up && !m.limit_down && m.change_percent < 0 }">{{ m.current_price || '-' }}</span>
+                <span v-if="m.change_percent != null" class="watching-change" :class="m.change_percent >= 0 ? 'price-up' : 'price-down'">{{ m.change_percent >= 0 ? '+' : '' }}{{ m.change_percent }}%</span>
               </div>
               <div class="watching-condition">
                 <span class="watching-trigger">{{ m.entry_trigger }}</span>
@@ -1061,10 +1063,19 @@ function gradeLabel(grade) {
   gap: 14px;
   flex-wrap: wrap;
 }
+.watching-price {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
 .watching-current {
   font-size: 18px;
   font-weight: 700;
   color: #303133;
+}
+.watching-change {
+  font-size: 13px;
+  font-weight: 600;
 }
 .watching-condition {
   flex: 1;

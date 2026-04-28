@@ -203,6 +203,8 @@ class CandidateController extends Controller
                     'dist_target_pct' => $distTarget,
                     'dist_stop_pct' => $distStop,
                     'holding_minutes' => $holdingMinutes,
+                    'change_percent' => $latestSnapshot?->change_percent ?? null,
+                    'morning_grade' => $candidate->morning_grade,
                     'limit_up' => $latestSnapshot?->limit_up ?? false,
                     'limit_down' => $latestSnapshot?->limit_down ?? false,
                     'skip_reason' => $monitor->skip_reason,
