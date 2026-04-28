@@ -363,9 +363,18 @@ class IntradayAiAdvisor
 
 等級 A/B/C 的標的，請設定進場條件（C 級用於紙上追蹤）。
 
-## strategy_override 可用值
-只能填以下其中之一，或 null：
-breakout_fresh | breakout_retest | gap_pullback | bounce | momentum | gap_reversal
+## strategy_override 可用值（只能填以下其中之一，或 null）
+
+| 策略 | 進場觸發方式 | 適用情境 |
+|------|-------------|---------|
+| momentum | 接近或突破壓力位 | 跳空已超過壓力位、持續上攻不回頭 |
+| breakout_fresh | 接近或突破壓力位 | 首次突破壓力位 |
+| breakout_retest | 拉回至支撐位附近量縮止穩 | 突破後回測支撐確認 |
+| gap_pullback | 拉回至支撐位附近量縮止穩 | 跳空後等拉回支撐再進 |
+| bounce | 觸及支撐位後反彈確認 | 觸底反彈 |
+| gap_reversal | 跳空缺口不回補 + 量能確認 | 超跌股催化日跳空反彈 |
+
+選擇關鍵：若開盤已跳空超過壓力位且不回頭，gap_pullback 永遠不會觸發進場，應改 momentum
 
 ## 回覆格式（JSON array，不要加 markdown 標記）
 [
@@ -544,6 +553,7 @@ SYSTEM;
 1. 走勢是否仍支持持有到目標？是否建議調整目標或收緊停損？
 2. 是否出現出場訊號？（明確建議 hold 或 exit）
 3. 日K趨勢排列是否仍支持持有方向？
+4. 若盤勢特徵已從原策略轉變（如 momentum 轉盤整、breakout 失敗轉 bounce），可在回覆加入 "strategy" 欄位切換策略標籤，影響後續判斷框架。
 TASK;
         } else {
             // WATCHING
@@ -570,14 +580,18 @@ TASK;
 1. 當前走勢是否已達或即將達到進場條件？（建議 entry / hold / skip）
 2. 目標價（壓力位）或停損價（支撐位）是否需根據今日盤中走勢調整？（在 adjustments.target / adjustments.stop 中填寫新值，不調整則填 null）
 3. 日K趨勢是否支持當前操作方向？
-4. **策略切換**：若原策略條件明顯不適合當前盤勢（例如 gap_pullback 但價格持續上攻不回測），
-   你可以在回覆中加入 "strategy" 欄位建議切換策略。可用策略：
-   - breakout_fresh：突破壓力位追多
-   - breakout_retest：突破後回測確認進場
-   - gap_pullback：跳空後回拉至支撐進場
-   - bounce：觸及支撐反彈進場
-   - momentum：動能追多（接近或突破壓力即進場）
-   同時請在 adjustments 中更新對應的 target/stop。
+4. **策略切換**：若原策略條件明顯不適合當前盤勢，可在回覆加入 "strategy" 欄位，同時在 adjustments 更新 target/stop。
+
+   | 策略 | 進場觸發方式 | 適用情境 |
+   |------|-------------|---------|
+   | momentum | 接近或突破壓力位 | 跳空已超過壓力位、持續上攻不回頭 |
+   | breakout_fresh | 接近或突破壓力位 | 首次突破壓力位 |
+   | breakout_retest | 拉回至支撐位附近量縮止穩 | 突破後回測支撐確認 |
+   | gap_pullback | 拉回至支撐位附近量縮止穩 | 跳空後等拉回支撐再進 |
+   | bounce | 觸及支撐位後反彈確認 | 觸底反彈 |
+   | gap_reversal | 跳空缺口不回補 + 量能確認 | 超跌股催化日跳空反彈 |
+
+   選擇關鍵：若開盤已跳空超過壓力位且不回頭，gap_pullback 永遠不會觸發進場，應改 momentum
 TASK;
         }
 
@@ -615,7 +629,7 @@ TASK;
   }
 }
 adjustments.target = 新目標價（壓力位），adjustments.stop = 新停損價（支撐位），不調整則為 null。
-strategy 欄位僅在觀望中且需要切換策略時填寫，其餘情況為 null。
+strategy 欄位在需要切換策略時填寫（觀望中或持有中皆可），不切換則為 null。
 MSG;
     }
 

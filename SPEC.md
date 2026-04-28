@@ -590,12 +590,12 @@ AI 滾動建議隨時可透過 `adjustments.stop` 動態調整停損（鎖利）
 
 | 時段 | 頻率 | 說明 |
 |------|------|------|
-| 09:05-09:30 | 每 10 分鐘 | 開盤最劇烈，需快速反應 |
-| 09:30-10:30 | 每 15 分鐘 | 早盤仍活躍 |
-| 10:30-13:00 | 每 15 分鐘 | 盤中仍需留意趨勢轉弱 |
-| 13:00-13:25 | 每 10 分鐘 | 尾盤平倉決策 |
+| 09:15-09:30 | 每 3 分鐘 | 開盤定調期，走勢最關鍵 |
+| 09:30-10:30 | 每 5 分鐘 | 早盤活躍期 |
+| 10:30-12:00 | 每 10 分鐘 | 盤中相對穩定 |
+| 12:00-13:25 | 每 5 分鐘 | 尾盤決策期 |
 
-一天約 23 次定期 AI call（不含緊急觸發），Sonnet 約 NT$18-28/天。
+一天約 60-70 次定期 AI call（不含緊急觸發），Sonnet 約 NT$50-80/天。
 
 #### Prompt 架構（System/User 分離 + Prompt Caching）
 
@@ -621,25 +621,30 @@ AI 滾動建議隨時可透過 `adjustments.stop` 動態調整停損（鎖利）
 ```json
 {
   "action": "hold",
-  "notes": "量能從 2.1x 降至 1.6x，支撐有效，繼續持有",
+  "strategy": "momentum",
+  "notes": "跳空已超過壓力位，gap_pullback 不適用，切換 momentum",
   "adjustments": {
-    "target": null,
-    "stop": null,
+    "target": 160.0,
+    "stop": 152.0,
     "support": null,
     "resistance": null
   }
 }
 ```
 
+`strategy` 欄位為選填，任何 action 都可附帶。
+
 | action | 狀態 | 效果 |
 |--------|------|------|
 | `hold` | 任意 | 套用 adjustments（若有）|
 | `exit` | HOLDING | 立即以現價出場（獲利→trailing_stop / 虧損→closed）|
 | `skip` | WATCHING | 轉為 skipped，放棄追蹤 |
-| `entry` | WATCHING | C 級且 < 11:00 → 升格 B；其餘僅記錄 |
+| `entry` | WATCHING | C 級且 < 11:00 → 升格 B；套用 adjustments |
 
 `adjustments.target` / `stop`：HOLDING 中調整目標/停損（可鎖利）
 `adjustments.support` / `resistance`：WATCHING 中更新 AI 支撐/壓力位，影響進場判定
+
+**策略切換**：任何 action 都可附帶 `strategy` 欄位，系統獨立於 action 處理策略切換。限制：A/B 級 + WATCHING 或 HOLDING 狀態。切換後同時套用 adjustments，下次 tick 的規則式監控即使用新策略觸發條件。HOLDING 時策略切換影響 AI 滾動建議的判斷框架（system prompt 中的 `## 策略` 標籤）。
 
 Fallback（API 失敗）：回傳 `{action: 'hold', notes: 'AI 不可用，維持現狀'}`
 

@@ -338,10 +338,10 @@ class MonitorStocks extends Command
     private function getAiInterval(int $hour, int $minute): int
     {
         return match (true) {
-            $hour === 9 && $minute < 30 => 10,
-            $hour === 9 || ($hour === 10 && $minute < 30) => 15,
-            $hour >= 13 => 10,
-            default => 15,
+            $hour === 9 && $minute < 30 => 3,   // 開盤定調期，最關鍵
+            $hour === 9 || ($hour === 10 && $minute < 30) => 5,  // 早盤活躍期
+            $hour >= 12 => 5,                    // 尾盤決策期
+            default => 10,                       // 盤中（10:30-12:00）
         };
     }
 

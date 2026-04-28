@@ -534,34 +534,29 @@ class MonitorService
             return;
         }
 
-        // A/B 級 WATCHING：AI 建議 entry + 策略切換 → 更新策略，下次 tick 用新條件判定
-        if ($action === 'entry'
-            && $monitor->status === CandidateMonitor::STATUS_WATCHING
+        // 策略切換（獨立於 action，任何建議都可附帶策略調整）
+        $newStrategy = $advice['strategy'] ?? null;
+        $validStrategies = ['breakout_fresh', 'breakout_retest', 'gap_pullback', 'bounce', 'momentum', 'gap_reversal'];
+        if ($newStrategy
+            && in_array($newStrategy, $validStrategies)
+            && $newStrategy !== $candidate->intraday_strategy
+            && in_array($monitor->status, [CandidateMonitor::STATUS_WATCHING, CandidateMonitor::STATUS_HOLDING])
             && in_array($candidate->morning_grade, ['A', 'B'])
         ) {
-            $newStrategy = $advice['strategy'] ?? null;
-            $validStrategies = ['breakout_fresh', 'breakout_retest', 'gap_pullback', 'bounce', 'momentum', 'gap_reversal'];
-            if ($newStrategy && in_array($newStrategy, $validStrategies) && $newStrategy !== $candidate->intraday_strategy) {
-                $oldStrategy = $candidate->intraday_strategy;
-                $candidate->update(['intraday_strategy' => $newStrategy]);
-                $this->applyAdjustments($monitor, $advice);
-                $stock = $candidate->stock;
-                Log::info("MonitorService: {$stock->symbol} AI 策略切換 {$oldStrategy} → {$newStrategy}");
-                $this->telegram->broadcast(sprintf(
-                    "[當沖策略切換] %s %s %s → %s | %s",
-                    $stock->symbol, $stock->name, $oldStrategy, $newStrategy, $notes
-                ));
-                $monitor->save();
-                return;
-            }
+            $oldStrategy = $candidate->intraday_strategy;
+            $candidate->update(['intraday_strategy' => $newStrategy]);
+            $stock = $candidate->stock;
+            Log::info("MonitorService: {$stock->symbol} AI 策略切換 {$oldStrategy} → {$newStrategy}");
+            $this->telegram->broadcast(sprintf(
+                "[當沖策略切換] %s %s %s → %s | %s",
+                $stock->symbol, $stock->name, $oldStrategy, $newStrategy, $notes
+            ));
         }
 
         match ($action) {
             'exit' => $this->exitByAiAdvice($monitor, $notes),
             'skip' => $this->skipByAiAdvice($monitor, $notes),
-            'hold' => $this->applyAdjustments($monitor, $advice),
-            'entry' => null, // 無策略切換的 entry：由規則式處理，這裡只記錄
-            default => null,
+            default => $this->applyAdjustments($monitor, $advice),  // hold、entry 及其他都套用 adjustments
         };
 
         $monitor->save();
