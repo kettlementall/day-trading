@@ -80,9 +80,22 @@ class MonitorService
                     : "AI 校準 {$grade} 級（{$gradeLabels[$grade]}）";
                 $this->transition($monitor, CandidateMonitor::STATUS_WATCHING, $statusNote);
 
+                // 漲跌停 clamp
+                $latestSnap = IntradaySnapshot::where('stock_id', $candidate->stock_id)
+                    ->where('trade_date', $date)
+                    ->orderByDesc('snapshot_time')
+                    ->first();
+                $prevClose = $latestSnap ? (float) $latestSnap->prev_close : 0;
+                $calTarget = (float) ($cal['adjusted_resistance'] ?? $candidate->reference_resistance ?? 0);
+                $calStop = (float) ($cal['adjusted_support'] ?? $candidate->reference_support ?? 0);
+                if ($prevClose > 0) {
+                    $calTarget = min($calTarget, round($prevClose * 1.10, 2));
+                    $calStop = max($calStop, round($prevClose * 0.90, 2));
+                }
+
                 $monitor->update([
-                    'current_target' => $cal['adjusted_resistance'] ?? $candidate->reference_resistance,
-                    'current_stop' => $cal['adjusted_support'] ?? $candidate->reference_support,
+                    'current_target' => $calTarget,
+                    'current_stop' => $calStop,
                     'ai_calibration' => $cal,
                 ]);
 
@@ -268,12 +281,7 @@ class MonitorService
         // 觸發進場訊號
         $this->transition($monitor, CandidateMonitor::STATUS_ENTRY_SIGNAL, "進場條件成立（{$strategy}）");
 
-        // 漲跌停價（從快照取昨收）
-        $latestSnap = IntradaySnapshot::where('stock_id', $stock->id)
-            ->where('trade_date', $date)
-            ->orderByDesc('snapshot_time')
-            ->first();
-        $prevClose = $latestSnap ? (float) $latestSnap->prev_close : 0;
+        // 漲跌停價（prevClose 已在上方取得）
         $limitUp = $prevClose > 0 ? round($prevClose * 1.10, 2) : round($price * 1.10, 2);
         $limitDown = $prevClose > 0 ? round($prevClose * 0.90, 2) : round($price * 0.90, 2);
 
@@ -406,16 +414,18 @@ class MonitorService
             }
         }
 
-        // 動態調停損：利潤 > 2% 時，停損拉高至進場價 +0.5%
+        // 動態調停損（鎖利）
         $profitPct = ($price - $entryPrice) / $entryPrice * 100;
-        if ($profitPct > 2.0 && $stop < $entryPrice * 1.005) {
-            $newStop = round($entryPrice * 1.005, 2);
-            $monitor->update(['current_stop' => $newStop]);
-        }
-        // 利潤 > 4% 時，停損拉高至進場價 +2%
+        $newStop = null;
         if ($profitPct > 4.0 && $stop < $entryPrice * 1.02) {
             $newStop = round($entryPrice * 1.02, 2);
+        } elseif ($profitPct > 2.0 && $stop < $entryPrice * 1.005) {
+            $newStop = round($entryPrice * 1.005, 2);
+        }
+        if ($newStop !== null) {
             $monitor->update(['current_stop' => $newStop]);
+            $stock = $candidate->stock;
+            Log::info("MonitorService: {$stock->symbol} 動態鎖利停損 {$stop} → {$newStop}（利潤 {$profitPct}%）");
         }
 
         // ===== 緊急觸發偵測（仍持有中才評估）=====
@@ -586,7 +596,11 @@ class MonitorService
             ->first();
 
         if ($latest) {
-            $this->exitPosition($monitor, (float) $latest->current_price, 'trailing_stop', "AI建議出場：{$notes}");
+            // 判斷實際損益決定出場狀態
+            $entryPrice = (float) $monitor->entry_price;
+            $exitPrice = (float) $latest->current_price;
+            $exitStatus = ($entryPrice > 0 && $exitPrice >= $entryPrice) ? 'trailing_stop' : 'closed';
+            $this->exitPosition($monitor, $exitPrice, $exitStatus, "AI建議出場：{$notes}");
         }
     }
 
