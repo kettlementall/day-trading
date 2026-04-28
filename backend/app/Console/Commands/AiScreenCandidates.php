@@ -6,6 +6,7 @@ use App\Models\Candidate;
 use App\Models\MarketHoliday;
 use App\Services\AiScreenerService;
 use App\Services\HaikuPreFilterService;
+use App\Services\MarketContextService;
 use App\Services\StockScreener;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
@@ -28,6 +29,15 @@ class AiScreenCandidates extends Command
             return self::SUCCESS;
         }
 
+        // 市場情境偵測
+        $marketContext = MarketContextService::detect($date);
+        $contextLabel = match ($marketContext['label']) {
+            MarketContextService::CONTEXT_BULLISH_CATALYST => '🔥 利多催化日',
+            MarketContextService::CONTEXT_BEARISH_PANIC => '⚠️ 利空恐慌日',
+            default => '常態',
+        };
+        $this->info("市場情境: {$contextLabel}" . ($marketContext['triggers'] ? ' (' . implode(', ', $marketContext['triggers']) . ')' : ''));
+
         // Step 1: 物理門檻篩選（寬篩，依 5 日均量排序，取前 80）
         $this->info("Step 1: 物理門檻篩選，交易日: {$date}");
         $screener->screen($date);
@@ -37,7 +47,8 @@ class AiScreenCandidates extends Command
             ->where('mode', 'intraday')
             ->get();
 
-        $this->info("物理篩選完成，共 {$allCandidates->count()} 檔候選");
+        $gapReversalCount = $allCandidates->filter(fn($c) => in_array('超跌反彈候選', $c->reasons ?? []))->count();
+        $this->info("物理篩選完成，共 {$allCandidates->count()} 檔候選" . ($gapReversalCount > 0 ? "（含 {$gapReversalCount} 檔超跌反彈候選）" : ''));
 
         if ($allCandidates->isEmpty()) {
             $this->warn('無候選標的，跳過後續篩選');
@@ -46,7 +57,7 @@ class AiScreenCandidates extends Command
 
         // Step 2: Haiku 批量預篩（最多放行 30 檔給 Opus）
         $this->info("Step 2: Haiku 批量預篩（每批 15 檔，上限 30 檔送 Opus）...");
-        $haiku->filter($date, $allCandidates, maxPassThrough: 30);
+        $haiku->filter($date, $allCandidates, maxPassThrough: 30, marketContext: $marketContext);
 
         $haikuApproved = Candidate::with('stock')
             ->where('trade_date', $date)
@@ -85,7 +96,7 @@ class AiScreenCandidates extends Command
 
         // Step 3: Opus 精審（只看 haiku_selected=true）
         $this->info("Step 3: Opus 精審（{$haikuApproved->count()} 檔）...");
-        $aiScreener->screen($date, $haikuApproved);
+        $aiScreener->screen($date, $haikuApproved, marketContext: $marketContext);
 
         // 重新載入結果
         $finalCandidates = Candidate::with('stock')

@@ -12,6 +12,7 @@ use App\Models\NewsArticle;
 use App\Models\NewsIndex;
 use App\Models\SectorIndex;
 use App\Models\UsMarketIndex;
+use App\Services\MarketContextService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -43,7 +44,8 @@ class HaikuPreFilterService
         Collection $candidates,
         ?int $maxPassThrough = null,
         string $mode = 'intraday',
-        ?string $snapshotDate = null
+        ?string $snapshotDate = null,
+        ?array $marketContext = null
     ): Collection {
         if ($candidates->isEmpty()) {
             return $candidates;
@@ -56,7 +58,7 @@ class HaikuPreFilterService
 
         $systemPrompt = $mode === 'overnight'
             ? $this->buildSystemPromptOvernight($tradeDate, $snapshotDate)
-            : $this->buildSystemPrompt($tradeDate);
+            : $this->buildSystemPrompt($tradeDate, $marketContext);
 
         // 分批處理
         $batches = $candidates->chunk($this->batchSize);
@@ -107,10 +109,11 @@ class HaikuPreFilterService
     // System prompt（所有批次共用，Anthropic 快取）
     // -------------------------------------------------------------------------
 
-    private function buildSystemPrompt(string $tradeDate): string
+    private function buildSystemPrompt(string $tradeDate, ?array $marketContext = null): string
     {
         $usMarketSection = UsMarketIndex::getSummary($tradeDate);
         $lessonsSection  = AiLesson::getScreeningLessons();
+        $contextSection  = $marketContext ? MarketContextService::toPromptSection($marketContext) : '';
 
         // 近 2 日新聞標題
         $news = NewsArticle::where('fetched_date', '>=', now()->subDays(2)->toDateString())
@@ -139,6 +142,20 @@ class HaikuPreFilterService
         }
         $newsIndexSection = $newsIndexLines ? implode("\n", $newsIndexLines) : '（無消息面指數）';
 
+        // 催化日特別評估標準
+        $catalystCriteria = '';
+        if ($marketContext && MarketContextService::isBullishCatalyst($marketContext)) {
+            $catalystCriteria = <<<CATALYST
+
+## ⚡ 利多催化日特別標準
+今日為利多催化日，標籤含「超跌反彈候選」的標的請特別注意：
+- 這些標的近期大跌但屬於催化受益產業，有跳空反彈機會
+- **不應因空頭排列或連日下跌就給低信度**——超跌+強催化=反彈空間大
+- 評估重點改為：跌幅是否夠深（>8%）、產業是否受益、是否有法人回補跡象
+- 信度給予方式：超跌+受益產業+有法人買盤 → confidence 60-80；僅超跌+受益產業 → 50-65
+CATALYST;
+        }
+
         return <<<SYSTEM
 你是台股當沖選股 AI 助手（快速預篩模式）。現在是 {$tradeDate} 盤前。
 
@@ -146,6 +163,8 @@ class HaikuPreFilterService
 請對每檔快速判斷：「這檔股票今日是否值得進一步精審？」
 
 {$usMarketSection}
+
+{$contextSection}
 
 ## 近期新聞
 {$newsSection}
@@ -161,6 +180,7 @@ class HaikuPreFilterService
 - 籌碼：外資或投信買超加分；法人連續賣超警戒
 - 排除：振幅太小不適合當沖、明顯弱勢型態
 - 趨勢排列：注意標籤中的「多頭排列」（順勢）或「空頭排列」（逆勢），作為判斷參考之一
+{$catalystCriteria}
 
 ## 回覆格式
 請直接回覆 JSON array（不要加 markdown），格式：

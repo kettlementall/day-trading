@@ -9,6 +9,7 @@ use App\Models\InstitutionalTrade;
 use App\Models\MarginTrade;
 use App\Models\NewsIndex;
 use App\Models\Stock;
+use App\Services\MarketContextService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
@@ -27,6 +28,13 @@ class StockScreener
         $buyConfig = FormulaSetting::getConfig('suggested_buy');
         $targetConfig = FormulaSetting::getConfig('target_price');
         $stopConfig = FormulaSetting::getConfig('stop_loss');
+
+        // 市場情境偵測（僅 intraday）
+        $marketContext = $mode === 'intraday' ? MarketContextService::detect($tradeDate) : null;
+        $isBullishCatalyst = $marketContext && MarketContextService::isBullishCatalyst($marketContext);
+        if ($isBullishCatalyst) {
+            Log::info("StockScreener: 利多催化日，將放寬超跌受益產業篩選");
+        }
         // overnight 模式使用獨立設定 key，不存在時 fallback 到 intraday 設定
         $screenConfigKey = $mode === 'overnight' ? 'screen_thresholds_overnight' : 'screen_thresholds';
         $screenConfig = FormulaSetting::getConfig($screenConfigKey)
@@ -206,6 +214,41 @@ class StockScreener
                 if ((float) $margin->first()->margin_change < $maxChange) $reasons[] = $cfg['label'] ?? '融資減';
             }
 
+            // 利多催化日：標記超跌標的為 gap_reversal 候選
+            $isGapReversalCandidate = false;
+            if ($isBullishCatalyst && $mode === 'intraday') {
+                $recent5Chg = array_sum(array_slice($changePcts, 0, 5));
+                $industry = $stock->industry ?? '';
+                $hasIndustry = !empty($industry);
+                $isBeneficiary = MarketContextService::isBeneficiaryIndustry($industry, $marketContext);
+
+                if ($hasIndustry) {
+                    // 有產業標籤：超跌（5日跌>8%）+ 受益產業
+                    if ($recent5Chg < -8.0 && $isBeneficiary) {
+                        $reasons[] = '超跌反彈候選';
+                        $isGapReversalCandidate = true;
+                    }
+                    // 中度超跌（5日跌>5%）+ 受益產業 + 法人買盤
+                    elseif ($recent5Chg < -5.0 && $isBeneficiary && $inst->isNotEmpty()
+                        && (float) $inst->first()->foreign_net > 0) {
+                        $reasons[] = '超跌反彈候選';
+                        $isGapReversalCandidate = true;
+                    }
+                } else {
+                    // 無產業標籤：門檻拉高（5日跌>10%），交由 AI 判斷產業關聯
+                    if ($recent5Chg < -10.0) {
+                        $reasons[] = '超跌反彈候選';
+                        $isGapReversalCandidate = true;
+                    }
+                    // 或 5日跌>7% + 有外資回補
+                    elseif ($recent5Chg < -7.0 && $inst->isNotEmpty()
+                        && (float) $inst->first()->foreign_net > 0) {
+                        $reasons[] = '超跌反彈候選';
+                        $isGapReversalCandidate = true;
+                    }
+                }
+            }
+
             // =========================================
             // 參考價格計算（AI 可覆寫）
             // overnight 模式：Opus 全責設定三個價格，此處不計算
@@ -248,8 +291,9 @@ class StockScreener
                 $riskReward  = $lossSpace > 0 ? round($profitSpace / $lossSpace, 2) : 0;
 
                 // 風報比絕對底線（overnight 模式跳過此篩選）
+                // gap_reversal 候選跳空格局下 RR 公式不準（buy 基於昨收支撐，實際進場會高很多）
                 $minRR = $screenConfig['min_risk_reward'] ?? 0.8;
-                if ($riskReward < $minRR) continue;
+                if ($riskReward < $minRR && !$isGapReversalCandidate) continue;
             }
 
             $candidates->push([
@@ -264,18 +308,29 @@ class StockScreener
                 'reasons'           => $reasons,
                 'indicators'        => $indicators,
                 '_avg_vol5'         => $avgVolume5,
+                '_gap_reversal'     => $isGapReversalCandidate,
             ]);
         }
 
         // 依 5 日均量排序，取前 N 名（流動性好的優先讓 AI 看）
+        // gap_reversal 候選保證入選（不被均量排序截斷）
         $maxCandidates = $maxCandidatesOverride ?? ($screenConfig['max_candidates'] ?? 80);
-        $candidates = $candidates->sortByDesc('_avg_vol5')->take($maxCandidates);
+        $gapReversalCandidates = $candidates->filter(fn($c) => $c['_gap_reversal'] ?? false);
+        $normalCandidates = $candidates->filter(fn($c) => !($c['_gap_reversal'] ?? false));
+
+        $normalSlots = max(0, $maxCandidates - $gapReversalCandidates->count());
+        $selected = $normalCandidates->sortByDesc('_avg_vol5')->take($normalSlots);
+        $candidates = $selected->concat($gapReversalCandidates)->values();
+
+        if ($gapReversalCandidates->isNotEmpty()) {
+            Log::info("StockScreener: gap_reversal 候選 {$gapReversalCandidates->count()} 檔保證入選");
+        }
 
         // 寫入資料庫
         $stockIds = [];
         foreach ($candidates as $data) {
             $dbData = $data;
-            unset($dbData['_avg_vol5']);
+            unset($dbData['_avg_vol5'], $dbData['_gap_reversal']);
             Candidate::updateOrCreate(
                 ['stock_id' => $dbData['stock_id'], 'trade_date' => $dbData['trade_date'], 'mode' => $dbData['mode']],
                 $dbData

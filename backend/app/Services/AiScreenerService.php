@@ -82,7 +82,8 @@ class AiScreenerService
         string $tradeDate,
         Collection $candidates,
         string $mode = 'intraday',
-        ?string $snapshotDate = null
+        ?string $snapshotDate = null,
+        ?array $marketContext = null
     ): Collection {
         if ($candidates->isEmpty()) {
             return $candidates;
@@ -99,8 +100,8 @@ class AiScreenerService
         if ($mode === 'overnight') {
             $systemPrompt = $this->buildSystemPromptOvernight($tradeDate, $snapshotDate);
         } else {
-            $systemPrompt      = $this->buildSystemPrompt($tradeDate);
-            $systemPromptShort = $this->buildSystemPrompt($tradeDate, short: true);
+            $systemPrompt      = $this->buildSystemPrompt($tradeDate, short: false, marketContext: $marketContext);
+            $systemPromptShort = $this->buildSystemPrompt($tradeDate, short: true, marketContext: $marketContext);
         }
 
         foreach ($candidates as $candidate) {
@@ -173,10 +174,11 @@ class AiScreenerService
     // 快取 system prompt：市場背景 + 任務說明（所有股票共用）
     // -------------------------------------------------------------------------
 
-    private function buildSystemPrompt(string $tradeDate, bool $short = false): string
+    private function buildSystemPrompt(string $tradeDate, bool $short = false, ?array $marketContext = null): string
     {
         $usMarketSection  = UsMarketIndex::getSummary($tradeDate);
         $lessonsSection   = AiLesson::getScreeningLessons();
+        $contextSection   = $marketContext ? MarketContextService::toPromptSection($marketContext) : '';
 
         // 新聞標題（近 2 日）：精簡模式只取 15 則
         $newsLimit = $short ? 15 : 30;
@@ -206,11 +208,26 @@ class AiScreenerService
         }
         $newsIndexSection = $newsIndexLines ? implode("\n", $newsIndexLines) : '（無消息面指數）';
 
+        // 催化日特別評估原則
+        $catalystPrinciple = '';
+        if ($marketContext && MarketContextService::isBullishCatalyst($marketContext)) {
+            $catalystPrinciple = <<<CATALYST
+6. **催化反轉**（限利多催化日）：近期大跌（5日跌>8%）+ 國際利多催化 → 考慮 gap_reversal 策略
+   - 不以空頭排列為排除條件：超跌+強催化=反彈空間大
+   - 標籤含「超跌反彈候選」的標的優先考慮此策略
+   - gap_reversal 的買入價應設在預期開盤價附近（而非昨收支撐位），因為跳空開高後不會回到昨日支撐
+   - 風報比仍需 >= 1.5，但基準是預期跳空開盤價
+   - 風險提醒：催化反彈可能只是一日行情，停損要嚴格（-2% 以內）
+CATALYST;
+        }
+
         return <<<SYSTEM
 你是台股當沖選股 AI 助手。現在是 {$tradeDate} 盤前（08:00）。
 我將逐一提交每檔候選標的，請針對每支獨立判斷是否適合今日當沖操作。
 
 {$usMarketSection}
+
+{$contextSection}
 
 ## 近期新聞
 {$newsSection}
@@ -226,6 +243,7 @@ class AiScreenerService
 3. 融資券：融資大增+股價未漲=散戶追高風險；融券大增+股價強=軋空機會
 4. 消息面：利多產業優先；恐慌指數高時標準從嚴
 5. 國際市場：台指期夜盤方向最重要；費半影響半導體/AI 類股
+{$catalystPrinciple}
 
 ## 回覆格式
 請直接回覆 JSON（不要加 markdown 標記），格式：
@@ -233,7 +251,7 @@ class AiScreenerService
   "selected": true,
   "score_adjustment": 5,
   "reasoning": "一句話選入/排除理由",
-  "intraday_strategy": "breakout_fresh|breakout_retest|gap_pullback|bounce|momentum",
+  "intraday_strategy": "breakout_fresh|breakout_retest|gap_pullback|bounce|momentum|gap_reversal",
   "suggested_buy": 29.5,
   "target_price": 30.5,
   "stop_loss": 29.0,
@@ -245,9 +263,18 @@ class AiScreenerService
 
 若不選入，`intraday_strategy`、`suggested_buy`、`target_price`、`stop_loss`、`price_reasoning`、`reference_support`、`reference_resistance`、`warnings` 均可為 null。
 
+策略說明：
+- breakout_fresh: 首次突破壓力位
+- breakout_retest: 突破後回測再進場
+- gap_pullback: 跳空後拉回支撐
+- bounce: 觸及支撐反彈
+- momentum: 動能延續追漲
+- gap_reversal: 超跌股跳空反轉（限利���催化日，不等回測，看跳空量能確認）
+
 價格設定原則：
 - 買入價應設在合理回測位置（突破型設前高附近，反彈型設支撐附近）
-- 目標價不超過收盤價 +10%，停損不超過收盤價 -2.5%
+- gap_reversal: 買入價設在預期開盤跳空價附近（昨收 × (1+預估跳空幅度)）
+- 目標價不超過收盤價 +10%（漲停），停損不超過收盤價 -2.5%
 - 風報比（目標-買入）/（買入-停損）應 >= 1.5
 SYSTEM;
     }

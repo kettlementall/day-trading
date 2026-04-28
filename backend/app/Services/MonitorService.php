@@ -258,13 +258,20 @@ class MonitorService
             'breakout_fresh', 'momentum' => $price > $resistance * 0.995, // 接近或突破壓力
             'breakout_retest', 'gap_pullback' => $this->isPullbackEntry($snapshots, $support),
             'bounce' => $this->isBounceEntry($snapshots, $support),
+            'gap_reversal' => $this->isGapReversalEntry($snapshots, $prevClose),
             default => $price > $resistance * 0.995,
         };
 
         if (!$entryTriggered) return;
 
+        // gap_reversal 跳過 weakness 檢查（超跌反彈不適用常規走勢分類）
+        if ($strategy === 'gap_reversal') {
+            $trajectory = 'gap_reversal';
+        } else {
+            $trajectory = $this->classifyTrajectory($snapshots);
+        }
+
         // 區分 pullback vs weakness
-        $trajectory = $this->classifyTrajectory($snapshots);
         if ($trajectory === 'weakness') {
             Log::info("MonitorService: {$stock->symbol} 走弱到價，不進場");
             $this->telegram->broadcast(sprintf(
@@ -282,6 +289,7 @@ class MonitorService
             'breakout_fresh', 'momentum' => 'breakout',
             'breakout_retest', 'gap_pullback' => 'pullback',
             'bounce' => 'bounce',
+            'gap_reversal' => 'gap_reversal',
             default => $trajectory, // pullback or weakness
         };
 
@@ -295,19 +303,34 @@ class MonitorService
         // 計算動態目標/停損
         $entryPrice = $price;
         $avgAmplitude = $this->getAvgAmplitude($stock->id, $date, 5);
-        $targetPrice = round($entryPrice * (1 + $avgAmplitude * 0.6 / 100), 2);
-        $targetPrice = min($targetPrice, round($entryPrice * 1.08, 2));  // 振幅公式上限
 
-        // 若 AI 校準壓力位更高且在漲停以內，以 AI 為準（可超越振幅公式上限）
-        $aiResistance = (float) $monitor->current_target;
-        if ($aiResistance > $entryPrice && $aiResistance <= $limitUp) {
-            $targetPrice = max($targetPrice, $aiResistance);
+        if ($strategy === 'gap_reversal') {
+            // gap_reversal：目標設漲停或 AI 壓力位；停損設缺口中點（嚴格，-2% 以內）
+            $aiResistance = (float) $monitor->current_target;
+            $targetPrice = ($aiResistance > $entryPrice && $aiResistance <= $limitUp)
+                ? $aiResistance
+                : min(round($entryPrice * 1.05, 2), $limitUp);
+            $targetPrice = min($targetPrice, $limitUp);
+
+            // 停損：缺口不可回補 — 設在開盤跳空幅度的一半（但至少 -2%）
+            $gapMid = round(($entryPrice + $prevClose) / 2, 2);
+            $stopPrice = max($gapMid, round($entryPrice * 0.98, 2));
+            $stopPrice = max($stopPrice, $limitDown);
+        } else {
+            $targetPrice = round($entryPrice * (1 + $avgAmplitude * 0.6 / 100), 2);
+            $targetPrice = min($targetPrice, round($entryPrice * 1.08, 2));  // 振幅公式上限
+
+            // 若 AI 校準壓力位更高且在漲停以內，以 AI 為準（可超越振幅公式上限）
+            $aiResistance = (float) $monitor->current_target;
+            if ($aiResistance > $entryPrice && $aiResistance <= $limitUp) {
+                $targetPrice = max($targetPrice, $aiResistance);
+            }
+            $targetPrice = min($targetPrice, $limitUp);  // 不可超過漲停
+
+            $stopPrice = round($entryPrice * (1 - $avgAmplitude * 0.55 / 100), 2);
+            $stopPrice = max($stopPrice, round($entryPrice * 0.97, 2));
+            $stopPrice = max($stopPrice, $limitDown);  // 不可低於跌停
         }
-        $targetPrice = min($targetPrice, $limitUp);  // 不可超過漲停
-
-        $stopPrice = round($entryPrice * (1 - $avgAmplitude * 0.55 / 100), 2);
-        $stopPrice = max($stopPrice, round($entryPrice * 0.97, 2));
-        $stopPrice = max($stopPrice, $limitDown);  // 不可低於跌停
 
         $monitor->update([
             'entry_price' => $entryPrice,
@@ -504,7 +527,7 @@ class MonitorService
             && in_array($candidate->morning_grade, ['A', 'B'])
         ) {
             $newStrategy = $advice['strategy'] ?? null;
-            $validStrategies = ['breakout_fresh', 'breakout_retest', 'gap_pullback', 'bounce', 'momentum'];
+            $validStrategies = ['breakout_fresh', 'breakout_retest', 'gap_pullback', 'bounce', 'momentum', 'gap_reversal'];
             if ($newStrategy && in_array($newStrategy, $validStrategies) && $newStrategy !== $candidate->intraday_strategy) {
                 $oldStrategy = $candidate->intraday_strategy;
                 $candidate->update(['intraday_strategy' => $newStrategy]);
@@ -733,6 +756,43 @@ class MonitorService
 
         return (float) $last->current_price > (float) $prev->current_price
             && (float) $last->external_ratio > (float) $prev->external_ratio;
+    }
+
+    /**
+     * gap_reversal 進場判斷：跳空開高 + 量能確認 + 價格站穩開盤區間
+     *
+     * 適用於超跌股在催化日跳空開高的情境，不等回測，看的是：
+     * 1. 開盤跳空幅度 >= 2%（相對昨收）
+     * 2. 開盤後價格維持在跳空高度（未回補缺口）
+     * 3. 外盤比維持強勢
+     */
+    private function isGapReversalEntry(Collection $snapshots, float $prevClose): bool
+    {
+        if ($snapshots->count() < 3 || $prevClose <= 0) return false;
+
+        $latest = $snapshots->last();
+        $price = (float) $latest->current_price;
+
+        // 開盤跳空幅度 >= 2%
+        $gapPercent = ($price - $prevClose) / $prevClose * 100;
+        if ($gapPercent < 2.0) return false;
+
+        // 價格未回補缺口：最近快照的最低價仍高於昨收 + 1%（缺口未完全回補）
+        $recentLow = $snapshots->min(fn($s) => (float) $s->current_price);
+        if ($recentLow < $prevClose * 1.01) return false;
+
+        // 價格穩定或上升（最近 3 筆不是連續下跌）
+        $recent3 = $snapshots->take(-3)->values();
+        $allDown = true;
+        for ($i = 1; $i < $recent3->count(); $i++) {
+            if ((float) $recent3[$i]->current_price >= (float) $recent3[$i-1]->current_price) {
+                $allDown = false;
+                break;
+            }
+        }
+        if ($allDown) return false;
+
+        return true;
     }
 
     /**

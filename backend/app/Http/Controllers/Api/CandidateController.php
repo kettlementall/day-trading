@@ -180,6 +180,7 @@ class CandidateController extends Controller
                     'breakout_fresh', 'momentum' => $target > 0 ? "突破 {$target}" : '突破壓力位',
                     'breakout_retest', 'gap_pullback' => $stop > 0 ? "回測 {$stop} 止穩" : '回測支撐止穩',
                     'bounce' => $stop > 0 ? "觸及 {$stop} 反彈" : '觸及支撐反彈',
+                    'gap_reversal' => '跳空確認（缺口不補）',
                     default => '突破壓力位',
                 };
 

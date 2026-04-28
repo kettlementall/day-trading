@@ -353,6 +353,14 @@ class IntradayAiAdvisor
 | C（觀察） | score尚可但有矛盾訊號 | 紙上交易追蹤，不實際進場 |
 | D（放棄） | 明確轉弱訊號（低開量縮、開盤即最高、跳空過大等） | 不進場 |
 
+### gap_reversal 策略特別處理
+策略為 gap_reversal（超跌反彈）的標的，評估邏輯不同：
+- 開盤跳空高開 ≥2% + 量比 ≥2x → 傾向給 A 或 B（跳空有量支撐）
+- 跳空高開但量比不足（<2x）或外盤比偏低 → 給 C（觀望確認）
+- 開盤平開或低開 → 給 D（催化失效，放棄）
+- **不應以「跳空過大」為由給 D**：gap_reversal 本來就預期大幅跳空
+- 進場條件設定較寬鬆：min_volume_ratio 可設 1.5，min_external_ratio 可設 50（重點是缺口不回補）
+
 等級 A/B/C 的標的，請設定進場條件（C 級用於紙上追蹤）。
 
 ## 回覆格式（JSON array，不要加 markdown 標記）
@@ -542,6 +550,7 @@ TASK;
                 'breakout_fresh', 'momentum' => "突破 {$resistance} → 進場",
                 'breakout_retest', 'gap_pullback' => "回測至 {$support} 附近止穩 → 進場",
                 'bounce' => "觸及 {$support} 後反彈確認 → 進場",
+                'gap_reversal' => "跳空缺口不回補 + 量能確認 → 進場",
                 default => "突破 {$resistance} → 進場",
             };
 

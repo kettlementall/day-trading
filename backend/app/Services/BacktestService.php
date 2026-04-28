@@ -37,7 +37,7 @@ class BacktestService
         // 按 AI 精審策略分類（僅在非篩選模式下）
         if (!$strategyType) {
             $metrics['by_strategy'] = [];
-            foreach (['bounce', 'breakout_fresh', 'breakout_retest', 'gap_pullback', 'momentum'] as $type) {
+            foreach (['bounce', 'breakout_fresh', 'breakout_retest', 'gap_pullback', 'momentum', 'gap_reversal'] as $type) {
                 $subset = $candidates->where('intraday_strategy', $type);
                 $subsetTotal = Candidate::where('mode', 'intraday')
                     ->whereBetween('trade_date', [$from, $to])

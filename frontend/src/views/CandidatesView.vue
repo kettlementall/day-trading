@@ -525,7 +525,7 @@ function monitorStatusLabel(status) {
 }
 
 function strategyLabel(s) {
-  const map = { breakout_fresh: '突破', breakout_retest: '回測', gap_pullback: '跳空回拉', bounce: '反彈', momentum: '動能' }
+  const map = { breakout_fresh: '突破', breakout_retest: '回測', gap_pullback: '跳空回拉', bounce: '反彈', momentum: '動能', gap_reversal: '超跌反轉' }
   return map[s] || s || ''
 }
 
