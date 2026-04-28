@@ -205,6 +205,9 @@ class CandidateController extends Controller
                     'limit_up' => $latestSnapshot?->limit_up ?? false,
                     'limit_down' => $latestSnapshot?->limit_down ?? false,
                     'skip_reason' => $monitor->skip_reason,
+                    'exit_reason' => $monitor->state_log
+                        ? collect($monitor->state_log)->last()['reason'] ?? null
+                        : null,
                     'last_ai_advice' => $monitor->ai_advice_log
                         ? collect($monitor->ai_advice_log)->last()
                         : null,

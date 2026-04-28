@@ -80,6 +80,7 @@
               </span>
               <span v-if="m.entry_price" class="finished-detail">{{ m.entry_price }}→{{ m.exit_price || '-' }}</span>
               <span v-if="m.entry_time" class="finished-detail">{{ m.entry_time }}-{{ m.exit_time || '-' }}</span>
+              <span v-if="m.exit_reason" class="finished-reason">{{ m.exit_reason }}</span>
             </div>
           </template>
 
@@ -972,6 +973,7 @@ function gradeLabel(grade) {
 .monitor-finished-row .stock-name { color: #909399; }
 .finished-pnl { font-weight: 700; font-size: 14px; margin-left: auto; }
 .finished-detail { font-size: 12px; color: #909399; }
+.finished-reason { font-size: 11px; color: #b0b3b8; font-style: italic; }
 
 /* HOLDING 大字損益 */
 .holding-hero {

@@ -385,7 +385,7 @@ class MonitorService
             $profitPct = ($price - $entryPrice) / $entryPrice * 100;
 
             if ($holdingMinutes > 90 && $profitPct < 0) {
-                $this->exitPosition($monitor, $price, 'trailing_stop', sprintf('時間停損（持有 %d 分鐘，利潤 %.1f%%）', $holdingMinutes, $profitPct));
+                $this->exitPosition($monitor, $price, 'closed', sprintf('時間停損（持有 %d 分鐘，損益 %.1f%%）', $holdingMinutes, $profitPct));
                 return null;
             }
         }
