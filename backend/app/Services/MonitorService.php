@@ -268,6 +268,15 @@ class MonitorService
         // 觸發進場訊號
         $this->transition($monitor, CandidateMonitor::STATUS_ENTRY_SIGNAL, "進場條件成立（{$strategy}）");
 
+        // 漲跌停價（從快照取昨收）
+        $latestSnap = IntradaySnapshot::where('stock_id', $stock->id)
+            ->where('trade_date', $date)
+            ->orderByDesc('snapshot_time')
+            ->first();
+        $prevClose = $latestSnap ? (float) $latestSnap->prev_close : 0;
+        $limitUp = $prevClose > 0 ? round($prevClose * 1.10, 2) : round($price * 1.10, 2);
+        $limitDown = $prevClose > 0 ? round($prevClose * 0.90, 2) : round($price * 0.90, 2);
+
         // 計算動態目標/停損
         $entryPrice = $price;
         $avgAmplitude = $this->getAvgAmplitude($stock->id, $date, 5);
@@ -280,9 +289,11 @@ class MonitorService
             $targetPrice = max($targetPrice, $aiResistance);
         }
         $targetPrice = min($targetPrice, round($entryPrice * 1.10, 2));  // 絕對上限
+        $targetPrice = min($targetPrice, $limitUp);  // 不可超過漲停
 
         $stopPrice = round($entryPrice * (1 - $avgAmplitude * 0.55 / 100), 2);
         $stopPrice = max($stopPrice, round($entryPrice * 0.97, 2));
+        $stopPrice = max($stopPrice, $limitDown);  // 不可低於跌停
 
         $monitor->update([
             'entry_price' => $entryPrice,
