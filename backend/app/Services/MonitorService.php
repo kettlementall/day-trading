@@ -365,8 +365,13 @@ class MonitorService
             return null;
         }
 
-        // 移動停利：最高點回落超過 50% 已實現利潤
-        $highSinceEntry = (float) $latest->high; // 簡化：用當日最高
+        // 移動停利：進場後最高點回落超過 50% 已實現利潤
+        $highSinceEntry = $monitor->entry_time
+            ? (float) IntradaySnapshot::where('stock_id', $stock->id)
+                ->where('trade_date', $date)
+                ->where('snapshot_time', '>=', $monitor->entry_time)
+                ->max('current_price')
+            : $price;
         $unrealizedProfit = $highSinceEntry - $entryPrice;
         if ($unrealizedProfit > 0 && $entryPrice > 0) {
             $currentProfit = $price - $entryPrice;
