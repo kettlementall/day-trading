@@ -447,7 +447,7 @@ PROMPT;
         $newsIndustries
     ): string {
         // 候選標的明細（TSV 格式）
-        $lines = ["symbol\tname\tind\tai_selected\tstrat\thaiku_reason\ttags\tbuy\ttarget\tstop\trr\topen\thigh\tlow\tclose\tbuy?\ttgt?\tstop?\tprofit%\tmorning_grade\tmorning_score"];
+        $lines = ["symbol\tname\tind\tsource\tai_selected\tstrat\thaiku_reason\ttags\tbuy\ttarget\tstop\trr\topen\thigh\tlow\tclose\tbuy?\ttgt?\tstop?\tprofit%\tmorning_grade\tmorning_score"];
         foreach ($candidates as $c) {
             $r = $c->result;
             $suggestedBuy = (float) $c->suggested_buy;
@@ -468,6 +468,7 @@ PROMPT;
                 $c->stock->symbol,
                 $c->stock->name,
                 $c->stock->industry ?? '-',
+                $c->source ?? 'morning',
                 $c->ai_selected ? 'Y' : 'N',
                 $c->intraday_strategy ?? '-',
                 $c->haiku_reasoning ?? '-',
@@ -586,13 +587,17 @@ MONITOR;
 你是台股當沖交易檢討分析師。請針對 {$date} 這一天的候選標的做全面檢討分析。
 
 ## 重要背景
-本系統經三階段篩選：規則式寬篩 → Haiku 批量預篩 → Opus 精審。
-以下 {$totalCount} 檔候選標的中，只有 {$selectedCount} 檔被 Opus 最終選入（ai_selected=Y），其餘為被排除的標的。
-**請以 ai_selected=Y 的標的為主要評估對象**，被排除的標的僅作為對照參考（驗證排除決策是否正確）。
+本系統有兩條選股路徑：
+1. **盤前三階段**（source=morning）：規則式寬篩 → Haiku 批量預篩 → Opus 精審
+2. **盤中動態加入**（source=intraday_mover）：09:35 掃描盤中強勢股 → 規則過濾 → Haiku 快評（跳過 Opus）
+
+以下 {$totalCount} 檔候選標的中，{$selectedCount} 檔為最終選入（ai_selected=Y）。
+**請以 ai_selected=Y 的標的為主要評估對象**，被排除的標的僅作為對照參考。
+若有 source=intraday_mover 的標的，請單獨評估其表現（這些是盤中才加入的，選股邏輯不同）。
 
 ## 分析目標
-1. Opus 選入的標的表現如何：成功率、買入可達率、目標可達率
-2. Opus 排除的標的是否確實表現較差（排除決策是否正確）
+1. 盤前選入標的（source=morning）表現如何：成功率、買入可達率、目標可達率
+2. 被排除的標的是否確實表現較差（排除決策是否正確）
 3. 盤中監控系統（校準、進出場、AI 滾動建議）的決策品質
 4. 從盤後走勢反推，建議買入價和目標價的設定是否合理
 5. 當天大盤和消息面對結果的影響
@@ -601,7 +606,7 @@ MONITOR;
 {$candidatesTsv}
 
 ### 欄位說明
-symbol=股票代號, name=名稱, ind=產業, ai_selected=Opus最終選入(Y/N), strat=策略(bounce=跌深反彈/breakout=突破追多), haiku_reason=Haiku預篩理由, tags=選股標籤(|分隔), buy/target/stop=建議價, rr=風報比, open/high/low/close=實際OHLC, buy?=買入可達(Y/N), tgt?=目標可達(Y/N), stop?=觸停損(Y/N), profit%=報酬率(-=未買到), morning_grade=盤前校準等級(A=強力推薦/B=標準進場/C=觀察/D=放棄), morning_score=盤前分數
+symbol=股票代號, name=名稱, ind=產業, source=來源(morning=盤前三階段/intraday_mover=盤中動態加入), ai_selected=最終選入(Y/N), strat=策略, haiku_reason=Haiku預篩理由, tags=選股標籤(|分隔), buy/target/stop=建議價, rr=風報比, open/high/low/close=實際OHLC, buy?=買入可達(Y/N), tgt?=目標可達(Y/N), stop?=觸停損(Y/N), profit%=報酬率(-=未買到), morning_grade=校準等級(A/B/C/D), morning_score=盤前分數
 
 ## 盤中行情（開盤 30 分鐘時的快照）
 {$intradayTsv}
@@ -622,13 +627,14 @@ est_vol_ratio=預估量倍數, open_chg%=開盤漲幅, current=快照時現價, 
 請用繁體中文輸出，用 Markdown 格式，包含以下段落：
 
 ### 一、當日總覽
-簡述當天大盤氛圍、消息面影響，並分別統計 Opus 選入（ai_selected=Y）和排除（ai_selected=N）標的的整體表現：
-- Opus 選入標的：成功率、買入可達率、目標可達率、平均報酬率
-- Opus 排除標的：假如也進場的成功率（驗證排除決策品質）
+簡述當天大盤氛圍、消息面影響，並分別統計選入（ai_selected=Y）和排除（ai_selected=N）標的的整體表現：
+- 盤前選入標的（source=morning）：成功率、買入可達率、目標可達率、平均報酬率
+- 盤中加入標的（source=intraday_mover，若有）：同上（這些是 09:35 才加入的，單獨統計）
+- 排除標的：假如也進場的成功率（驗證排除決策品質）
 
-### 二、Opus 選入標的逐檔分析
-針對 ai_selected=Y 的標的，先用摘要表格列出（代號、策略、結果、一句話評語），然後逐檔分析：
-- 選股邏輯是否合理（Opus 為何選入？Haiku 預篩理由是否準確？）
+### 二、選入標的逐檔分析
+針對 ai_selected=Y 的標的，先用摘要表格列出（代號、來源、策略、結果、一句話評語），然後逐檔分析：
+- 選股邏輯是否合理（盤前標的看 Opus 選入理由；盤中標的看 Haiku 快評是否抓到真突破）
 - 盤前設定是否合理（買入價、目標價、停損）
 - 盤中表現如何（開盤位置、量能、走勢）
 - 為什麼達標/未達標
@@ -643,8 +649,8 @@ est_vol_ratio=預估量倍數, open_chg%=開盤漲幅, current=快照時現價, 
 - 整體監控系統對當日損益的貢獻（正面或負面）
 
 ### 四、排除決策檢討
-挑出被 Opus 排除但事後表現好的標的（最多 5 檔），分析：
-- Opus 為何排除？排除理由是否合理？
+挑出被排除但事後表現好的標的（最多 5 檔），分析：
+- 排除理由是否合理？
 - 是否有遺漏的選股訊號？
 
 ### 五、共通問題
