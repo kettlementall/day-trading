@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 class Candidate extends Model
 {
     protected $fillable = [
-        'stock_id', 'trade_date', 'mode',
+        'stock_id', 'trade_date', 'mode', 'source', 'intraday_added_at',
         'suggested_buy', 'target_price', 'stop_loss', 'risk_reward_ratio',
         'score', 'strategy_type', 'strategy_detail', 'reasons', 'indicators',
         'haiku_selected', 'haiku_reasoning',
@@ -22,6 +22,7 @@ class Candidate extends Model
 
     protected $casts = [
         'trade_date' => 'date:Y-m-d',
+        'intraday_added_at' => 'datetime',
         'suggested_buy' => 'decimal:2',
         'target_price' => 'decimal:2',
         'stop_loss' => 'decimal:2',

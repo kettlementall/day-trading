@@ -261,6 +261,15 @@
 
         <div class="card-tags">
           <el-tag
+            v-if="item.source === 'intraday_mover'"
+            size="small"
+            type="warning"
+            effect="dark"
+            round
+          >
+            盤中加入 {{ item.intraday_added_at ? new Date(item.intraday_added_at).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '' }}
+          </el-tag>
+          <el-tag
             v-if="item.strategy_type"
             size="small"
             :type="item.strategy_type === 'bounce' ? 'warning' : 'success'"

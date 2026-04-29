@@ -41,6 +41,11 @@ class StockScreener
             ?: FormulaSetting::getConfig('screen_thresholds');
         $newsConfig = FormulaSetting::getConfig('news_sentiment');
         $labelConfig = FormulaSetting::getConfig('signal_labels');
+
+        // intraday 複合分數加權與負分機制（overnight 不使用）
+        $compoundWeights = FormulaSetting::getConfig('screener_compound_weights') ?: [];
+        $compoundPenalties = FormulaSetting::getConfig('screener_penalties') ?: [];
+
         $candidates = collect();
 
         // 取得最新消息面指數
@@ -296,6 +301,16 @@ class StockScreener
                 if ($riskReward < $minRR && !$isGapReversalCandidate) continue;
             }
 
+            // intraday 模式：計算複合分數供下游排序使用
+            $compoundScore = 0.0;
+            if ($mode === 'intraday') {
+                $compoundScore = $this->calcCompoundScore(
+                    $closes, $highs, $volumes, $changePcts, $amplitudes,
+                    $avgAmplitude5, $avgVolume5, $inst, $margin->first(),
+                    $compoundWeights, $compoundPenalties
+                );
+            }
+
             $candidates->push([
                 'stock_id'          => $stock->id,
                 'trade_date'        => $tradeDate,
@@ -308,29 +323,35 @@ class StockScreener
                 'reasons'           => $reasons,
                 'indicators'        => $indicators,
                 '_avg_vol5'         => $avgVolume5,
+                '_compound_score'   => $compoundScore,
                 '_gap_reversal'     => $isGapReversalCandidate,
             ]);
         }
 
-        // 依 5 日均量排序，取前 N 名（流動性好的優先讓 AI 看）
-        // gap_reversal 候選保證入選（不被均量排序截斷）
-        $maxCandidates = $maxCandidatesOverride ?? ($screenConfig['max_candidates'] ?? 80);
+        // 排序與截斷
+        // - intraday：複合分數降冪（振幅 + 流動性 + 日內活躍 + 籌碼 + 動能 + 突破 - 負分）
+        // - overnight：5 日均量降冪（強勢延續邏輯，與當沖選股目標不同）
+        // gap_reversal 候選保證入選（不被排序截斷）
+        $defaultMax = $mode === 'intraday' ? 100 : 80;
+        $maxCandidates = $maxCandidatesOverride ?? ($screenConfig['max_candidates'] ?? $defaultMax);
         $gapReversalCandidates = $candidates->filter(fn($c) => $c['_gap_reversal'] ?? false);
         $normalCandidates = $candidates->filter(fn($c) => !($c['_gap_reversal'] ?? false));
 
         $normalSlots = max(0, $maxCandidates - $gapReversalCandidates->count());
-        $selected = $normalCandidates->sortByDesc('_avg_vol5')->take($normalSlots);
+        $sortKey = $mode === 'intraday' ? '_compound_score' : '_avg_vol5';
+        $selected = $normalCandidates->sortByDesc($sortKey)->take($normalSlots);
         $candidates = $selected->concat($gapReversalCandidates)->values();
 
         if ($gapReversalCandidates->isNotEmpty()) {
             Log::info("StockScreener: gap_reversal 候選 {$gapReversalCandidates->count()} 檔保證入選");
         }
+        Log::info("StockScreener({$mode})：物理門檻通過 {$normalCandidates->count()} 檔，依 {$sortKey} 排序取前 {$maxCandidates}");
 
         // 寫入資料庫
         $stockIds = [];
         foreach ($candidates as $data) {
             $dbData = $data;
-            unset($dbData['_avg_vol5'], $dbData['_gap_reversal']);
+            unset($dbData['_avg_vol5'], $dbData['_compound_score'], $dbData['_gap_reversal']);
             Candidate::updateOrCreate(
                 ['stock_id' => $dbData['stock_id'], 'trade_date' => $dbData['trade_date'], 'mode' => $dbData['mode']],
                 $dbData
@@ -540,4 +561,183 @@ class StockScreener
         };
     }
 
+    // -------------------------------------------------------------------------
+    // 當沖複合分數（intraday only）
+    //
+    // 設計理念：物理門檻排序「應該值不值得當沖」，不是「流動性高不高」。
+    //   振幅 = 當沖核心利潤來源；流動性夠用即可（log 飽和）；
+    //   日內活躍 = 過去常震盪的真實證據；
+    //   動能/突破 弱化（避免追漲停股，那是隔日沖思維）；
+    //   負分機制 排除前日漲停、過熱、跌停痕跡。
+    // -------------------------------------------------------------------------
+
+    /**
+     * 計算當沖複合分數（含負分），分數越高越優先入選 Haiku 預篩
+     */
+    private function calcCompoundScore(
+        array $closes,
+        array $highs,
+        array $volumes,
+        array $changes,
+        array $amps,
+        float $avgAmp5,
+        float $avgVol5Lots,
+        $instCollection,
+        $latestMargin,
+        array $weights,
+        array $penalties
+    ): float {
+        $wAmp = $weights['amplitude'] ?? 0.35;
+        $wLiq = $weights['liquidity'] ?? 0.20;
+        $wPat = $weights['pattern']   ?? 0.15;
+        $wChp = $weights['chips']     ?? 0.15;
+        $wMom = $weights['momentum']  ?? 0.10;
+        $wBrk = $weights['breakout']  ?? 0.05;
+
+        $amp = $this->scoreAmplitude($avgAmp5);
+        $liq = $this->scoreLiquidity($avgVol5Lots);
+        $pat = $this->scoreIntradayPattern($amps);
+        $chp = $this->scoreChips($instCollection, $latestMargin);
+        $mom = $this->scoreMomentum($changes);
+        $brk = $this->scoreBreakout($closes, $highs, $volumes);
+
+        $base = $amp * $wAmp + $liq * $wLiq + $pat * $wPat
+              + $chp * $wChp + $mom * $wMom + $brk * $wBrk;
+
+        return $base - $this->scorePenalty($changes, $penalties);
+    }
+
+    /**
+     * 振幅分數：5 日均振幅 × 20，clamp 0–100
+     */
+    private function scoreAmplitude(float $avgAmp5): float
+    {
+        return max(0.0, min(100.0, $avgAmp5 * 20.0));
+    }
+
+    /**
+     * 流動性分數：log10(5日均量張) × 25，clamp 0–100
+     * 100 張 50 分；1000 張 75 分；10000 張+ 飽和 100 分
+     */
+    private function scoreLiquidity(float $avgVol5Lots): float
+    {
+        if ($avgVol5Lots <= 1) return 0.0;
+        return max(0.0, min(100.0, log10($avgVol5Lots) * 25.0));
+    }
+
+    /**
+     * 日內活躍度：近 10 日內單日振幅 ≥ 5% 出現次數 × 20
+     * 區分「真當沖標的」vs「平均振幅還行但都小震」的死水股
+     */
+    private function scoreIntradayPattern(array $amps): float
+    {
+        $window = array_slice($amps, 0, 10);
+        $bigSwings = count(array_filter($window, fn($a) => $a >= 5.0));
+        return min(100.0, $bigSwings * 20.0);
+    }
+
+    /**
+     * 籌碼分數：法人買超 + 連買 + 融資減 + 融券增
+     */
+    private function scoreChips($instCollection, $latestMargin): float
+    {
+        $score = 0.0;
+
+        if ($instCollection->isNotEmpty()) {
+            $latest = $instCollection->first();
+            $netLatest = (float)$latest->foreign_net + (float)$latest->trust_net;
+            if ($netLatest > 0) $score += 40;
+
+            if ($instCollection->count() >= 2) {
+                $prev = $instCollection->get(1);
+                $foreignTwoUp = (float)$latest->foreign_net > 0 && (float)$prev->foreign_net > 0;
+                $trustTwoUp   = (float)$latest->trust_net   > 0 && (float)$prev->trust_net   > 0;
+                if ($foreignTwoUp || $trustTwoUp) $score += 30;
+            }
+        }
+
+        if ($latestMargin) {
+            if ((float)$latestMargin->margin_change < 0) $score += 20;
+            if ((float)$latestMargin->short_change > 0)  $score += 10;
+        }
+
+        return min(100.0, $score);
+    }
+
+    /**
+     * 動能分數：前日漲幅 × 15 + 近 3 日累計漲幅 × 2 (bonus, 上限 20)
+     * 當沖視角下動能權重較低，避免追到漲停買不到
+     */
+    private function scoreMomentum(array $changes): float
+    {
+        $prev = max(0.0, $changes[0] ?? 0);
+        $base = min(100.0, $prev * 15.0);
+
+        $recent3 = array_slice($changes, 0, 3);
+        $cum = max(0.0, array_sum($recent3));
+        $bonus = min(20.0, $cum * 2.0);
+
+        return min(100.0, $base + $bonus);
+    }
+
+    /**
+     * 突破分數：突破前 5 日最高 +50 / 爆量 +30 / 站上短均 +20
+     */
+    private function scoreBreakout(array $closes, array $highs, array $volumes): float
+    {
+        $score = 0.0;
+
+        $prev5High = count($highs) >= 6 ? max(array_slice($highs, 1, 5)) : 0;
+        if ($prev5High > 0 && $closes[0] > $prev5High) {
+            $score += 50;
+        }
+
+        $avgVol5 = array_sum(array_slice($volumes, 0, 5)) / 5;
+        if ($avgVol5 > 0 && $volumes[0] > $avgVol5 * 1.5) {
+            $score += 30;
+        }
+
+        $ma5 = TechnicalIndicator::sma($closes, 5);
+        $ma10 = TechnicalIndicator::sma($closes, 10);
+        if ($ma5 && $ma10 && $closes[0] > $ma5 && $ma5 > $ma10) {
+            $score += 20;
+        }
+
+        return min(100.0, $score);
+    }
+
+    /**
+     * 負分機制：扣分以排除過熱/弱勢/漲停買不到的標的
+     */
+    private function scorePenalty(array $changes, array $penalties): float
+    {
+        $pPrevLimitUp = $penalties['prev_limit_up']   ?? 25;
+        $pHotStreak   = $penalties['hot_streak']      ?? 20;
+        $pLimitDown5d = $penalties['limit_down_5d']   ?? 15;
+        $pWeak3d      = $penalties['weak_3d']         ?? 10;
+
+        $penalty = 0.0;
+
+        if (($changes[0] ?? 0) >= 9.8) {
+            $penalty += $pPrevLimitUp;
+        }
+
+        $recent3 = array_slice($changes, 0, 3);
+        $upStreak = count($recent3) >= 3
+            && $recent3[0] > 0 && $recent3[1] > 0 && $recent3[2] > 0;
+        if ($upStreak && array_sum($recent3) >= 15.0) {
+            $penalty += $pHotStreak;
+        }
+
+        $window5 = array_slice($changes, 0, 5);
+        if (count(array_filter($window5, fn ($c) => $c <= -9.8)) > 0) {
+            $penalty += $pLimitDown5d;
+        }
+
+        if (array_sum($recent3) <= -8.0) {
+            $penalty += $pWeak3d;
+        }
+
+        return $penalty;
+    }
 }

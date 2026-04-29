@@ -98,7 +98,20 @@ class MonitorStocks extends Command
         $this->info("[{$timeStr}] 快照 " . count($allStocks) . " 檔");
 
         // ===== Step 1: 抓取即時報價並寫入快照 =====
-        $quotes = $this->client->fetchQuotes($allStocks);
+        // 取 Fugle 鎖（避免跟 scan-intraday-movers 撞車，等 2 秒就放棄此輪）
+        $fugleLock = Cache::lock('fugle_bulk', 120);
+        if (!$fugleLock->block(2)) {
+            $this->line("[{$timeStr}] Fugle 鎖被佔用，跳過此輪 quote 抓取");
+            \Illuminate\Support\Facades\Log::info('MonitorStocks: Fugle 鎖被佔用，跳過此輪');
+            return;
+        }
+
+        try {
+            $quotes = $this->client->fetchQuotes($allStocks);
+        } finally {
+            $fugleLock->release();
+        }
+
         $written = $this->writeSnapshots($quotes, $date, $now);
         $this->info("寫入 {$written} 筆快照");
 

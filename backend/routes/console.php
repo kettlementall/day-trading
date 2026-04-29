@@ -70,6 +70,11 @@ scheduledCommand('news:compute-indices', '新聞指數(12:15)', selfNotify: true
 scheduledCommand('news:fetch', '新聞抓取(18:00)', selfNotify: true)->dailyAt('18:00');
 scheduledCommand('news:compute-indices', '新聞指數(18:15)', selfNotify: true)->dailyAt('18:15');
 
+// 腿 2：盤中動態加入（4+1 軸聯集 → Fugle 即時報價 → 4 條規則 → Haiku 快評 → 寫入 candidates）
+// 09:35 觸發 = 09:30 5 分 K 收後 5 分鐘，足夠抓老師 09:37 報的明牌
+scheduledCommand('stock:scan-intraday-movers', '盤中加入(09:35)', selfNotify: true)
+    ->dailyAt('09:35')->weekdays();
+
 // 盤中即時監控：command 內部每 30 秒 loop，scheduler 每分鐘觸發作為當機重啟保底
 // withoutOverlapping(60)：若 process 存活中，新觸發直接跳過；異常中斷後最多 60 分鐘內重啟
 // runInBackground：避免長時間 loop 阻塞 scheduler，導致同分鐘的其他排程（如隔日沖出場監控）被卡住
@@ -132,6 +137,10 @@ Schedule::command('stock:health-check')->dailyAt('22:00')->appendOutputTo($sched
 
 // 每週日 03:00 清理過期資料（快照保留 30 天、AI 教訓過期刪除）
 Schedule::command('stock:cleanup')->weeklyOn(0, '03:00')->appendOutputTo($scheduleLog);
+
+// 每週一 06:00 從 TWSE/TPEX 補上 stocks.industry（供類股強弱、新聞題材配對使用，產業分類極少變動）
+scheduledCommand('stock:fill-industry', '產業別填補', selfNotify: true)
+    ->weeklyOn(1, '06:00');
 
 // 回測優化已停用（AI 覆蓋價格後，調整規則式公式參數意義不大）
 // 指令 stock:backtest --validated 保留可手動執行

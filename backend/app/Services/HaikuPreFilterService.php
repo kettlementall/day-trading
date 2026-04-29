@@ -627,6 +627,156 @@ SYSTEM;
         return implode("\n", $lines);
     }
 
+    // -------------------------------------------------------------------------
+    // 腿 2：盤中動態加入快評（不操作 DB，回傳結果讓 caller 寫入）
+    // -------------------------------------------------------------------------
+
+    /**
+     * 盤中加入候選快評：判斷通過規則過濾的標的是「真突破」還是「假反彈/騙線」
+     *
+     * @param  Collection<\App\Models\Stock> $survivors  通過 4 條規則的標的
+     * @param  array<string, array>  $liveQuotes  keyed by symbol（FugleRealtimeClient::fetchQuotes）
+     * @param  array<string, array>  $candlesMap  keyed by symbol（FugleRealtimeClient::fetchCandles）
+     * @param  string  $tradeDate
+     * @return array<string, array>  keyed by symbol: ['keep' => bool, 'confidence' => int, 'reason' => string, 'strategy' => string]
+     */
+    public function filterIntradayMovers(
+        Collection $survivors,
+        array $liveQuotes,
+        array $candlesMap,
+        string $tradeDate
+    ): array {
+        if ($survivors->isEmpty()) {
+            return [];
+        }
+
+        if (!$this->apiKey) {
+            Log::warning('HaikuPreFilterService: ANTHROPIC_API_KEY 未設定，盤中加入全部通過');
+            $result = [];
+            foreach ($survivors as $stock) {
+                $result[$stock->symbol] = [
+                    'keep' => true, 'confidence' => 50, 'reason' => 'API 不可用，預設通過', 'strategy' => 'momentum',
+                ];
+            }
+            return $result;
+        }
+
+        $systemPrompt = $this->buildIntradayMoverSystemPrompt($tradeDate);
+        $userMessage  = $this->buildIntradayMoverMessage($survivors, $liveQuotes, $candlesMap, $tradeDate);
+
+        try {
+            $results = $this->callApi($systemPrompt, $userMessage);
+            $map = [];
+            foreach ($results as $r) {
+                $map[$r['symbol']] = [
+                    'keep'       => (bool) ($r['keep'] ?? false),
+                    'confidence' => max(0, min(100, (int) ($r['confidence'] ?? 0))),
+                    'reason'     => $r['reason'] ?? '',
+                    'strategy'   => $r['strategy'] ?? 'momentum',
+                ];
+            }
+            return $map;
+        } catch (\Exception $e) {
+            Log::error('HaikuPreFilterService filterIntradayMovers error: ' . $e->getMessage());
+            app(TelegramService::class)->broadcast(
+                "⚠️ 盤中加入 Haiku 快評失敗：" . mb_substr($e->getMessage(), 0, 100),
+                'system'
+            );
+            return [];
+        }
+    }
+
+    private function buildIntradayMoverSystemPrompt(string $tradeDate): string
+    {
+        return <<<SYSTEM
+你是台股當沖盤中加入候選的判斷者。現在是 {$tradeDate} 盤中。
+
+輸入的標的已通過 4 條硬規則：
+- 漲幅 ≥3%
+- 量比 ≥1.5
+- 距漲停 >1.5%
+- 外盤比 ≥55%
+
+你的工作：判斷這是「真突破延續」還是「假反彈/拉高出貨/騙線」。
+規則層無法判斷「真假」，靠你看 5 分 K 序列 + 量價配合確認。
+
+重點看：
+- 5 分 K 序列：量縮拉回 ok / 連續放量收紅 ok / 上影線連續 = 出貨
+- 量價配合：價漲量增 ok / 價漲量縮 = 弱
+- 前日 K 棒位置：突破前高 ok / 仍在前日下方 = 反彈而已
+- 類股輪動：同類股當日漲幅 ok / 類股逆勢 = 個股題材，風險高
+
+## 回覆格式
+請直接回覆 JSON array（不要加 markdown），格式：
+[
+  {"symbol":"2330","keep":true,"confidence":75,"reason":"15字理由","strategy":"momentum"},
+  {"symbol":"2317","keep":false,"confidence":20,"reason":"15字理由","strategy":"breakout_fresh"}
+]
+
+- keep: true = 值得加入盤中候選，false = 不加入
+- confidence: 0–100
+- reason: 一句話，10–20 字
+- strategy: 'momentum' 或 'breakout_fresh'
+
+每檔都必須回覆，不可省略。
+SYSTEM;
+    }
+
+    private function buildIntradayMoverMessage(
+        Collection $survivors,
+        array $liveQuotes,
+        array $candlesMap,
+        string $tradeDate
+    ): string {
+        $lines = ["## 盤中加入快評（{$survivors->count()} 檔）\n"];
+
+        foreach ($survivors as $stock) {
+            $symbol   = $stock->symbol;
+            $name     = $stock->name;
+            $industry = $stock->industry ?? '-';
+            $q        = $liveQuotes[$symbol] ?? [];
+
+            $prevClose = (float) ($q['prev_close'] ?? 0);
+            $current   = (float) ($q['current_price'] ?? 0);
+            $changePct = $prevClose > 0 ? round(($current - $prevClose) / $prevClose * 100, 2) : 0;
+            $accVol    = round(($q['accumulated_volume'] ?? 0) / 1000);
+            $askVol    = (int) ($q['trade_volume_at_ask'] ?? 0);
+            $bidVol    = (int) ($q['trade_volume_at_bid'] ?? 0);
+            $extRatio  = ($askVol + $bidVol) > 0 ? round($askVol / ($askVol + $bidVol) * 100, 1) : 0;
+
+            // 前日 K 線
+            $prevQuote = DailyQuote::where('stock_id', $stock->id)
+                ->where('date', '<', $tradeDate)
+                ->orderByDesc('date')
+                ->first();
+            $prevKline = $prevQuote
+                ? sprintf('收%.1f 量%dk 漲%s%%', (float) $prevQuote->close, round($prevQuote->volume / 1000), (float) $prevQuote->change_percent)
+                : '無前日K';
+
+            // 5 分 K 序列
+            $candles = $candlesMap[$symbol] ?? [];
+            $candleStr = '無5分K';
+            if (!empty($candles)) {
+                $parts = [];
+                foreach (array_slice($candles, -8) as $c) { // 最近 8 根
+                    $parts[] = sprintf(
+                        '%s O%.1f H%.1f L%.1f C%.1f V%dk',
+                        $c['time'], $c['open'], $c['high'], $c['low'], $c['close'], round($c['volume'] / 1000)
+                    );
+                }
+                $candleStr = implode(' | ', $parts);
+            }
+
+            $lines[] = "{$symbol} {$name}（{$industry}）";
+            $lines[] = "  現價{$current}({$changePct:+.2f}%) 量{$accVol}k張 外盤{$extRatio}%";
+            $lines[] = "  前日: {$prevKline}";
+            $lines[] = "  5分K: {$candleStr}";
+            $lines[] = '';
+        }
+
+        return implode("\n", $lines);
+    }
+
     /**
      * Fallback：API 不可用時，全部標記 haiku_selected=true 讓 Opus 自行判斷
      */
