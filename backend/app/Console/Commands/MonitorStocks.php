@@ -10,7 +10,6 @@ use App\Models\MarketHoliday;
 use App\Models\Stock;
 use App\Services\IntradayAiAdvisor;
 use App\Services\MonitorService;
-use App\Services\OvernightExitMonitorService;
 use App\Services\TelegramService;
 use App\Services\FugleRealtimeClient;
 use Illuminate\Console\Command;
@@ -83,53 +82,25 @@ class MonitorStocks extends Command
         $minute  = (int) $now->format('i');
         $timeStr = $now->format('H:i');
 
+        // 只抓 AI 選入的當沖候選（非選入的不會有 monitor，不需快照）
         $candidates = Candidate::with('stock')
             ->where('trade_date', $date)
             ->where('mode', 'intraday')
-            ->get();
-
-        // 隔日沖標的（trade_date = 今日、mode = overnight、AI 選入）：只做快照，不做當沖監控
-        $overnightCandidates = Candidate::with('stock')
-            ->where('trade_date', $date)
-            ->where('mode', 'overnight')
             ->where('ai_selected', true)
             ->get();
 
-        // 合併所有需要快照的股票（去重）
-        $intradayStocks  = $candidates->pluck('stock')->unique('id');
-        $overnightStocks = $overnightCandidates->pluck('stock')->unique('id');
-        $allStocks       = $intradayStocks->merge($overnightStocks)->unique('id')->values()->all();
-
-        if (empty($allStocks)) {
-            $this->warn("[{$timeStr}] 無 {$date} 需快照標的");
+        if ($candidates->isEmpty()) {
+            $this->line("[{$timeStr}] 無 AI 選入的當沖標的");
             return;
         }
 
-        $overnightOnlyCount = $overnightStocks->diffKeys($intradayStocks->keyBy('id'))->count();
-        $this->info("[{$timeStr}] 快照 " . count($allStocks) . " 檔" . ($overnightOnlyCount > 0 ? "（含隔日沖 {$overnightOnlyCount} 檔）" : ''));
+        $allStocks = $candidates->pluck('stock')->unique('id')->values()->all();
+        $this->info("[{$timeStr}] 快照 " . count($allStocks) . " 檔");
 
         // ===== Step 1: 抓取即時報價並寫入快照 =====
         $quotes = $this->client->fetchQuotes($allStocks);
         $written = $this->writeSnapshots($quotes, $date, $now);
         $this->info("寫入 {$written} 筆快照");
-
-        // ===== Step 1.5: 隔日沖即時到價檢查（純規則，不含 AI）=====
-        if ($overnightCandidates->isNotEmpty()) {
-            try {
-                $overnightService = app(OvernightExitMonitorService::class);
-                $hitCount = $overnightService->checkPriceHits($date, $quotes);
-                if ($hitCount > 0) {
-                    $this->info("隔日沖即時到價：{$hitCount} 檔觸發");
-                }
-            } catch (\Exception $e) {
-                Log::error("隔日沖即時到價檢查失敗：" . $e->getMessage());
-            }
-        }
-
-        // ===== 以下步驟只針對當沖候選（intraday），不影響隔日沖 =====
-        if ($candidates->isEmpty()) {
-            return;
-        }
 
         // ===== Step 1.5: 漲停/跌停通知 =====
         $this->notifyLimitHits($quotes, $date);

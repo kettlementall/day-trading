@@ -144,8 +144,9 @@ class OvernightExitMonitorService
     }
 
     /**
-     * 純規則到價檢查（每 30 秒由 monitor-intraday 呼叫，不含 AI）
+     * 純規則到價檢查（已不再由 monitor-intraday 呼叫，改由 checkTimeSlot 內建的到價檢查取代）
      *
+     * @deprecated 隔日沖排程已加密至每 5 分鐘（早盤），checkTimeSlot 自帶到價檢查
      * @param  array  $quotes  Fugle 報價（keyed by symbol）
      * @return int  觸發數量
      */

@@ -36,7 +36,7 @@
 | 18:15 | `news:compute-indices`      | 計算新聞指數                                                    |
 | 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + API 連通性 + Log 大小警告） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
-| **T+1 09:05–13:15** | **`stock:monitor-overnight-exit --slot={time}`** | **隔日沖 T+1 出場監控，每 15 分鐘一次（09:05/09:15 開盤快速檢查；Fugle 即時報價：目標/停損觸發自動終止；Sonnet 滾動判斷 hold/adjust/exit）** |
+| **T+1 09:05–13:15** | **`stock:monitor-overnight-exit --slot={time}`** | **隔日沖 T+1 出場監控，09:05-09:25 每 5 分鐘 + 09:30 後每 15 分鐘（獨立 Fugle 報價抓取；目標/停損到價自動終止；Sonnet 滾動判斷 hold/adjust/exit）** |
 | **週日 22:00** | **`stock:compute-strategy-stats`** | **計算隔日沖/當沖策略量化績效統計（30/60 天窗口）** |
 
 > `stock:backtest --validated` 已停用自動排程。指令保留可手動執行回測指標檢視。
@@ -468,7 +468,7 @@ API 失敗時，取 Haiku 信度前 15 名，預設 `intraday_strategy = 'moment
 
 `backend/app/Services/FugleRealtimeClient.php` 負責 Fugle MarketData API 即時報價（每支股票獨立 REST call，150ms 間隔，使用 `FUGLE_API_KEY`）。
 
-`stock:monitor-intraday` 為長駐 loop 進程，自 09:00 啟動直到 13:30 自行結束，**每 30 秒**執行一次快照週期。Scheduler 保留每分鐘觸發，搭配 `withoutOverlapping(60)` 確保：
+`stock:monitor-intraday` 為長駐 loop 進程，自 09:00 啟動直到 13:30 自行結束，**每 30 秒**執行一次快照週期。**只抓 AI 選入（`ai_selected=true`）的當沖候選**，不再包含隔日沖標的（隔日沖由 `stock:monitor-overnight-exit` 獨立抓取報價）。Scheduler 保留每分鐘觸發，搭配 `withoutOverlapping(60)` 確保：
 - 進程存活時：scheduler 每分鐘觸發被擋掉，不產生重複執行
 - 進程異常中斷時：最多 1 分鐘內 scheduler 自動重啟
 
@@ -954,7 +954,7 @@ overnight 模式的物理篩選上限為 **top 100**（`max_candidates = 100`，
 
 定義於 `MonitorOvernightExit` 指令與 `OvernightExitMonitorService`。
 
-每日 **T+1 的 09:05、09:15 起每 15 分鐘至 13:15**（共 18 個時段）各執行一次，檢查所有 `ai_selected=true` 且 `CandidateMonitor.status` 尚未終止的隔日沖持倉。09:05/09:15 為開盤快速檢查（偵測跳空達標/停損）；12:45–13:15 為尾盤平倉決策。
+每日 **T+1 的 09:05 起至 13:15**，早盤 09:05-09:25 每 5 分鐘、09:30 後每 15 分鐘（共 21 個時段）各執行一次，檢查所有 `ai_selected=true` 且 `CandidateMonitor.status` 尚未終止的隔日沖持倉。各時段獨立抓取 Fugle 報價（不依賴 `stock:monitor-intraday`），先做到價檢查再做 AI 滾動判斷。09:05-09:25 加密頻率確保開盤跳空達標/停損能在 5 分鐘內偵測。
 
 #### 執行流程
 
@@ -968,7 +968,7 @@ overnight 模式的物理篩選上限為 **top 100**（`max_candidates = 100`，
 | `low <= current_stop` | 自動觸停損 | `stop_hit`（終止）；`exit_price = min(stop, open)`（跳空跌破停損時以開盤價計） |
 | 無觸發 | 呼叫 Sonnet AI 滾動判斷 | 依 Sonnet 回應決定 |
 
-> **即時到價檢查**：除了每 15 分鐘的排程監控，`stock:monitor-intraday` 每 30 秒快照後也會呼叫 `OvernightExitMonitorService::checkPriceHits()` 做純規則到價檢查（不含 AI），確保目標/停損觸發不會有 15 分鐘延遲。
+> **到價檢查**：早盤（09:05-09:25）每 5 分鐘排程，09:30 後每 15 分鐘。每次 `checkTimeSlot` 先做到價檢查再做 AI 滾動判斷。不再由 `stock:monitor-intraday` 代抓報價（避免 API rate limit 拖垮當沖校準）。
 
 #### Sonnet 滾動判斷
 

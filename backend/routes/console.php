@@ -90,9 +90,10 @@ scheduledCommand('stock:fetch-sector-indices', '類股指數抓取', selfNotify:
 scheduledCommand('stock:ai-screen-overnight', '隔日沖 AI 選股')
     ->dailyAt('12:50')->weekdays();
 
-// T+1 盤中出場監控（9:05~13:15 每 15 分鐘）：檢查目標/停損觸發 + Haiku 滾動調整
+// T+1 盤中出場監控：09:00-09:30 每 5 分鐘（開盤最關鍵） + 09:30-13:15 每 15 分鐘
+// 含 Fugle 報價抓取 + 目標/停損到價檢查 + AI 滾動調整（不再依賴 monitor-intraday）
 foreach ([
-    '905', '915',
+    '905', '910', '915', '920', '925',
     '930', '945', '1000', '1015', '1030', '1045',
     '1100', '1115', '1130', '1145',
     '1200', '1215', '1230',
