@@ -432,10 +432,13 @@ PROMPT;
 
         // 開盤校準結果
         $cal = is_array($monitor->ai_calibration) ? $monitor->ai_calibration : [];
-        $calGrade = $cal['grade'] ?? '-';
+        $isIntradayMover = ($candidate->source ?? 'morning') === 'intraday_mover';
+        $calGrade = $isIntradayMover ? 'B（盤中加入）' : ($cal['grade'] ?? '-');
         $calSupport = $monitor->current_stop ?? $candidate->reference_support ?? '-';
         $calResistance = $monitor->current_target ?? $candidate->reference_resistance ?? '-';
-        $calNotes = $cal['notes'] ?? '-';
+        $calNotes = $isIntradayMover
+            ? '盤中動態加入：已通過 Haiku 快評（' . ($candidate->haiku_reasoning ?? '') . '），跳過開盤校準'
+            : ($cal['notes'] ?? '-');
         $minVolRatio = $cal['entry_conditions']['min_volume_ratio'] ?? 1.5;
         $minExtRatio = $cal['entry_conditions']['min_external_ratio'] ?? 55;
 
