@@ -767,10 +767,17 @@ SYSTEM;
                 $candleStr = implode(' | ', $parts);
             }
 
+            // 類股強弱
+            $sectorChange = SectorIndex::getChangeForIndustry($tradeDate, $industry);
+            $sectorStr = $sectorChange !== null
+                ? "類股[{$industry}]: 今日" . ($sectorChange >= 0 ? '+' : '') . "{$sectorChange}%"
+                : "類股[{$industry}]: 無資料";
+
             $lines[] = "{$symbol} {$name}（{$industry}）";
             $lines[] = "  現價{$current}({$changePct:+.2f}%) 量{$accVol}k張 外盤{$extRatio}%";
             $lines[] = "  前日: {$prevKline}";
             $lines[] = "  5分K: {$candleStr}";
+            $lines[] = "  {$sectorStr}";
             $lines[] = '';
         }
 
