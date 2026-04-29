@@ -65,6 +65,7 @@ services:
     depends_on:
       - mysql
       - redis
+    user: "www-data"
     command: sh -c "while true; do php artisan schedule:run --verbose --no-interaction & sleep 60; done"
     networks:
       - app-network
@@ -78,6 +79,7 @@ services:
     depends_on:
       - mysql
       - redis
+    user: "www-data"
     command: php artisan queue:work --tries=3
     networks:
       - app-network
