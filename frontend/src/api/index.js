@@ -113,9 +113,9 @@ export const getDailyReviewShow = (date, mode = 'intraday') =>
 export const getDailyReviewDates = (mode = 'intraday') =>
   api.get('/backtest/daily-review-dates', { params: { mode } })
 
-export const getAnalyzeTipUrl = (date, symbol, notes, mode = 'intraday') => {
+export const getAnalyzeTipUrl = (date, symbol, notes, mode = 'intraday', outcome = 'win') => {
   const base = api.defaults.baseURL || '/api'
-  const params = new URLSearchParams({ date, symbol, notes: notes || '', mode })
+  const params = new URLSearchParams({ date, symbol, notes: notes || '', mode, outcome })
   return `${base}/backtest/analyze-tip?${params}`
 }
 

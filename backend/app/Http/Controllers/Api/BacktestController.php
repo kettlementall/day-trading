@@ -128,12 +128,13 @@ class BacktestController extends Controller
      */
     public function analyzeTip(Request $request): StreamedResponse
     {
-        $date   = $request->input('date', now()->toDateString());
-        $symbol = strtoupper(trim($request->input('symbol', '')));
-        $notes  = $request->input('notes') ?? '';
-        $mode   = $request->input('mode', 'intraday');
+        $date    = $request->input('date', now()->toDateString());
+        $symbol  = strtoupper(trim($request->input('symbol', '')));
+        $notes   = $request->input('notes') ?? '';
+        $mode    = $request->input('mode', 'intraday');
+        $outcome = $request->input('outcome', 'win'); // win | loss
 
-        return response()->stream(function () use ($date, $symbol, $notes, $mode) {
+        return response()->stream(function () use ($date, $symbol, $notes, $mode, $outcome) {
             while (ob_get_level()) ob_end_clean();
 
             $sendEvent = function (string $event, array $data) {
@@ -159,7 +160,8 @@ class BacktestController extends Controller
                 function (string $chunk) use ($sendEvent) {
                     $sendEvent('chunk', ['text' => $chunk]);
                 },
-                $mode
+                $mode,
+                $outcome
             );
 
             $sendEvent('done', $result);

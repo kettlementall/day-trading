@@ -130,9 +130,14 @@
       <div class="stock-card" style="margin-top: 16px;">
         <div class="ai-header">
           <h3>明牌分析</h3>
-          <span class="tip-hint">輸入今天跟著大神賺到的明牌，AI 從數值找理由存成高優先教訓</span>
+          <span class="tip-hint">{{ tipOutcome === 'win' ? '輸入跟著大神賺到的明牌，AI 找理由存成教訓' : '輸入踩雷的反面教材，AI 分析失敗原因存成避雷教訓' }}</span>
         </div>
         <div class="tip-form">
+          <el-segmented
+            v-model="tipOutcome"
+            :options="[{ label: '賺錢', value: 'win' }, { label: '虧損', value: 'loss' }]"
+            size="small"
+          />
           <el-input
             v-model="tipSymbol"
             placeholder="股票代號（如 2330）"
@@ -150,7 +155,7 @@
             style="width: 110px"
           />
           <el-button
-            type="primary"
+            :type="tipOutcome === 'win' ? 'primary' : 'danger'"
             size="small"
             :loading="store.tipAnalyzing"
             :disabled="!tipSymbol"
@@ -302,6 +307,7 @@ const reviewLoading = ref(false)
 const tipSymbol = ref('')
 const tipDate = ref(dayjs().format('YYYY-MM-DD'))
 const tipNotes = ref('')
+const tipOutcome = ref('win')
 
 async function fetchData() {
   loading.value = true
@@ -332,7 +338,7 @@ async function runDailyReview() {
 async function runTipAnalysis() {
   if (!tipSymbol.value) return
   try {
-    await store.analyzeTip(tipDate.value, tipSymbol.value.trim(), tipNotes.value.trim())
+    await store.analyzeTip(tipDate.value, tipSymbol.value.trim(), tipNotes.value.trim(), tipOutcome.value)
   } catch (e) {
     console.error('Tip analysis failed:', e)
   }

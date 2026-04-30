@@ -816,7 +816,8 @@ PROMPT;
         string $notes = '',
         ?\Closure $logger = null,
         ?\Closure $onChunk = null,
-        string $mode = 'intraday'
+        string $mode = 'intraday',
+        string $outcome = 'win'
     ): array {
         $log = $logger ?? function (string $msg) { Log::info($msg); };
 
@@ -856,7 +857,7 @@ PROMPT;
 
         $log("已收集資料，呼叫 AI 分析中...");
 
-        $prompt = $this->buildTipPrompt($date, $stock, $klines, $intraday, $intradayKlines, $notes, $mode);
+        $prompt = $this->buildTipPrompt($date, $stock, $klines, $intraday, $intradayKlines, $notes, $mode, $outcome);
         $report = $this->callApiStreaming($prompt, $onChunk);
 
         $log("AI 分析完成");
@@ -906,7 +907,8 @@ PROMPT;
         ?IntradayQuote $intraday,
         array $intradayKlines,
         string $notes,
-        string $mode = 'intraday'
+        string $mode = 'intraday',
+        string $outcome = 'win'
     ): string {
         // K 線表
         $klineLines = ["date\topen\thigh\tlow\tclose\tvol(張)\tchange%\tamplitude%"];
@@ -954,10 +956,30 @@ PROMPT;
             $entryKline  = $klines->count() >= 2 ? $klines[$klines->count() - 2] : null;
             $entryDate   = $entryKline ? $entryKline->date->format('Y-m-d') : '（建倉日未知）';
 
-            return <<<PROMPT
-你是台股隔日沖交易分析師。使用者於 {$entryDate} 收盤前建倉 {$stock->symbol} {$stock->name}（產業：{$industry}），並於 {$date} 出場，而且有賺錢。
+            $outcomeDesc = $outcome === 'loss'
+                ? "但這筆交易虧損了（反面教材）"
+                : "而且有賺錢";
+            $analysisGoal = $outcome === 'loss'
+                ? "找出這筆隔日沖交易失敗的原因，分析哪些警訊被忽略了"
+                : "找出最有可能解釋這筆隔日沖交易成功的技術面理由";
+            $questions = $outcome === 'loss'
+                ? <<<Q
+1. 從建倉日（{$entryDate}）的 K 線形態、量能、收盤位置，分析當時建倉的風險訊號有哪些？
+2. 出場日（{$date}）的走勢為何不如預期？是跳空不足、開高走低、量能不繼、還是其他原因？
+3. 這筆虧損的根本原因是選股問題（本就不該選）、還是時機問題（進場/出場時機不對）？
+4. AI 未來遇到類似形態時，應該如何避免重蹈覆轍？最重要的一條避雷教訓是什麼？
+Q
+                : <<<Q
+1. 從建倉日（{$entryDate}）的 K 線形態、量能、收盤位置，解釋為何當天尾盤適合建倉隔日沖
+2. 出場日（{$date}）的跳空開盤幅度、量能、盤中走勢是否符合預期？關鍵訊號為何？
+3. 這個建倉條件（強勢收盤 / 量增 / 突破 / 其他）是通用規律，還是當天特殊情況？
+4. 如果要改善 AI 的隔日沖選股或出場設定，這個案例最重要的一條教訓是什麼？
+Q;
 
-請透過以下數值資料，找出最有可能解釋這筆隔日沖交易成功的技術面理由，
+            return <<<PROMPT
+你是台股隔日沖交易分析師。使用者於 {$entryDate} 收盤前建倉 {$stock->symbol} {$stock->name}（產業：{$industry}），並於 {$date} 出場，{$outcomeDesc}。
+
+請透過以下數值資料，{$analysisGoal}，
 並在分析後萃取一條具體可操作的教訓，供未來 AI 隔日沖選股或出場判斷參考。
 
 ## 近期 K 線（最後兩筆依序為建倉日 {$entryDate}、出場日 {$date}）
@@ -971,20 +993,37 @@ PROMPT;
 {$notesSection}
 
 ## 分析要求
-1. 從建倉日（{$entryDate}）的 K 線形態、量能、收盤位置，解釋為何當天尾盤適合建倉隔日沖
-2. 出場日（{$date}）的跳空開盤幅度、量能、盤中走勢是否符合預期？關鍵訊號為何？
-3. 這個建倉條件（強勢收盤 / 量增 / 突破 / 其他）是通用規律，還是當天特殊情況？
-4. 如果要改善 AI 的隔日沖選股或出場設定，這個案例最重要的一條教訓是什麼？
+{$questions}
 
 請用繁體中文分析，最後**單獨**輸出一個 JSON 教訓（包在 {} 內，無其他標記）：
 {"type": "screening|calibration|entry|exit|market", "category": "breakout|bounce|gap|volume|momentum|timing|price_setting|sector", "content": "一句具體可操作的規則（隔日沖視角）"}
 PROMPT;
         }
 
-        return <<<PROMPT
-你是台股當沖交易分析師。使用者今天跟著外部訊號買了 {$stock->symbol} {$stock->name}（產業：{$industry}），而且有賺錢。
+        $outcomeDesc = $outcome === 'loss'
+            ? "但這筆交易虧損了（反面教材）"
+            : "而且有賺錢";
+        $analysisGoal = $outcome === 'loss'
+            ? "找出這筆當沖交易失敗的原因，分析哪些警訊被忽略了"
+            : "找出最有可能解釋這筆當沖交易成功的技術面理由";
+        $questions = $outcome === 'loss'
+            ? <<<Q
+1. 從 K 線形態、量能、振幅等技術面，分析 {$date} 這檔股票有哪些不該進場的警訊
+2. 指出哪些具體數值或形態是危險訊號（例如：量能不足、假突破、開高走低、外盤比偏低等）
+3. 這筆虧損的根本原因是選股問題（本就不該選）、還是執行問題（進場/停損時機不對）？
+4. AI 未來遇到類似形態時，應該如何避免重蹈覆轍？最重要的一條避雷教訓是什麼？
+Q
+            : <<<Q
+1. 從 K 線形態、量能、振幅等技術面，解釋為何 {$date} 是這檔股票的好進場時機
+2. 指出哪些具體數值或形態是關鍵訊號（例如：量能放大倍數、跌深後反彈幅度、突破前高等）
+3. 這個訊號是通用規律，還是當天特殊情況？
+4. 如果要改善 AI 的選股或校準，這個案例最重要的一條教訓是什麼？
+Q;
 
-請透過以下數值資料，找出最有可能解釋這筆當沖交易成功的技術面理由，
+        return <<<PROMPT
+你是台股當沖交易分析師。使用者今天跟著外部訊號買了 {$stock->symbol} {$stock->name}（產業：{$industry}），{$outcomeDesc}。
+
+請透過以下數值資料，{$analysisGoal}，
 並在分析後萃取一條具體可操作的教訓，供未來 AI 選股或盤中校準參考。
 
 ## 近期 K 線（含 {$date} 當日）
@@ -998,10 +1037,7 @@ PROMPT;
 {$notesSection}
 
 ## 分析要求
-1. 從 K 線形態、量能、振幅等技術面，解釋為何 {$date} 是這檔股票的好進場時機
-2. 指出哪些具體數值或形態是關鍵訊號（例如：量能放大倍數、跌深後反彈幅度、突破前高等）
-3. 這個訊號是通用規律，還是當天特殊情況？
-4. 如果要改善 AI 的選股或校準，這個案例最重要的一條教訓是什麼？
+{$questions}
 
 請用繁體中文分析，最後**單獨**輸出一個 JSON 教訓（包在 {} 內，無其他標記）：
 {"type": "screening|calibration|entry|exit|market", "category": "breakout|bounce|gap|volume|momentum|timing|price_setting|sector", "content": "一句具體可操作的規則"}

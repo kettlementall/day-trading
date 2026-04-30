@@ -223,14 +223,14 @@ export const useCandidateStore = defineStore('candidates', () => {
     })
   }
 
-  function analyzeTip(date, symbol, notes) {
+  function analyzeTip(date, symbol, notes, outcome = 'win') {
     tipAnalyzing.value = true
     tipLogs.value = []
     tipResult.value = null
     tipStreamText.value = ''
 
     return new Promise((resolve, reject) => {
-      const url = getAnalyzeTipUrl(date, symbol, notes)
+      const url = getAnalyzeTipUrl(date, symbol, notes, 'intraday', outcome)
       const eventSource = new EventSource(url)
 
       eventSource.addEventListener('log', (e) => {
