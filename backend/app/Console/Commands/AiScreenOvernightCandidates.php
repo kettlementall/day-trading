@@ -25,6 +25,14 @@ class AiScreenOvernightCandidates extends Command
         AiScreenerService $ai
     ): int {
         $snapshotDate = $this->argument('date') ?? now()->format('Y-m-d');
+
+        // 排程觸發（無 date 參數）時，若為休市日自動跳過。
+        // 使用者顯式傳入 date 參數時不擋（維持手動補跑彈性，與 UpdateOvernightResults 一致）。
+        if (!$this->argument('date') && MarketHoliday::isHoliday($snapshotDate)) {
+            $this->info("今日（{$snapshotDate}）休市，跳過隔日沖選股");
+            return self::SUCCESS;
+        }
+
         $tradeDate    = MarketHoliday::nextTradingDay($snapshotDate);
         $force        = (bool) $this->option('force');
         // 補跑模式：使用者顯式指定 --backfill，或 trade_date 已在過去（避免為舊批次建立 holding monitor）

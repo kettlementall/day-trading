@@ -98,7 +98,7 @@
 
 ### 休市日檢查
 
-`stock:ai-screen`、`stock:monitor-intraday`、`stock:update-results`、`stock:update-overnight-results`、`stock:daily-review` 開頭檢查 `MarketHoliday::isHoliday()`，週末或國定假日自動跳過（手動傳入 date 參數時不檢查）。
+`stock:ai-screen`、`stock:ai-screen-overnight`、`stock:monitor-intraday`、`stock:monitor-overnight-exit`、`stock:update-results`、`stock:update-overnight-results`、`stock:daily-review` 開頭檢查 `MarketHoliday::isHoliday()`，週末或國定假日自動跳過（手動傳入 date 參數時不檢查）。
 
 休市日資料由 `stock:import-holidays {year}` 指令匯入（每年更新一次），定義在 `ImportMarketHolidays.php` 內。
 
