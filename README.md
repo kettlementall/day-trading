@@ -136,6 +136,17 @@ docker compose exec php php artisan stock:backtest --from=2026-03-01 --to=2026-0
 
 所有排程已設定 Laravel Scheduler，Docker 啟動後自動執行。
 
+## 容器健康與啟動順序
+
+`docker-compose.yml` 已設定健康檢查與啟動依賴，避免 worker 比資料庫早起來自殺：
+
+- **mysql**：`mysqladmin ping` healthcheck（5 秒一次，最長 30 秒 grace period）
+- **redis**：`redis-cli ping` healthcheck
+- **php / scheduler / queue**：`depends_on` 為 `service_healthy`，會等 mysql / redis 真的能連線才啟動
+- 所有服務皆設 `restart: unless-stopped`，意外退出會自動重啟
+
+故 `docker compose up` 重建容器時不會再發生 queue worker 因為 race 失敗就靜悄悄死掉的狀況。
+
 ## 移植 / 備份
 
 整個專案移到新機器只需要三樣東西：**git repo + SQL dump + .env**。
