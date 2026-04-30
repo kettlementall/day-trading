@@ -5,14 +5,19 @@ import dayjs from 'dayjs'
 
 export const useOvernightStore = defineStore('overnight', () => {
   const candidates = ref([])
-  // 12:50 前看前一批（trade_date = T），12:50 後看今日批（trade_date = T+1）
-  // 需跳過週末，否則週五 12:50 後會拿週六去查導致顯示休市日
+  // 12:50 前看前一批（前一交易日建倉，今日出場），12:50 後看今日批（今日建倉，明日出場）
+  // trade_date = 建倉日，所以 12:50 前要往前推一個交易日
   function initCurrentDate() {
-    let d = dayjs().hour() < 12 || (dayjs().hour() === 12 && dayjs().minute() < 50)
-      ? dayjs()
-      : dayjs().add(1, 'day')
-    while (d.day() === 0 || d.day() === 6) d = d.add(1, 'day')
-    return d.format('YYYY-MM-DD')
+    const before1250 = dayjs().hour() < 12 || (dayjs().hour() === 12 && dayjs().minute() < 50)
+    if (before1250) {
+      // 前一交易日（跳過週末）
+      let d = dayjs().subtract(1, 'day')
+      while (d.day() === 0 || d.day() === 6) d = d.subtract(1, 'day')
+      return d.format('YYYY-MM-DD')
+    } else {
+      // 今日（12:50 後剛選好的新批次）
+      return dayjs().format('YYYY-MM-DD')
+    }
   }
   const currentDate = ref(initCurrentDate())
   const loading = ref(false)

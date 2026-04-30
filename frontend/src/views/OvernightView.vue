@@ -18,7 +18,7 @@
         @change="onEntryDateChange"
       />
       <span class="date-arrow">→ 出場</span>
-      <span class="date-exit">{{ formatDate(store.currentDate) }}</span>
+      <span class="date-exit">{{ formatDate(nextTradingDay(store.currentDate)) }}</span>
     </div>
 
     <div v-if="store.loading" class="loading-wrap">
@@ -271,15 +271,15 @@ function toggleExpand(id) {
   else expandedIds.add(id)
 }
 
-// 建倉日（T+0）= store.currentDate（出場日 T+1）往前一個交易日
-const entryDate = ref(prevTradingDay(store.currentDate))
+// 建倉日（T+0）= store.currentDate（現在就是建倉日）
+const entryDate = ref(store.currentDate)
 
 onMounted(() => {
   store.fetchCandidates()
 })
 
 function onEntryDateChange() {
-  store.currentDate = nextTradingDay(entryDate.value)
+  store.currentDate = entryDate.value
   store.fetchCandidates(store.currentDate)
 }
 
