@@ -18,7 +18,7 @@
         @change="onEntryDateChange"
       />
       <span class="date-arrow">→ 出場</span>
-      <span class="date-exit">{{ formatDate(nextTradingDay(store.currentDate)) }}</span>
+      <span class="date-exit">{{ store.tradeDate ? formatDate(store.tradeDate) : '—' }}</span>
     </div>
 
     <div v-if="store.loading" class="loading-wrap">
@@ -281,20 +281,6 @@ onMounted(() => {
 function onEntryDateChange() {
   store.currentDate = entryDate.value
   store.fetchCandidates(store.currentDate)
-}
-
-/** 下一個交易日（略過週末） */
-function nextTradingDay(dateStr) {
-  let d = dayjs(dateStr).add(1, 'day')
-  while (d.day() === 0 || d.day() === 6) d = d.add(1, 'day')
-  return d.format('YYYY-MM-DD')
-}
-
-/** 前一個交易日（略過週末） */
-function prevTradingDay(dateStr) {
-  let d = dayjs(dateStr).subtract(1, 'day')
-  while (d.day() === 0 || d.day() === 6) d = d.subtract(1, 'day')
-  return d.format('YYYY-MM-DD')
 }
 
 function formatDate(dateStr) {

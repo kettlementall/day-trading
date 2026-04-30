@@ -23,10 +23,16 @@ class CandidateController extends Controller
             $mode = 'intraday';
         }
 
+        // intraday：date = 交易日（trade_date = 當日）
+        // overnight：date = 建倉日 T+0；DB 的 trade_date 存的是出場日 T+1（下個交易日，跳過假日）
+        $tradeDate = $mode === 'overnight'
+            ? MarketHoliday::nextTradingDay($date)
+            : $date;
+
         $relations = ['stock', 'result', 'monitor'];
 
         $query = Candidate::with($relations)
-            ->where('trade_date', $date)
+            ->where('trade_date', $tradeDate)
             ->where('mode', $mode);
 
         // 隔日沖：只顯示 Opus 已審核過的標的（ai_reasoning 有內容代表 Opus 留過評語）
@@ -45,7 +51,7 @@ class CandidateController extends Controller
             ->orderByDesc('score')
             ->get();
 
-        $lastUpdatedAt = Candidate::where('trade_date', $date)->max('updated_at');
+        $lastUpdatedAt = Candidate::where('trade_date', $tradeDate)->max('updated_at');
 
         $holiday = MarketHoliday::where('date', $date)->first();
         $isHoliday = MarketHoliday::isHoliday($date);
@@ -59,6 +65,7 @@ class CandidateController extends Controller
 
         return response()->json([
             'date' => $date,
+            'trade_date' => $tradeDate,
             'mode' => $mode,
             'count' => $candidates->count(),
             'data' => $candidates,

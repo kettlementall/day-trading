@@ -5,21 +5,22 @@ import dayjs from 'dayjs'
 
 export const useOvernightStore = defineStore('overnight', () => {
   const candidates = ref([])
-  // 12:50 前看前一批（前一交易日建倉，今日出場），12:50 後看今日批（今日建倉，明日出場）
-  // trade_date = 建倉日，所以 12:50 前要往前推一個交易日
+  // currentDate 一律是「建倉日 T+0」；後端會自動換算到 trade_date（出場日，跳假日/週末）
+  // 12:50 前：往前推一個交易日（看前一批已出場/出場中的批次）
+  // 12:50 後：今日（看今日 12:50 剛選好的新批次）
   function initCurrentDate() {
     const before1250 = dayjs().hour() < 12 || (dayjs().hour() === 12 && dayjs().minute() < 50)
     if (before1250) {
-      // 前一交易日（跳過週末）
+      // 前一交易日（跳過週末，假日不在這裡判斷，伺服器端 trade_date 會自洽）
       let d = dayjs().subtract(1, 'day')
       while (d.day() === 0 || d.day() === 6) d = d.subtract(1, 'day')
       return d.format('YYYY-MM-DD')
     } else {
-      // 今日（12:50 後剛選好的新批次）
       return dayjs().format('YYYY-MM-DD')
     }
   }
   const currentDate = ref(initCurrentDate())
+  const tradeDate = ref('')         // 由 API 回傳，等於 nextTradingDay(currentDate)
   const loading = ref(false)
   const lastUpdatedAt = ref('')
   const isHoliday = ref(false)
@@ -85,7 +86,8 @@ export const useOvernightStore = defineStore('overnight', () => {
     try {
       const { data } = await getCandidates(date || currentDate.value, 'overnight')
       candidates.value = data.data
-      currentDate.value = data.date
+      currentDate.value = data.date              // 建倉日
+      tradeDate.value = data.trade_date || ''    // 出場日（後端依假日表算好）
       lastUpdatedAt.value = data.last_updated_at || ''
       await fetchPins(data.date)
       isHoliday.value = data.is_holiday || false
@@ -202,7 +204,7 @@ export const useOvernightStore = defineStore('overnight', () => {
   }
 
   return {
-    candidates, sortedCandidates, currentDate, loading, lastUpdatedAt, isHoliday, holidayName,
+    candidates, sortedCandidates, currentDate, tradeDate, loading, lastUpdatedAt, isHoliday, holidayName,
     pinnedIds, togglePin, isPinned,
     stats,
     reviewing, reviewLogs, reviewResult, reviewStreamText, reviewDates,

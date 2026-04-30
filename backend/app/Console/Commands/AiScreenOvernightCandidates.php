@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Log;
 
 class AiScreenOvernightCandidates extends Command
 {
-    protected $signature = 'stock:ai-screen-overnight {date?}';
+    protected $signature = 'stock:ai-screen-overnight {date?} {--force : 即使已有 Opus 完成過的批次仍強制覆寫} {--backfill : 補跑歷史資料（跳過 monitor 初始化與 Telegram 通知）}';
     protected $description = '隔日沖選股（12:50 執行）：Screener → Haiku → Opus，供今日收盤前下單';
 
     public function handle(
@@ -25,9 +25,12 @@ class AiScreenOvernightCandidates extends Command
         AiScreenerService $ai
     ): int {
         $snapshotDate = $this->argument('date') ?? now()->format('Y-m-d');
-        $tradeDate    = $this->getNextTradingDay($snapshotDate);
+        $tradeDate    = MarketHoliday::nextTradingDay($snapshotDate);
+        $force        = (bool) $this->option('force');
+        // 補跑模式：使用者顯式指定 --backfill，或 trade_date 已在過去（避免為舊批次建立 holding monitor）
+        $backfill     = (bool) $this->option('backfill') || Carbon::parse($tradeDate)->isPast();
 
-        $this->info("隔日沖選股：盤中日 {$snapshotDate}，目標交易日 {$tradeDate}");
+        $this->info("隔日沖選股：盤中日 {$snapshotDate}，目標交易日 {$tradeDate}" . ($backfill ? '（補跑模式）' : ''));
 
         // 確認類股指數可用（TWSE MI_INDEX 為收盤指數，盤中只有前一日資料）
         $sectorDate = SectorIndex::latestDateOn($snapshotDate);
@@ -35,6 +38,20 @@ class AiScreenOvernightCandidates extends Command
             $this->info("類股指數就緒（資料日期：{$sectorDate}）");
         } else {
             $this->warn("類股指數未就緒，繼續選股（無類股資料）");
+        }
+
+        // 安全閘：若已有 Opus 完成過的批次（ai_reasoning 非空），預設拒絕覆寫
+        // Why: 17:41 那次手動跑只跑到 screener 就中斷，但前置 DELETE 已先執行→ 12:50 完整批次連同 8 筆選入全部消失。
+        // How: 看到 ai_reasoning 已填代表 Opus 跑完，這時必須由使用者顯式 --force 才能覆寫。
+        $existingComplete = Candidate::where('trade_date', $tradeDate)
+            ->where('mode', 'overnight')
+            ->whereNotNull('ai_reasoning')
+            ->where('ai_reasoning', '!=', '')
+            ->count();
+
+        if ($existingComplete > 0 && ! $force) {
+            $this->error("trade_date={$tradeDate} 已有 {$existingComplete} 筆完成過 Opus 審核的紀錄。如確定要覆寫，請加 --force。");
+            return self::FAILURE;
         }
 
         // 清除舊的隔日沖候選（含 monitor），確保重跑不殘留
@@ -77,33 +94,40 @@ class AiScreenOvernightCandidates extends Command
         $this->info("Opus 審核完成：{$selected} 檔選入隔日沖清單");
 
         // Step 4: 為 AI 選入的候選初始化隔日監控（status=holding）
+        // 補跑模式跳過：trade_date 已過，建 holding 沒意義且會污染未來查詢
         $selectedCandidates = $candidates->where('ai_selected', true)->values();
-        $this->initOvernightMonitors($selectedCandidates);
-        $this->info("已建立 {$selected} 筆隔日監控記錄");
+        if (! $backfill) {
+            $this->initOvernightMonitors($selectedCandidates);
+            $this->info("已建立 {$selected} 筆隔日監控記錄");
+        } else {
+            $this->info('補跑模式：跳過 monitor 初始化');
+        }
 
-        // Telegram 通知
+        // Telegram 通知（補跑模式跳過，避免發出過時通知）
         $total      = $candidates->count();
         $haikuCount = $candidates->where('haiku_selected', true)->count();
 
-        $lines = ["🌙 *隔日沖選股完成* ({$snapshotDate} → {$tradeDate})"];
-        $lines[] = "寬篩 {$total} 檔 → Haiku {$haikuCount} 檔 → Opus 選入 {$selected} 檔";
-        $lines[] = '';
+        if (! $backfill) {
+            $lines = ["🌙 *隔日沖選股完成* ({$snapshotDate} → {$tradeDate})"];
+            $lines[] = "寬篩 {$total} 檔 → Haiku {$haikuCount} 檔 → Opus 選入 {$selected} 檔";
+            $lines[] = '';
 
-        foreach ($selectedCandidates as $c) {
-            $lines[] = sprintf(
-                "• %s %s | %s | 買 %.1f / 目標 %.1f / 停損 %.1f",
-                $c->stock->symbol,
-                $c->stock->name,
-                $c->overnight_strategy ?? '-',
-                (float) $c->suggested_buy,
-                (float) $c->target_price,
-                (float) $c->stop_loss
-            );
+            foreach ($selectedCandidates as $c) {
+                $lines[] = sprintf(
+                    "• %s %s | %s | 買 %.1f / 目標 %.1f / 停損 %.1f",
+                    $c->stock->symbol,
+                    $c->stock->name,
+                    $c->overnight_strategy ?? '-',
+                    (float) $c->suggested_buy,
+                    (float) $c->target_price,
+                    (float) $c->stop_loss
+                );
+            }
+
+            app(TelegramService::class)->broadcast(implode("\n", $lines));
         }
 
-        app(TelegramService::class)->broadcast(implode("\n", $lines));
-
-        Log::info("AiScreenOvernightCandidates：{$snapshotDate} → {$tradeDate}，選入 {$selected} 檔");
+        Log::info("AiScreenOvernightCandidates：{$snapshotDate} → {$tradeDate}，選入 {$selected} 檔" . ($backfill ? '（補跑）' : ''));
 
         return self::SUCCESS;
     }
@@ -131,22 +155,4 @@ class AiScreenOvernightCandidates extends Command
         }
     }
 
-    /**
-     * 取得下一個交易日（略過週末）
-     * 注意：未處理台股公休日，如遇公休需手動傳入 date 參數
-     */
-    private function getNextTradingDay(string $date): string
-    {
-        $next = Carbon::parse($date)->addDay();
-
-        // 跳過週末與國定假日（最多往後查 10 天，防無窮迴圈）
-        for ($i = 0; $i < 10; $i++) {
-            if (!$next->isWeekend() && !MarketHoliday::isHoliday($next->format('Y-m-d'))) {
-                break;
-            }
-            $next->addDay();
-        }
-
-        return $next->format('Y-m-d');
-    }
 }
