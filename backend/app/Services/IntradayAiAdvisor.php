@@ -376,10 +376,10 @@ class IntradayAiAdvisor
 
 選擇關鍵：若開盤已跳空超過壓力位且不回頭，gap_pullback 永遠不會觸發進場，應改 momentum
 
-## 漲停價限制
-- adjusted_resistance（壓力位）不可設為漲停價：漲停是價格天花板，「突破漲停」不可能發生
-- 若標的已接近漲停（距漲停 <2%），壓力位應設為漲停價下方的前高或盤中次高點
-- target（目標價）最高可設漲停價（到價即賣），但 adjusted_resistance 必須低於漲停價
+## 漲停價限制（當沖核心邏輯）
+- 當沖靠價差獲利，漲停價是天花板 — 鎖漲停後買不到，即使買到也無上漲空間
+- 若壓力位只剩漲停價（沒有更低的前高可設），代表上方已無獲利空間，應給 D 級放棄
+- adjusted_resistance 必須低於漲停價，且 target 也不可設漲停價（到價時流動性極差，根本賣不掉）
 - 同理 adjusted_support（支撐位）不可設為跌停價
 
 ## 回覆格式（JSON array，不要加 markdown 標記）
@@ -474,8 +474,8 @@ PROMPT;
 
 ## 價格限制
 - 目標價和停損價不可超過漲停價或低於跌停價（狀態行會提供漲跌停價）
-- 接近漲停時：目標價最高只能設到漲停價
-- 壓力位 = 漲停價時，進場條件是「站穩漲停價」（鎖漲停+量能確認），不是「突破漲停」（不可能突破天花板）
+- 當沖靠價差獲利：壓力位 = 漲停價代表上方無獲利空間，應建議 skip（不進場）
+- 若持有中標的漲到接近漲停，應建議 exit 獲利了結（鎖漲停後流動性極差賣不掉）
 - adjustments.target/stop 同樣受漲跌停限制
 
 ## 策略: {$strategy}
@@ -573,17 +573,17 @@ TASK;
             $distSupport = $support > 0 && $currentPrice > 0
                 ? round(($currentPrice - $support) / $currentPrice * 100, 2) : 0;
 
-            // 壓力位 = 漲停價時，改為「站穩漲停」而非「突破漲停」
+            // 壓力位 = 漲停價 → 上方無獲利空間，不該再追
             $resistanceIsLimitUp = $limitUpPrice > 0 && abs($resistance - $limitUpPrice) < 0.1;
             $entryTrigger = match ($candidate->intraday_strategy ?? 'momentum') {
                 'breakout_fresh', 'momentum' => $resistanceIsLimitUp
-                    ? "站穩漲停價 {$resistance}（鎖漲停量能確認）→ 進場"
+                    ? "⚠ 壓力位即漲停價，上方無獲利空間，建議 skip"
                     : "突破 {$resistance} → 進場",
                 'breakout_retest', 'gap_pullback' => "回測至 {$support} 附近止穩 → 進場",
                 'bounce' => "觸及 {$support} 後反彈確認 → 進場",
                 'gap_reversal' => "跳空缺口不回補 + 量能確認 → 進場",
                 default => $resistanceIsLimitUp
-                    ? "站穩漲停價 {$resistance}（鎖漲停量能確認）→ 進場"
+                    ? "⚠ 壓力位即漲停價，上方無獲利空間，建議 skip"
                     : "突破 {$resistance} → 進場",
             };
 
