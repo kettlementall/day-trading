@@ -622,6 +622,23 @@ TASK;
 
         $timeWarning = $minutesLeft <= 30 ? "⚠️ 尾盤階段，當沖部位必須在收盤前平倉" : '';
 
+        // 帶入最近 3 筆 AI 滾動判斷歷史，讓 AI 有連貫性
+        $adviceHistory = '';
+        $log = $monitor->ai_advice_log ?? [];
+        if (!empty($log)) {
+            $recent = array_slice($log, -3);
+            $historyLines = [];
+            foreach ($recent as $entry) {
+                $historyLines[] = sprintf(
+                    "[%s] %s — %s",
+                    $entry['time'] ?? '?',
+                    $entry['action'] ?? '?',
+                    mb_substr($entry['notes'] ?? '', 0, 120)
+                );
+            }
+            $adviceHistory = "## 前次 AI 判斷（你的歷史紀錄，保持判斷連貫性）\n" . implode("\n", $historyLines);
+        }
+
         return <<<MSG
 ## {$stock->symbol} {$stock->name} 盤中狀態
 現在時間：{$currentTime}　距收盤：{$minutesLeft}分鐘
@@ -632,6 +649,8 @@ TASK;
 {$candleTsv}
 
 {$openingRange}
+
+{$adviceHistory}
 
 {$taskSection}
 
