@@ -774,7 +774,8 @@ SYSTEM;
                 : "類股[{$industry}]: 無資料";
 
             $lines[] = "{$symbol} {$name}（{$industry}）";
-            $lines[] = "  現價{$current}({$changePct:+.2f}%) 量{$accVol}k張 外盤{$extRatio}%";
+            $changePctStr = sprintf('%+.2f', $changePct);
+            $lines[] = "  現價{$current}({$changePctStr}%) 量{$accVol}k張 外盤{$extRatio}%";
             $lines[] = "  前日: {$prevKline}";
             $lines[] = "  5分K: {$candleStr}";
             $lines[] = "  {$sectorStr}";
