@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\MarketHoliday;
 use App\Models\Stock;
 use App\Models\StockValuation;
 use App\Services\TelegramService;
@@ -24,6 +25,11 @@ class FetchStockValuations extends Command
     public function handle(): int
     {
         $date = $this->argument('date') ?? now()->format('Y-m-d');
+
+        if (MarketHoliday::isHoliday($date)) {
+            $this->info("{$date} 為休市日，跳過 TWSE 估值資料抓取");
+            return self::SUCCESS;
+        }
 
         $this->info("抓取 TWSE 估值資料（{$date}）...");
 

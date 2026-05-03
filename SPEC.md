@@ -98,7 +98,9 @@
 
 ### 休市日檢查
 
-`stock:ai-screen`、`stock:ai-screen-overnight`、`stock:monitor-intraday`、`stock:monitor-overnight-exit`、`stock:update-results`、`stock:update-overnight-results`、`stock:daily-review` 開頭檢查 `MarketHoliday::isHoliday()`，週末或國定假日自動跳過（手動傳入 date 參數時不檢查）。
+`stock:ai-screen`、`stock:ai-screen-overnight`、`stock:fetch-intraday`、`stock:monitor-intraday`、`stock:monitor-overnight-exit`、`stock:scan-intraday-movers`、`stock:update-results`、`stock:update-overnight-results`、`stock:daily-review`、`stock:fetch-margin`、`stock:fetch-valuations` 開頭檢查 `MarketHoliday::isHoliday()`，週末或國定假日自動跳過。
+
+手動補跑例外：`stock:ai-screen-overnight {date}`、`stock:update-results {date}`、`stock:update-overnight-results {date}`、`stock:daily-review {date}` 顯式傳入 date 時不擋，保留歷史補跑彈性；`stock:scan-intraday-movers --date=...` 為測試/模擬日期，顯式傳入時不做休市日阻擋。其餘交易時段或交易所資料抓取指令遇休市日一律跳過，避免打即時 API 或將上一交易日資料寫到休市日期。
 
 休市日資料由 `stock:import-holidays {year}` 指令匯入（每年更新一次），定義在 `ImportMarketHolidays.php` 內。
 
@@ -108,7 +110,10 @@
 
 ### 非交易日處理
 
-所有市場資料抓取指令（`stock:fetch-daily`、`stock:fetch-institutional`、`stock:fetch-margin`）皆具備日期驗證機制：
+市場資料抓取指令依資料來源採兩種非交易日保護：
+
+1. `stock:fetch-margin`、`stock:fetch-valuations` 先以 `MarketHoliday::isHoliday()` 跳過休市日。
+2. `stock:fetch-daily`、`stock:fetch-institutional` 以交易所 API 回傳日期驗證：
 
 - 從 TWSE/TPEX API 回傳的 `date` / `reportDate` 欄位取得**實際交易日**
 - 若實際交易日與請求日期不符（代表該日為假日），自動跳過不存入

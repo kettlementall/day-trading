@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\DailyQuote;
 use App\Models\FormulaSetting;
+use App\Models\MarketHoliday;
 use App\Services\FugleRealtimeClient;
 use App\Services\HaikuPreFilterService;
 use App\Services\IntradayMoverService;
@@ -26,6 +27,12 @@ class ScanIntradayMovers extends Command
         TelegramService $tg
     ): int {
         $tradeDate = $this->option('date') ?? now()->format('Y-m-d');
+
+        if (!$this->option('date') && MarketHoliday::isHoliday($tradeDate)) {
+            $this->info("{$tradeDate} 為休市日，跳過盤中動態加入");
+            Log::info("ScanIntradayMovers: {$tradeDate} 為休市日，跳過");
+            return self::SUCCESS;
+        }
 
         $thresholds = FormulaSetting::getConfig('intraday_mover_thresholds') ?: [];
         $topN = (int) ($thresholds['pool_top_n'] ?? 100);

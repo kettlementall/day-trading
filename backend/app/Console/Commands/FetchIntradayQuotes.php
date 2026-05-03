@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Candidate;
 use App\Models\DailyQuote;
 use App\Models\IntradayQuote;
+use App\Models\MarketHoliday;
 use App\Models\Stock;
 use App\Services\FugleRealtimeClient;
 use App\Services\TelegramService;
@@ -24,6 +25,11 @@ class FetchIntradayQuotes extends Command
     public function handle(): int
     {
         $date = $this->argument('date') ?? now()->format('Y-m-d');
+
+        if (MarketHoliday::isHoliday($date)) {
+            $this->info("{$date} 為休市日，跳過盤中行情抓取");
+            return self::SUCCESS;
+        }
 
         // 取得當日候選標的
         $candidates = Candidate::with('stock')
