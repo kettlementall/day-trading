@@ -74,7 +74,7 @@
             <div class="monitor-finished-row">
               <span class="stock-symbol">{{ m.symbol }}</span>
               <span class="stock-name">{{ m.name }}</span>
-              <el-tag size="small" :type="monitorStatusType(m.status)" round>{{ monitorStatusLabel(m.status) }}</el-tag>
+              <el-tag size="small" :type="monitorStatusType(m.status)" round>{{ monitorStatusLabel(m) }}</el-tag>
               <span v-if="m.profit_pct !== null" class="finished-pnl" :class="m.profit_pct >= 0 ? 'price-up' : 'price-down'">
                 {{ m.profit_pct >= 0 ? '+' : '' }}{{ m.profit_pct }}%
               </span>
@@ -105,7 +105,7 @@
               <div class="monitor-tags">
                 <el-tag v-if="m.limit_up" size="small" type="danger" round>漲停</el-tag>
                 <el-tag size="small" :type="monitorStatusType(m.status)" round>
-                  {{ monitorStatusLabel(m.status) }}
+                  {{ monitorStatusLabel(m) }}
                   <template v-if="m.holding_minutes"> {{ m.holding_minutes }}分</template>
                 </el-tag>
               </div>
@@ -154,7 +154,7 @@
               <div class="monitor-tags">
                 <el-tag v-if="m.morning_grade" size="small" :type="gradeTagType(m.morning_grade)" round>{{ m.morning_grade }}</el-tag>
                 <el-tag v-if="m.limit_up" size="small" type="danger" round>漲停</el-tag>
-                <el-tag size="small" :type="monitorStatusType(m.status)" round>{{ monitorStatusLabel(m.status) }}</el-tag>
+                <el-tag size="small" :type="monitorStatusType(m.status)" round>{{ monitorStatusLabel(m) }}</el-tag>
               </div>
             </div>
             <div class="watching-body">
@@ -531,11 +531,21 @@ function skipTime(m) {
   return ''
 }
 
-function monitorStatusLabel(status) {
+function monitorStatusLabel(m) {
+  const status = typeof m === 'string' ? m : m?.status
+  const reason = typeof m === 'string' ? '' : (m?.exit_reason || '')
+
+  if (status === 'closed') {
+    if (reason.startsWith('AI建議出場')) return 'AI出場'
+    if (reason.includes('時間停損')) return '時間停損'
+    if (reason.includes('13:25') || reason.includes('強制平倉')) return '收盤平倉'
+    return '出場'
+  }
+
   const map = {
     pending: '等待校準', watching: '觀望中', entry_signal: '進場訊號',
     holding: '持有中', target_hit: '達標', stop_hit: '停損',
-    trailing_stop: '停利', closed: '收盤平倉', skipped: '已跳過',
+    trailing_stop: '停利', skipped: '已跳過',
   }
   return map[status] || status
 }
