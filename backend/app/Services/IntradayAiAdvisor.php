@@ -467,14 +467,31 @@ PROMPT;
         return <<<SYSTEM
 你是台股當沖 AI 助手，正在協助管理 {$stock->symbol} {$stock->name}（{$industry}）的盤中倉位。
 
+## skip 的非對稱成本（決策原則）
+- **skip**：放棄全部上漲潛力（典型潛在報酬 +3~10% 直接歸零）
+- **hold**：等待條件再次成立（成本：機會成本 + 觀察時間，下行風險受 stop 保護）
+- 兩者明顯不對稱：**疑似失效訊號優先 hold，明確失效再 skip**
+- 不確定時優先「策略切換 + adjustments」而非 skip
+
+## 無條件 skip 的判斷原則（凌駕於「skip 是最後選項」）
+
+當「結構性失敗」明確成立時直接 skip — 此時延後決策的成本（觸停損實際虧損）大於放棄機會成本：
+
+- **趨勢明確走弱**：5 分 K 連續走低 + 量縮無接手（典型參考：當日跌幅 ≥ -2% 且無反彈跡象；**但 gap_reversal 策略例外 — 超跌本就是其進場前提，不適用此條**）
+- **流動性風險**：瀕跌停（典型參考：現價接近跌停價，買到也賣不掉）
+- **結構性失敗**：原策略前提徹底破壞（如突破型連跌破多個支撐 + 量縮）
+- **多方失守延續**：開盤即破首根 K 低點且後續無止穩（量縮但價未止跌、外盤比持續走低）
+
+關鍵：上列為「**結構性訊號**」，不是「**單一指標踩線**」。AI 應結合走勢結構、量價配合、策略本身性質綜合判斷。例如同樣 -2%，gap_reversal 是進場時機，momentum 是失敗訊號。
+
 ## 時間規則
 - 當沖部位必須在 13:30 收盤前平倉
 - 距收盤 ≤ 30 分鐘（尾盤）：不建議新進場；持有中應積極決斷，傾向出場而非繼續觀望
-- 距收盤 ≤ 15 分鐘：除非明確獲利且走勢強勁，否��應建議 exit
+- 距收盤 ≤ 15 分鐘：除非明確獲利且走勢強勁，否則應建議 exit
 
 ## 價格限制
 - 目標價和停損價不可超過漲停價或低於跌停價（狀態行會提供漲跌停價）
-- 當沖靠價差獲利：壓力位 = 漲停價代表上方無獲利空間，應建議 skip（不進場）
+- 壓力位若已接近漲停：**先評估是否能設更近的階段性壓力**（adjustments.target，如盤中已形成的高點），或考慮 strategy 切換；只有確認上方絕對無獲利空間才 skip
 - 若持有中標的漲到接近漲停，應建議 exit 獲利了結（鎖漲停後流動性極差賣不掉）
 - adjustments.target/stop 同樣受漲跌停限制
 
@@ -573,17 +590,18 @@ TASK;
             $distSupport = $support > 0 && $currentPrice > 0
                 ? round(($currentPrice - $support) / $currentPrice * 100, 2) : 0;
 
-            // 壓力位 = 漲停價 → 上方無獲利空間，不該再追
+            // 壓力位 ≈ 漲停價時，提示優先設階段性壓力或切策略，而非直接 skip
             $resistanceIsLimitUp = $limitUpPrice > 0 && abs($resistance - $limitUpPrice) < 0.1;
+            $limitUpHint = "⚠ 壓力位即漲停價，建議 adjustments.target 設階段性壓力（如盤中高點）或考慮 strategy 切換；確認無階段性壓力可設才 skip";
             $entryTrigger = match ($candidate->intraday_strategy ?? 'momentum') {
                 'breakout_fresh', 'momentum' => $resistanceIsLimitUp
-                    ? "⚠ 壓力位即漲停價，上方無獲利空間，建議 skip"
+                    ? $limitUpHint
                     : "突破 {$resistance} → 進場",
                 'breakout_retest', 'gap_pullback' => "回測至 {$support} 附近止穩 → 進場",
                 'bounce' => "觸及 {$support} 後反彈確認 → 進場",
                 'gap_reversal' => "跳空缺口不回補 + 量能確認 → 進場",
                 default => $resistanceIsLimitUp
-                    ? "⚠ 壓力位即漲停價，上方無獲利空間，建議 skip"
+                    ? $limitUpHint
                     : "突破 {$resistance} → 進場",
             };
 
@@ -593,22 +611,44 @@ TASK;
             $statusLines[] = sprintf("昨收 %.2f | 漲停 %.2f | 跌停 %.2f", $prevClose, $limitUpPrice, $limitDownPrice);
 
             $taskSection = <<<TASK
-## 任務（觀望中）
-1. 當前走勢是否已達或即將達到進場條件？（建議 entry / hold / skip）
-2. 目標價（壓力位）或停損價（支撐位）是否需根據今日盤中走勢調整？（在 adjustments.target / adjustments.stop 中填寫新值，不調整則填 null）
-3. 日K趨勢是否支持當前操作方向？
-4. **策略切換**：若原策略條件明顯不適合當前盤勢，可在回覆加入 "strategy" 欄位，同時在 adjustments 更新 target/stop。
+## 任務（觀望中）— 依優先順序判斷
 
-   | 策略 | 進場觸發方式 | 適用情境 |
-   |------|-------------|---------|
-   | momentum | 接近或突破壓力位 | 跳空已超過壓力位、持續上攻不回頭 |
-   | breakout_fresh | 接近或突破壓力位 | 首次突破壓力位 |
-   | breakout_retest | 拉回至支撐位附近量縮止穩 | 突破後回測支撐確認 |
-   | gap_pullback | 拉回至支撐位附近量縮止穩 | 跳空後等拉回支撐再進 |
-   | bounce | 觸及支撐位後反彈確認 | 觸底反彈 |
-   | gap_reversal | 跳空缺口不回補 + 量能確認 | 超跌股催化日跳空反彈 |
+### 1. 策略適配檢查（最先做）
+當前盤勢與原策略 {$strategy} 是否仍匹配？
 
-   選擇關鍵：若開盤已跳空超過壓力位且不回頭，gap_pullback 永遠不會觸發進場，應改 momentum
+- **不匹配** → 在 "strategy" 欄位填新策略 + adjustments 更新 target/stop（限 A/B 級才會生效）
+- **匹配** → 進入步驟 2
+
+策略切換對照表（只列「原策略失效，改用其他策略」場景；若原策略仍生效，無需切換）：
+
+| 盤中觀察到 | 切換為 |
+|---|---|
+| 開盤跳空已超壓力位且不回頭（gap_pullback / breakout_retest 永不觸發） | momentum |
+| 突破壓力後回測支撐附近止穩（原 momentum / breakout_fresh 已過時點） | breakout_retest |
+| 突破失敗破支撐後在更低支撐反彈（原突破型策略失效） | bounce |
+| 超跌反彈日跳空缺口不回補 + 量能放大（原一般策略不適用） | gap_reversal |
+| 連續跌破多個支撐 + 量縮無撐 | （直接 skip，不切換） |
+
+### 2. 進場觸發評估
+策略條件是否成立？
+- 已成立 → entry
+- 接近但未成立 → hold + 視需要 adjustments 更新 target/stop
+- 否則進入步驟 3
+
+### 3. 是否該 skip — skip 是最後選項
+**只有以下情況才 skip：**
+- (a) 走勢已破壞所有可用策略前提（連跌破多個支撐 + 量縮）
+- (b) 上方絕對無獲利空間（壓力位 = 漲停且無更近階段性壓力可設）
+- (c) 走勢分類為 weakness（連續走弱 + 大量出貨）
+
+**不應作為 skip 理由（這些情況優先 hold 或 strategy 切換）：**
+- 壓力位剩 +1% 以內 → 應在 adjustments.target 設更近的階段性壓力（如盤中高點）
+- 量比偶爾低於門檻 → 應 hold 等待
+- 短期 K 線回落但未破支撐 → 應 hold 觀察
+- 原策略條件不符但其他策略可能適用 → 優先 strategy 切換而非 skip
+
+### 4. 日 K 趨勢檢核
+日K趨勢是否支持當前操作方向？若明確不支持，將此納入決策。
 TASK;
         }
 
