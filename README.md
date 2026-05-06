@@ -130,6 +130,15 @@ docker compose exec php php artisan stock:scan-intraday-movers
 # 腿 2 邏輯 dry-run（不打 API，用日 K 模擬，驗證選池覆蓋率）
 docker compose exec php php artisan stock:dry-run-movers --date=2026-04-29 --watch=1597,2049
 
+# 隔日沖選股（通常由 12:50 排程自動執行；手動日期代表建倉日 T+0）
+docker compose exec php php artisan stock:ai-screen-overnight [date] [--force] [--backfill]
+
+# 隔日沖 T+1 出場監控（通常由排程自動執行）
+docker compose exec php php artisan stock:monitor-overnight-exit --slot=930 [date]
+
+# 隔日沖結果回填；可補齊既有結果中缺漏的 overnight 欄位
+docker compose exec php php artisan stock:update-overnight-results [date]
+
 # 回測指標查看
 docker compose exec php php artisan stock:backtest --from=2026-03-01 --to=2026-04-10
 ```

@@ -26,8 +26,22 @@ class UpdateOvernightResults extends Command
 
         $candidates = Candidate::where('trade_date', $tradeDate)
             ->where('mode', 'overnight')
-            ->whereDoesntHave('result')
-            ->with('stock')
+            ->where(function ($query) {
+                $query->whereDoesntHave('result')
+                    ->orWhereHas('result', function ($resultQuery) {
+                        $resultQuery
+                            ->whereNull('overnight_outcome')
+                            ->orWhereNull('open_gap_percent');
+                    })
+                    ->orWhere(function ($candidateQuery) {
+                        $candidateQuery
+                            ->whereNotNull('overnight_strategy')
+                            ->whereHas('result', function ($resultQuery) {
+                                $resultQuery->whereNull('gap_predicted_correctly');
+                            });
+                    });
+            })
+            ->with(['stock', 'result'])
             ->get();
 
         if ($candidates->isEmpty()) {
@@ -100,7 +114,7 @@ class UpdateOvernightResults extends Command
                 default                => 'neutral',
             };
 
-            CandidateResult::create([
+            $payload = [
                 'candidate_id'            => $candidate->id,
                 'actual_open'             => $open,
                 'actual_high'             => $high,
@@ -115,7 +129,12 @@ class UpdateOvernightResults extends Command
                 'open_gap_percent'        => $openGapPct,
                 'gap_predicted_correctly' => $gapPredictedCorrectly,
                 'overnight_outcome'       => $overnightOutcome,
-            ]);
+            ];
+
+            CandidateResult::updateOrCreate(
+                ['candidate_id' => $candidate->id],
+                $payload
+            );
 
             $count++;
             $this->line(sprintf(
@@ -126,7 +145,7 @@ class UpdateOvernightResults extends Command
             ));
         }
 
-        $this->info("已更新 {$count} 筆隔日沖候選標的結果");
+        $this->info("已建立或補齊 {$count} 筆隔日沖候選標的結果");
         Log::info("UpdateOvernightResults {$tradeDate}：更新 {$count} 筆");
 
         return self::SUCCESS;

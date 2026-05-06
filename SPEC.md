@@ -924,6 +924,7 @@ docker compose exec php php artisan stock:dry-run-movers --date=2026-04-29 --wat
 - 需要當日 `daily_quotes` 資料才能計算（依賴 14:30 的 `stock:fetch-daily`）
 - 若當日無行情資料（如該股停牌），則跳過不建立結果
 - 已有結果的候選標的不會重複計算（`whereDoesntHave('result')`）
+- 隔日沖結果回填採不同邏輯，會補齊既有 `candidate_results` 中缺漏的 overnight 欄位，見 §6.7。
 
 ### 5.2 回測核心指標
 
@@ -1034,7 +1035,7 @@ docker compose exec php php artisan stock:ai-screen-overnight 2026-04-29
 | `$snapshotDate` | T+0（今日 / 建倉日） | 查詢 `IntradaySnapshot`、`SectorIndex` |
 | `$tradeDate` | T+1（出場日，跳過假日/週末） | 寫入 `candidates.trade_date`、查詢 `DailyQuote` |
 
-`candidates` 表的唯一鍵為 `[stock_id, trade_date]`，因此隔日沖（trade_date = T+1）與當沖（trade_date = T）自然不衝突。
+`candidates` 表的唯一鍵為 `[stock_id, trade_date, mode]`，因此同一檔股票在同一個 `trade_date` 可同時存在 intraday 與 overnight 兩種模式。
 
 **T+1 由 `MarketHoliday::nextTradingDay($snapshotDate)` 計算**，會跳過週末與國定假日。例如 2026-04-30（四）建倉，因 05/01 勞動節 + 週末，T+1 = 2026-05-04（一）。
 
@@ -1179,7 +1180,7 @@ Fallback（API 失敗）：回傳 `{action: "hold"}`，維持現狀。
 
 每日 **15:05** 在 T+1 收盤後執行。
 
-查詢 `candidates.trade_date = T+1, mode = 'overnight'` 的候選，寫入 `candidate_results`：
+查詢 `candidates.trade_date = T+1, mode = 'overnight'` 且尚未建立結果，或既有 `candidate_results` 缺少 `overnight_outcome` / `open_gap_percent` 的候選，寫入或補齊 `candidate_results`。若候選有 `overnight_strategy` 但 `gap_predicted_correctly` 缺漏，也會一併補齊；未選入且沒有 entry type 的標的允許該欄位維持 null。
 
 | 欄位 | 說明 |
 |------|------|
