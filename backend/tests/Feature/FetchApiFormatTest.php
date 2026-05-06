@@ -213,7 +213,10 @@ class FetchApiFormatTest extends TestCase
             $this->assertArrayHasKey('stop_loss', $first);
             $this->assertArrayHasKey('reasons', $first);
             $this->assertGreaterThanOrEqual(30, $first['score'], '分數應 >= 30');
-            $this->assertGreaterThanOrEqual(1.5, $first['risk_reward_ratio'], '風報比應 >= 1.5');
+
+            $screenConfig = \App\Models\FormulaSetting::getConfig('screen_thresholds');
+            $minRiskReward = $screenConfig['min_risk_reward'] ?? 0.8;
+            $this->assertGreaterThanOrEqual($minRiskReward, $first['risk_reward_ratio'], "風報比應 >= {$minRiskReward}");
         }
     }
 }

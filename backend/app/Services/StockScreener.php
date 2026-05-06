@@ -319,7 +319,7 @@ class StockScreener
                 'target_price'      => $targetPrice,
                 'stop_loss'         => $stopLoss,
                 'risk_reward_ratio' => $riskReward,
-                'score'             => 0,
+                'score'             => $mode === 'intraday' ? round($compoundScore, 2) : 0,
                 'reasons'           => $reasons,
                 'indicators'        => $indicators,
                 '_avg_vol5'         => $avgVolume5,

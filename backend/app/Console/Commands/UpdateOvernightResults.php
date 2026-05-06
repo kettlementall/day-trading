@@ -46,10 +46,20 @@ class UpdateOvernightResults extends Command
                             ->whereHas('monitor', function ($monitorQuery) {
                                 $monitorQuery->whereIn('status', CandidateMonitor::TERMINAL_STATUSES);
                             })
-                            ->whereHas('result', function ($resultQuery) {
-                                $resultQuery
-                                    ->whereNull('monitor_status')
-                                    ->orWhereNull('entry_price_actual');
+                            ->where(function ($needsMonitorBackfill) {
+                                $needsMonitorBackfill
+                                    ->whereHas('result', function ($resultQuery) {
+                                        $resultQuery->whereNull('monitor_status');
+                                    })
+                                    ->orWhere(function ($needsEntryBackfill) {
+                                        $needsEntryBackfill
+                                            ->whereHas('monitor', function ($monitorQuery) {
+                                                $monitorQuery->where('status', '!=', CandidateMonitor::STATUS_SKIPPED);
+                                            })
+                                            ->whereHas('result', function ($resultQuery) {
+                                                $resultQuery->whereNull('entry_price_actual');
+                                            });
+                                    });
                             });
                     })
                     ->orWhere(function ($candidateQuery) {

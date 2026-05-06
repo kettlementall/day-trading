@@ -80,4 +80,28 @@ class BacktestServiceOvernightActualMetricsTest extends TestCase
 
         $this->assertSame(50.0, $metrics['actual_exit_rate']);
     }
+
+    public function test_actual_exit_rate_never_exceeds_one_hundred_when_actual_exits_outnumber_ai_selected(): void
+    {
+        $metrics = BacktestService::calcOvernightActualMetrics(collect([
+            (object) [
+                'ai_selected' => true,
+                'result' => (object) [
+                    'entry_price_actual' => 100,
+                    'exit_price_actual' => 105,
+                    'monitor_status' => 'target_hit',
+                ],
+            ],
+            (object) [
+                'ai_selected' => false,
+                'result' => (object) [
+                    'entry_price_actual' => 100,
+                    'exit_price_actual' => 103,
+                    'monitor_status' => 'closed',
+                ],
+            ],
+        ]), 2);
+
+        $this->assertSame(100.0, $metrics['actual_exit_rate']);
+    }
 }

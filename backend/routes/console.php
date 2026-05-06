@@ -8,24 +8,26 @@ $scheduleLog = storage_path('logs/schedule.log');
 /**
  * 註冊排程任務並自動加上 Telegram 通知
  */
-function scheduledCommand(string $command, string $label, bool $selfNotify = false): \Illuminate\Console\Scheduling\Event
-{
-    $scheduleLog = storage_path('logs/schedule.log');
+if (!function_exists('scheduledCommand')) {
+    function scheduledCommand(string $command, string $label, bool $selfNotify = false): \Illuminate\Console\Scheduling\Event
+    {
+        $scheduleLog = storage_path('logs/schedule.log');
 
-    $event = Schedule::command($command)
-        ->appendOutputTo($scheduleLog)
-        ->onFailure(function () use ($label) {
-            app(TelegramService::class)->broadcast("❌ *{$label}* 失敗，請檢查 logs", 'system');
-        });
+        $event = Schedule::command($command)
+            ->appendOutputTo($scheduleLog)
+            ->onFailure(function () use ($label) {
+                app(TelegramService::class)->broadcast("❌ *{$label}* 失敗，請檢查 logs", 'system');
+            });
 
-    // 若 command 自行發送詳細通知，就不再發 generic 成功通知
-    if (!$selfNotify) {
-        $event->onSuccess(function () use ($label) {
-            app(TelegramService::class)->broadcast("✅ *{$label}* 完成", 'system');
-        });
+        // 若 command 自行發送詳細通知，就不再發 generic 成功通知
+        if (!$selfNotify) {
+            $event->onSuccess(function () use ($label) {
+                app(TelegramService::class)->broadcast("✅ *{$label}* 完成", 'system');
+            });
+        }
+
+        return $event;
     }
-
-    return $event;
 }
 
 // 每日 14:30 收盤後抓取行情資料
