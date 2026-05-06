@@ -354,7 +354,7 @@ class OvernightExitMonitorService
         $gapSection = '';
         if ($gapPredicted != 0) {
             $gapDiff = round($openGapPct - $gapPredicted, 2);
-            $gapLabel = $gapDiff > 0.5 ? '超預期' : ($gapDiff < -0.5 ? '不及預期' : '符合預期');
+            $gapLabel = self::classifyGapDiff($gapDiff);
             $gapSection = sprintf(
                 "\n預測跳空: %+.2f%%　實際跳空: %+.2f%%　差異: %+.2f%%（%s）",
                 $gapPredicted, $openGapPct, $gapDiff, $gapLabel
@@ -415,7 +415,7 @@ class OvernightExitMonitorService
 ## 背景
 - 隔日沖策略：T+0 收盤前建倉，T+1 盤中出場
 - 台股交易時間 09:00-13:30，最晚 13:25 前必須平倉
-- 你每 15 分鐘被呼叫一次，根據最新盤中數據決定持倉操作
+- 你在早盤（09:05~09:25）每 5 分鐘、之後每 15 分鐘被呼叫一次，根據最新盤中數據決定持倉操作
 
 ## 決策框架
 1. **趨勢判斷**：根據 5 分 K 走勢，盤中趨勢是否支持繼續持有到目標？
@@ -423,15 +423,28 @@ class OvernightExitMonitorService
 3. **出場訊號**：是否出現反轉、量縮價跌、支撐跌破等明確出場訊號？
 4. **時間因素**：剩餘時間是否足夠等待目標達成？
 5. **量能判斷**：量比偏低代表市場參與度不足，走勢可能缺乏持續性
-6. **跳空驗證**：實際跳空 vs 預測跳空的落差，反映市場對利多/利空的真實反應
+6. **跳空驗證**：實際跳空 vs 預測跳空的落差，可反映市場對利多/利空的反應；但落差在 ±1.5% 內屬於正常雜訊，不應單獨作為出場理由，須結合首根 K 走勢、量比與策略容忍度判讀
 7. **關鍵價位**：支撐/壓力位是重要的進出參考
+
+## 進場策略容忍度（依本次持倉的 entry_type 套用）
+所有「跳空」皆指「(T+1 開盤 − T+0 收盤) / T+0 收盤」。
+- **gap_up_open（跳空高開）**：要求正跳空。實際跳空 ≤ 0% → 策略前提失效，傾向 exit；正跳空但量比 < 1x，傾向 adjust 收緊停損。
+- **pullback_entry（拉回建倉）**：開盤微負跳空（0 ~ -1%）為合理型態，看是否在開盤 30 分鐘內止穩回升，若是則 hold；連續破首根 K 低點且量縮，傾向 exit；**跳空 < -2% 直接視為策略失效，傾向 exit**。
+- **open_follow_through（延續開盤）**：開盤跳空 ±1% 為正常區間；-1% ~ -2% 為偏弱但容許範圍（需觀察首根 K 是否收復昨收 ±0.5%、量比 ≥ 1.5x；若收復且量能到位 → hold，否則 exit）；**跳空 < -2% 直接視為策略失效，傾向 exit**。
+- **limit_up_chase（漲停追強）**：要求開盤強勢延續。負跳空即視為策略失效，傾向 exit。
+- **未指定 entry_type**：無容忍度框架，回到通用決策框架判斷。
+
+## 早盤觀察期紀律（09:05~09:25）
+此時段資訊有限，**除非 (a) 首根 5 分 K 直接跌破停損價，或 (b) 現價對昨收跌幅 > 3%**，否則優先 hold 或 adjust，避免在策略未完全展開前就退出。「強彈、站穩支撐、量比放大」屬於策略生效訊號，不應與「跳空小幅不及預期」並列為退出理由。
+注意：若 entry_type 容忍度框架已判定策略失效（如 open_follow_through 的跳空 < -2%），早盤紀律不覆蓋該判定，仍應 exit。
 
 ## 回覆格式
 決定策略：hold（維持）/ adjust（調整目標或停損）/ exit（建議提前出場）
 adjust 時必須給出新的 adjusted_target 或 adjusted_stop（或兩者），且需合理：target > current > stop
+reasoning 必須包含三段：(a) 策略容忍度檢核 (b) 主要正/負向訊號 (c) 結論依據。
 
 請直接回覆 JSON（不要加 markdown）：
-{"action":"hold","adjusted_target":null,"adjusted_stop":null,"reasoning":"一句話"}
+{"action":"hold","adjusted_target":null,"adjusted_stop":null,"reasoning":"簡短說明（策略檢核+主要訊號+結論）"}
 SYSTEM;
 
         // =====================================================================
@@ -475,7 +488,7 @@ USER;
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model'      => $this->model,
-                    'max_tokens' => 256,
+                    'max_tokens' => 384,
                     'system'     => [
                         [
                             'type'          => 'text',
@@ -501,16 +514,39 @@ USER;
                 return $fallback;
             }
 
+            $reasoning = $data['reasoning'] ?? '';
+            // reasoning 三段格式（策略檢核+主要訊號+結論）大致需 30+ 漢字；過短代表 AI 偷懶或回應被截斷
+            if (mb_strlen($reasoning) < 30) {
+                Log::warning("OvernightExitMonitor Sonnet {$symbol}: reasoning 過短（"
+                    . mb_strlen($reasoning) . "字, action={$data['action']}）— "
+                    . $reasoning);
+            }
+
             return [
                 'action'          => in_array($data['action'], ['hold', 'adjust', 'exit']) ? $data['action'] : 'hold',
                 'adjusted_target' => isset($data['adjusted_target']) ? (float) $data['adjusted_target'] ?: null : null,
                 'adjusted_stop'   => isset($data['adjusted_stop'])   ? (float) $data['adjusted_stop']   ?: null : null,
-                'reasoning'       => $data['reasoning'] ?? '',
+                'reasoning'       => $reasoning,
             ];
         } catch (\Exception $e) {
             Log::error("OvernightExitMonitor Sonnet {$symbol}: " . $e->getMessage());
             return $fallback;
         }
+    }
+
+    /**
+     * 將「實際跳空 - 預測跳空」的差異分類為五段標籤。
+     * public 方便測試；無實例狀態。
+     */
+    public static function classifyGapDiff(float $gapDiff): string
+    {
+        return match (true) {
+            $gapDiff > 1.5  => '顯著超預期',
+            $gapDiff > 0.5  => '小幅超預期',
+            $gapDiff < -1.5 => '顯著不及預期',
+            $gapDiff < -0.5 => '小幅偏弱（雜訊範圍）',
+            default         => '符合預期',
+        };
     }
 
     // -------------------------------------------------------------------------
