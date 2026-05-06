@@ -11,8 +11,10 @@ use Illuminate\Support\Facades\Log;
 
 class MonitorService
 {
-    public function __construct(private TelegramService $telegram)
-    {
+    public function __construct(
+        private TelegramService $telegram,
+        private IntradayAiAdvisor $aiAdvisor,
+    ) {
     }
 
     /**
@@ -305,6 +307,30 @@ class MonitorService
             'gap_reversal' => 'gap_reversal',
             default => $trajectory, // pullback or weakness
         };
+
+        // 規則層握手：呼叫 AI 對當下盤勢做最終確認，避免 AI 警示時規則層搶進
+        // 動機：5/6 3481 群創在 AI 連兩輪 hold（「不宜強追」「等止穩確認」）後，
+        // 規則層仍因 isPullbackEntry 觸發而進場，3 分鐘後 AI exit
+        $confirm = $this->aiAdvisor->confirmRuleEntry(
+            $date, $monitor, $candidate, $snapshots, "{$strategy} 觸發（{$entryType}）"
+        );
+        $monitor->logEntryConfirm($confirm['action'], $confirm['notes'] ?? '', $confirm['fallback'] ?? false);
+
+        if ($confirm['action'] === 'wait') {
+            Log::info(sprintf(
+                'MonitorService: %s AI 即時確認 wait%s — %s',
+                $stock->symbol,
+                ($confirm['fallback'] ?? false) ? '(fallback)' : '',
+                $confirm['notes'] ?? ''
+            ));
+            $monitor->save();
+            return;
+        }
+        if ($confirm['action'] === 'skip') {
+            $this->skipByAiAdvice($monitor, "AI 即時確認 skip：{$confirm['notes']}");
+            return;
+        }
+        // 'go' → 繼續執行原本的 transition + enterPosition
 
         // 觸發進場訊號
         $this->transition($monitor, CandidateMonitor::STATUS_ENTRY_SIGNAL, "進場條件成立（{$strategy}）");

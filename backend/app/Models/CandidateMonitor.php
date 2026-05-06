@@ -38,7 +38,7 @@ class CandidateMonitor extends Model
         'candidate_id', 'status',
         'entry_price', 'entry_time', 'entry_type', 'exit_price', 'exit_time',
         'current_target', 'current_stop',
-        'ai_calibration', 'ai_advice_log', 'state_log',
+        'ai_calibration', 'ai_advice_log', 'entry_confirm_log', 'state_log',
         'last_ai_advice_at', 'skip_reason',
     ];
 
@@ -52,6 +52,7 @@ class CandidateMonitor extends Model
         'last_ai_advice_at' => 'datetime',
         'ai_calibration' => 'array',
         'ai_advice_log' => 'array',
+        'entry_confirm_log' => 'array',
         'state_log' => 'array',
     ];
 
@@ -105,5 +106,20 @@ class CandidateMonitor extends Model
         ];
         $this->ai_advice_log = $log;
         $this->last_ai_advice_at = now();
+    }
+
+    /**
+     * 記錄規則層進場前的 AI 即時確認結果（與 ai_advice_log 隔離，避免影響下游）
+     */
+    public function logEntryConfirm(string $action, string $notes, bool $fallback = false): void
+    {
+        $log = $this->entry_confirm_log ?? [];
+        $log[] = [
+            'time' => now()->format('H:i:s'),
+            'action' => $action,
+            'notes' => $notes,
+            'fallback' => $fallback,
+        ];
+        $this->entry_confirm_log = $log;
     }
 }

@@ -98,4 +98,44 @@ class IntradayAiAdvisorTest extends TestCase
         $this->assertStringContainsString('建議 adjustments.target 設階段性壓力', $this->source);
         $this->assertStringContainsString('考慮 strategy 切換', $this->source);
     }
+
+    public function test_confirmRuleEntry_method_exists_with_correct_signature(): void
+    {
+        // confirmRuleEntry 方法存在
+        $this->assertStringContainsString('public function confirmRuleEntry(', $this->source);
+        // 用獨立的 entryConfirmModel（Haiku）
+        $this->assertStringContainsString('entryConfirmModel', $this->source);
+        // 失敗 fallback 是 wait（保守不進場）
+        $this->assertStringContainsString("'action' => 'wait'", $this->source);
+        $this->assertStringContainsString("'fallback' => true", $this->source);
+    }
+
+    public function test_entryConfirm_systemPrompt_contains_decision_principles(): void
+    {
+        // 核心角色描述
+        $this->assertStringContainsString('規則層進場前的最終確認 AI', $this->source);
+        // 三個 action 的判定原則
+        $this->assertStringContainsString('**go**', $this->source);
+        $this->assertStringContainsString('**wait**', $this->source);
+        $this->assertStringContainsString('**skip**', $this->source);
+        // 對稱成本提示（誤進場 > 誤延後）
+        $this->assertStringContainsString('誤進場成本', $this->source);
+        $this->assertStringContainsString('疑似訊號優先 wait', $this->source);
+        // 警示型措辭範例
+        $this->assertStringContainsString('「謹慎」', $this->source);
+        $this->assertStringContainsString('「不宜」', $this->source);
+        $this->assertStringContainsString('「等止穩」', $this->source);
+    }
+
+    public function test_entryConfirm_userMessage_includes_required_context(): void
+    {
+        // 規則觸發理由
+        $this->assertStringContainsString('規則觸發', $this->source);
+        // 最近 rolling advice 段落（最關鍵 context）
+        $this->assertStringContainsString('最近 rolling advice', $this->source);
+        // K 線結構
+        $this->assertStringContainsString('最近 3 根 5 分 K', $this->source);
+        // 任務指引：警示型措辭優先 wait
+        $this->assertStringContainsString('優先 wait', $this->source);
+    }
 }

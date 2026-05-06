@@ -618,6 +618,26 @@ AI 依開盤數據將每檔標的分為四級：
 
 **gap_reversal 特殊規則**：跳過 weakness 軌跡檢查（超跌反彈不適用常規走勢分類）。
 
+#### 規則層進場前的 AI 即時確認（握手機制）
+
+`evaluateWatching` 走完所有客觀條件（量比/外盤比/策略觸發/trajectory）、即將觸發進場前，呼叫 `IntradayAiAdvisor::confirmRuleEntry()` 做最終 second opinion。AI 看「最近 2 筆 rolling advice notes + 當前 5 分 K 結構」回覆：
+
+| action | 規則層動作 |
+|---|---|
+| `go` | 繼續執行進場流程（transition 到 `entry_signal` → `enterPosition`）|
+| `wait` | 不進場，下一輪 tick 重新評估（仍維持 `watching` 狀態）|
+| `skip` | 走 `skipByAiAdvice`，轉為 `skipped`（終態）|
+
+**模型**：`claude-haiku-4-5`（速度 ~1 秒，rolling advice 已用 Sonnet 做深度分析，本層只需「閱讀+表態」，Haiku 勝任且延遲低）。
+
+**Fallback**：API 失敗或解析失敗時回傳 `{action: 'wait', fallback: true}` — **保守不進場**。誤殺成本（延後一輪）遠小於誤進場成本（觸停損 -2~3%）。
+
+**結果儲存**：寫入 `monitor.entry_confirm_log`（**獨立於 `ai_advice_log`**），格式 `[{time, action, notes, fallback}]`。獨立欄位避免 rolling advice / emergencyAdvice / BacktestService / DailyReviewService 讀 ai_advice_log 時混到非 rolling 內容。
+
+**設計動機**：5/6 3481 群創在 AI 連兩輪 hold 警示「不宜強追」「等止穩確認」之後，規則層仍因 isPullbackEntry 觸發而進場，3 分鐘後 AI 立刻 exit。過去 36 天 20 件短命進場（≤30 分鐘）平均 PnL -0.40%、勝率 25%。確認握手機制讓規則層每次觸發都拿到 AI 對當下盤勢的最新意見，從根本解決規則 vs AI 脫鉤問題。
+
+**與 `emergencyAdvice` 的區別**：emergencyAdvice 用於 HOLDING 中的緊急狀況（急殺/量崩等）做出場判斷；confirmRuleEntry 用於 WATCHING → 進場前的最終把關。兩者是不同階段、不同決策的獨立機制。
+
 #### 動態目標/停損公式
 
 進場時依近 5 日平均振幅計算當日目標/停損（`evaluateWatching()` → `evaluateHolding()` 切換時設定）：
@@ -1180,7 +1200,7 @@ Fallback（API 失敗）：回傳 `{action: "hold"}`，維持現狀。
 
 每日 **15:05** 在 T+1 收盤後執行。
 
-查詢 `candidates.trade_date = T+1, mode = 'overnight'` 且尚未建立結果，或既有 `candidate_results` 缺少 `overnight_outcome` / `open_gap_percent` 的候選，寫入或補齊 `candidate_results`。若候選有 `overnight_strategy` 但 `gap_predicted_correctly` 缺漏，也會一併補齊；未選入且沒有 entry type 的標的允許該欄位維持 null。
+查詢 `candidates.trade_date = T+1, mode = 'overnight'` 且尚未建立結果，或既有 `candidate_results` 缺少 `overnight_outcome` / `open_gap_percent` 的候選，寫入或補齊 `candidate_results`。若候選有 `overnight_strategy` 但 `gap_predicted_correctly` 缺漏，也會一併補齊；未選入且沒有 entry type 的標的允許該欄位維持 null。若候選有 `CandidateMonitor`，同步寫入 `monitor_status`、`entry_price_actual`、`exit_price_actual`、`entry_time`、`exit_time`，供實際出場績效報表使用；這些欄位不改變本節既有理論 outcome 口徑。
 
 | 欄位 | 說明 |
 |------|------|
@@ -1189,6 +1209,7 @@ Fallback（API 失敗）：回傳 `{action: "hold"}`，維持現狀。
 | `open_gap_percent` | (T+1 開盤 - T+0 收盤) / T+0 收盤 × 100 |
 | `gap_predicted_correctly` | 跳空方向與 `entry_type` 預測是否一致 |
 | `overnight_outcome` | hit_target / hit_stop / gap_up_strong / gap_up / gap_down / up / down / neutral |
+| `monitor_status` / `entry_price_actual` / `exit_price_actual` | 實際出場績效用欄位；entry price 優先採 monitor，若隔日沖 monitor 未記錄進場價則以 `suggested_buy` 作為建倉參考價 |
 
 ### 6.8 AI 每日檢討（overnight 模式）
 
@@ -1211,6 +1232,8 @@ Fallback（API 失敗）：回傳 `{action: "hold"}`，維持現狀。
 統計欄位：`target_reach_rate`（達標率）、`expected_value`（期望報酬%）、`avg_risk_reward`（平均風報比）。
 
 這些統計資料會注入 Opus overnight 選股的 System Prompt，提供量化基準。
+
+`/overnight/stats` 另顯示實際出場績效（`actual_exit_rate`、`actual_win_rate`、`actual_stop_rate`、`avg_actual_return`），由 `candidate_results` 的 monitor 實際出場欄位計算。`actual_exit_rate` 以 AI 選入標的為分母；`actual_win_rate`、`actual_stop_rate`、`avg_actual_return` 只計入同時有實際 entry/exit 價格的樣本。v1 僅作報表並列顯示，不寫入 `strategy_performance_stats`，也不改變 `StrategyPerformanceStat::getPromptSummary('overnight')` 注入 Opus 的策略績效口徑。
 
 ### 6.10 類股指數（SectorIndex）
 

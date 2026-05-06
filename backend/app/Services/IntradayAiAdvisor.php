@@ -16,11 +16,13 @@ class IntradayAiAdvisor
 {
     private string $apiKey;
     private string $model;
+    private string $entryConfirmModel;
 
     public function __construct()
     {
         $this->apiKey = config('services.anthropic.api_key', '');
         $this->model = config('services.anthropic.intraday_model', 'claude-sonnet-4-6');
+        $this->entryConfirmModel = config('services.anthropic.entry_confirm_model', 'claude-haiku-4-5-20251001');
     }
 
     /**
@@ -204,6 +206,174 @@ class IntradayAiAdvisor
             Log::error("IntradayAiAdvisor emergency {$stock->symbol}: " . $e->getMessage());
             return $fallback;
         }
+    }
+
+    /**
+     * 規則層進場前的 AI 即時確認（second opinion）
+     *
+     * 動機：解 MonitorService::evaluateWatching 與 rolling advice 脫鉤的問題。
+     * 規則層（vol/ext/策略觸發/trajectory）走完後，呼叫本方法做最終確認，
+     * 避免 AI 警示時規則層搶進。用 Haiku 4.5（速度 ~1 秒，比 Sonnet ~3 秒快），
+     * 因為 rolling advice 已做深度分析，本層只需「閱讀 + 同意/反對」。
+     *
+     * @return array {action: 'go'|'wait'|'skip', notes: string, fallback: bool}
+     */
+    public function confirmRuleEntry(
+        string $date,
+        CandidateMonitor $monitor,
+        Candidate $candidate,
+        Collection $allSnapshots,
+        string $triggerReason
+    ): array {
+        // 失敗 fallback：保守不進場（誤殺成本 = 延後一輪，遠小於誤進場觸停損）
+        $fallback = ['action' => 'wait', 'notes' => 'AI 不可用，保守不進場', 'fallback' => true];
+
+        if (!$this->apiKey) {
+            return $fallback;
+        }
+
+        $stock = $candidate->stock;
+        $systemPrompt = $this->buildEntryConfirmSystemPrompt();
+        $userMessage  = $this->buildEntryConfirmUserMessage($monitor, $candidate, $stock, $allSnapshots, $triggerReason);
+
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders([
+                    'x-api-key'         => $this->apiKey,
+                    'anthropic-version' => '2023-06-01',
+                    'anthropic-beta'    => 'prompt-caching-2024-07-31',
+                    'content-type'      => 'application/json',
+                ])
+                ->post('https://api.anthropic.com/v1/messages', [
+                    'model'      => $this->entryConfirmModel,
+                    'max_tokens' => 192,
+                    'system'     => [
+                        [
+                            'type'          => 'text',
+                            'text'          => $systemPrompt,
+                            'cache_control' => ['type' => 'ephemeral'],
+                        ],
+                    ],
+                    'messages' => [
+                        ['role' => 'user', 'content' => $userMessage],
+                    ],
+                ]);
+
+            if (!$response->successful()) {
+                Log::error("IntradayAiAdvisor confirmRuleEntry error for {$stock->symbol}: " . $response->body());
+                return $fallback;
+            }
+
+            $text = $response->json('content.0.text', '');
+            $result = $this->parseJsonResponse($text);
+
+            if (!is_array($result) || !isset($result['action'])) {
+                return $fallback;
+            }
+
+            $action = in_array($result['action'], ['go', 'wait', 'skip'], true) ? $result['action'] : 'wait';
+            return [
+                'action'   => $action,
+                'notes'    => $result['notes'] ?? '',
+                'fallback' => false,
+            ];
+        } catch (\Exception $e) {
+            Log::error("IntradayAiAdvisor confirmRuleEntry {$stock->symbol}: " . $e->getMessage());
+            return $fallback;
+        }
+    }
+
+    /**
+     * 進場確認 system prompt（短，可被 prompt cache 快取）
+     */
+    private function buildEntryConfirmSystemPrompt(): string
+    {
+        return <<<SYSTEM
+你是台股當沖規則層進場前的最終確認 AI。
+
+## 角色
+規則層（量比、外盤、策略觸發）已通過所有客觀條件，準備進場。你的任務是基於「最近 rolling advice 與當前盤勢」做最後 second opinion。
+
+## 決策原則
+- **go**：盤勢符合策略，最近 rolling advice 無警示，可進場
+- **wait**：訊號未明（如最近 advice 含「謹慎」「不宜」「等止穩」「需確認」等警示型措辭，或當前 K 線結構走弱）。延後一輪等更明確訊號
+- **skip**：明確失效（連續走低 + 量縮、開盤即破首根 K 低點且未收復、上方無獲利空間）
+
+## 對稱成本提示
+- 誤進場成本（觸停損 -2~3% 實際虧損）> 誤延後成本（延後一輪 0%）
+- **疑似訊號優先 wait，明確失效再 skip，無警示才 go**
+
+## 回覆格式
+直接回 JSON，不要加 markdown：
+{"action":"go|wait|skip","notes":"一句話理由（最多 50 字）"}
+SYSTEM;
+    }
+
+    /**
+     * 進場確認 user message（短，含規則觸發理由 + 最近 advice + 當前盤勢）
+     */
+    private function buildEntryConfirmUserMessage(
+        CandidateMonitor $monitor,
+        Candidate $candidate,
+        $stock,
+        Collection $allSnapshots,
+        string $triggerReason
+    ): string {
+        $latest = $allSnapshots->sortByDesc('snapshot_time')->first();
+        $currentPrice = $latest ? (float) $latest->current_price : 0;
+        $support = (float) ($monitor->current_stop ?? 0);
+        $resistance = (float) ($monitor->current_target ?? 0);
+        $strategy = $candidate->intraday_strategy ?? 'momentum';
+
+        $distSupport = $currentPrice > 0 && $support > 0
+            ? round(($currentPrice - $support) / $currentPrice * 100, 2) : 0;
+        $distResistance = $currentPrice > 0 && $resistance > 0
+            ? round(($resistance - $currentPrice) / $currentPrice * 100, 2) : 0;
+
+        // 最近 2 筆 rolling advice
+        $log = $monitor->ai_advice_log ?? [];
+        $recent = array_slice($log, -2);
+        $adviceLines = [];
+        foreach ($recent as $entry) {
+            $adviceLines[] = sprintf(
+                '[%s] %s — %s',
+                $entry['time'] ?? '?',
+                $entry['action'] ?? '?',
+                mb_substr($entry['notes'] ?? '', 0, 100)
+            );
+        }
+        $adviceSection = empty($adviceLines)
+            ? '（無歷史 advice）'
+            : implode("\n", $adviceLines);
+
+        // 最近 3 根 5 分 K
+        $candles = $this->aggregateToCandles($allSnapshots);
+        $recentCandles = array_slice($candles, -3);
+        $candleLines = [];
+        foreach ($recentCandles as $c) {
+            $candleLines[] = sprintf(
+                '%s 開%.2f 高%.2f 低%.2f 收%.2f 量%d張',
+                $c['time'], $c['open'], $c['high'], $c['low'], $c['close'], $c['volume_张'] ?? 0
+            );
+        }
+        $candleSection = empty($candleLines) ? '（無 K 線資料）' : implode("\n", $candleLines);
+
+        return <<<MSG
+## {$stock->symbol} {$stock->name} 規則層進場確認
+
+**規則觸發**：{$triggerReason}（策略 {$strategy}）
+**現價**：{$currentPrice}　距支撐 {$distSupport}%　距壓力 +{$distResistance}%
+
+## 最近 rolling advice（你要參考的歷史意見）
+{$adviceSection}
+
+## 最近 3 根 5 分 K
+{$candleSection}
+
+## 任務
+依「最近 rolling advice 措辭 + 當前 K 線結構」回覆 go / wait / skip。
+若最近 advice 含警示性語言（「謹慎」「不宜」「等止穩」等），優先 wait。
+MSG;
     }
 
     // ===== Fallback =====

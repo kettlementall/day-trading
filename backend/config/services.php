@@ -8,6 +8,8 @@ return [
         'intraday_model' => env('ANTHROPIC_INTRADAY_MODEL', 'claude-sonnet-4-6'),
         'overnight_model' => env('ANTHROPIC_OVERNIGHT_MODEL', 'claude-sonnet-4-6'),
         'sentiment_model' => env('ANTHROPIC_SENTIMENT_MODEL', 'claude-haiku-4-5-20251001'),
+        // 當沖規則層進場前的 AI 即時確認（second opinion，輕量任務用 Haiku）
+        'entry_confirm_model' => env('ANTHROPIC_ENTRY_CONFIRM_MODEL', 'claude-haiku-4-5-20251001'),
     ],
     'telegram' => [
         'bot_token' => env('TELEGRAM_BOT_TOKEN', ''),
