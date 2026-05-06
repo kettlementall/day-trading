@@ -51,6 +51,26 @@
         <span>AI 通過率 <b>{{ stats.ai_approval_rate }}%</b></span>
       </div>
 
+      <!-- 實際出場績效（不影響上方理論績效口徑） -->
+      <div class="stats-grid actual-grid">
+        <div class="stat-card">
+          <div class="stat-value">{{ stats.actual_exit_rate }}%</div>
+          <div class="stat-label">實際出場率</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" :class="stats.actual_win_rate >= 50 ? 'highlight-up' : 'highlight-down'">
+            {{ stats.actual_win_rate }}%
+          </div>
+          <div class="stat-label">實際勝率</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" :class="stats.avg_actual_return > 0 ? 'highlight-up' : 'highlight-down'">
+            {{ stats.avg_actual_return > 0 ? '+' : '' }}{{ stats.avg_actual_return }}%
+          </div>
+          <div class="stat-label">平均實際報酬</div>
+        </div>
+      </div>
+
       <!-- 趨勢圖表 -->
       <div class="stock-card" style="margin-top: 16px;" v-if="stats.daily?.length">
         <h3 style="margin-bottom: 8px;">走勢趨勢</h3>
@@ -71,6 +91,8 @@
               <div><span class="label">達標率</span><span class="value highlight-up">{{ m.hit_target_rate }}%</span></div>
               <div><span class="label">跳空預測</span><span class="value">{{ m.gap_accuracy_rate }}%</span></div>
               <div><span class="label">停損率</span><span class="value highlight-down">{{ m.hit_stop_rate }}%</span></div>
+              <div><span class="label">實際勝率</span><span class="value" :class="m.actual_win_rate >= 50 ? 'highlight-up' : 'highlight-down'">{{ m.actual_win_rate }}%</span></div>
+              <div><span class="label">實際報酬</span><span class="value" :class="m.avg_actual_return > 0 ? 'highlight-up' : 'highlight-down'">{{ m.avg_actual_return > 0 ? '+' : '' }}{{ m.avg_actual_return }}%</span></div>
             </div>
           </div>
         </div>
@@ -407,6 +429,10 @@ onMounted(() => {
 .sub-stats b {
   margin-left: 2px;
   color: #303133;
+}
+
+.actual-grid {
+  margin-top: 10px;
 }
 
 .strategy-grid {

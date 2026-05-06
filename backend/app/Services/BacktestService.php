@@ -262,6 +262,10 @@ class BacktestService
                 'hit_stop_rate' => 0,
                 'avg_open_gap' => 0,
                 'ai_approval_rate' => 0,
+                'actual_exit_rate' => 0,
+                'actual_win_rate' => 0,
+                'actual_stop_rate' => 0,
+                'avg_actual_return' => 0,
             ];
         }
 
@@ -279,6 +283,7 @@ class BacktestService
         $avgOpenGap = $openGaps->isNotEmpty() ? round($openGaps->avg(), 2) : 0;
 
         $aiSelected = $candidates->filter(fn ($c) => $c->ai_selected)->count();
+        $actualMetrics = self::calcOvernightActualMetrics($candidates, $evaluated);
 
         return [
             'total_candidates' => $totalCandidates,
@@ -289,6 +294,61 @@ class BacktestService
             'hit_stop_rate' => round($lossCount / $evaluated * 100, 1),
             'avg_open_gap' => $avgOpenGap,
             'ai_approval_rate' => round($aiSelected / $evaluated * 100, 1),
+            ...$actualMetrics,
+        ];
+    }
+
+    public static function calcOvernightActualMetrics(Collection $candidates, int $evaluated): array
+    {
+        if ($evaluated === 0) {
+            return [
+                'actual_exit_rate' => 0,
+                'actual_win_rate' => 0,
+                'actual_stop_rate' => 0,
+                'avg_actual_return' => 0,
+            ];
+        }
+
+        $actualExits = $candidates->filter(function ($c) {
+            $result = $c->result;
+            if (!$result) {
+                return false;
+            }
+
+            return (float) $result->entry_price_actual > 0
+                && (float) $result->exit_price_actual > 0;
+        });
+
+        $actualCount = $actualExits->count();
+        $actualUniverse = $candidates->filter(fn ($c) => (bool) ($c->ai_selected ?? false))->count();
+        if ($actualUniverse === 0) {
+            $actualUniverse = $evaluated;
+        }
+
+        if ($actualCount === 0) {
+            return [
+                'actual_exit_rate' => 0,
+                'actual_win_rate' => 0,
+                'actual_stop_rate' => 0,
+                'avg_actual_return' => 0,
+            ];
+        }
+
+        $returns = $actualExits->map(function ($c) {
+            $entry = (float) $c->result->entry_price_actual;
+            $exit  = (float) $c->result->exit_price_actual;
+
+            return round(($exit - $entry) / $entry * 100, 2);
+        });
+
+        $wins = $returns->filter(fn ($return) => $return > 0)->count();
+        $stops = $actualExits->filter(fn ($c) => $c->result->monitor_status === 'stop_hit')->count();
+
+        return [
+            'actual_exit_rate' => round($actualCount / $actualUniverse * 100, 1),
+            'actual_win_rate' => round($wins / $actualCount * 100, 1),
+            'actual_stop_rate' => round($stops / $actualCount * 100, 1),
+            'avg_actual_return' => round($returns->avg(), 2),
         ];
     }
 

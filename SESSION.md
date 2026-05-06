@@ -24,6 +24,7 @@ Documentation sync is required for this project:
 
 - Updated `stock:update-overnight-results` so it can also repair existing overnight `candidate_results` rows with missing overnight fields.
 - Documentation sync for this behavior belongs in `SPEC.md` and `README.md`.
+- Implementing overnight actual-performance v1: write monitor exit fields into `candidate_results`, add actual metrics to `/overnight/stats`, and keep AI prompt strategy stats unchanged.
 
 ## Resume Checklist
 

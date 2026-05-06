@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Candidate;
+use App\Models\CandidateMonitor;
 use App\Models\CandidateResult;
 use App\Models\DailyQuote;
 use App\Models\MarketHoliday;
@@ -39,9 +40,29 @@ class UpdateOvernightResults extends Command
                             ->whereHas('result', function ($resultQuery) {
                                 $resultQuery->whereNull('gap_predicted_correctly');
                             });
+                    })
+                    ->orWhere(function ($candidateQuery) {
+                        $candidateQuery
+                            ->whereHas('monitor', function ($monitorQuery) {
+                                $monitorQuery->whereIn('status', CandidateMonitor::TERMINAL_STATUSES);
+                            })
+                            ->whereHas('result', function ($resultQuery) {
+                                $resultQuery
+                                    ->whereNull('monitor_status')
+                                    ->orWhereNull('entry_price_actual');
+                            });
+                    })
+                    ->orWhere(function ($candidateQuery) {
+                        $candidateQuery
+                            ->whereHas('monitor', function ($monitorQuery) {
+                                $monitorQuery->whereNotNull('exit_price');
+                            })
+                            ->whereHas('result', function ($resultQuery) {
+                                $resultQuery->whereNull('exit_price_actual');
+                            });
                     });
             })
-            ->with(['stock', 'result'])
+            ->with(['stock', 'result', 'monitor'])
             ->get();
 
         if ($candidates->isEmpty()) {
@@ -129,6 +150,7 @@ class UpdateOvernightResults extends Command
                 'open_gap_percent'        => $openGapPct,
                 'gap_predicted_correctly' => $gapPredictedCorrectly,
                 'overnight_outcome'       => $overnightOutcome,
+                ...$this->getMonitorPayload($candidate, $suggestedBuy),
             ];
 
             CandidateResult::updateOrCreate(
@@ -149,5 +171,37 @@ class UpdateOvernightResults extends Command
         Log::info("UpdateOvernightResults {$tradeDate}：更新 {$count} 筆");
 
         return self::SUCCESS;
+    }
+
+    private function getMonitorPayload(Candidate $candidate, float $suggestedBuy): array
+    {
+        $monitor = $candidate->monitor;
+
+        if (!$monitor) {
+            return [];
+        }
+
+        $entryPrice = (float) ($monitor->entry_price ?? 0);
+        if ($entryPrice <= 0 && $suggestedBuy > 0) {
+            $entryPrice = $suggestedBuy;
+        }
+
+        $exitPrice = (float) ($monitor->exit_price ?? 0);
+
+        return [
+            'entry_time'         => $monitor->entry_time,
+            'exit_time'          => $monitor->exit_time,
+            'entry_price_actual' => $entryPrice > 0 ? $entryPrice : null,
+            'exit_price_actual'  => $exitPrice > 0 ? $exitPrice : null,
+            'entry_type'         => $monitor->entry_type,
+            'monitor_status'     => $monitor->status,
+            'valid_entry'        => in_array($monitor->status, [
+                CandidateMonitor::STATUS_HOLDING,
+                CandidateMonitor::STATUS_TARGET_HIT,
+                CandidateMonitor::STATUS_STOP_HIT,
+                CandidateMonitor::STATUS_TRAILING_STOP,
+                CandidateMonitor::STATUS_CLOSED,
+            ]),
+        ];
     }
 }
