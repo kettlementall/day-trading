@@ -588,25 +588,6 @@ class MonitorService
             return null;
         }
 
-        // 移動停利：進場後最高點回落超過 50% 已實現利潤
-        $highSinceEntry = $monitor->entry_time
-            ? (float) IntradaySnapshot::where('stock_id', $stock->id)
-                ->where('trade_date', $date)
-                ->where('snapshot_time', '>=', $monitor->entry_time)
-                ->max('current_price')
-            : $price;
-        $unrealizedProfit = $highSinceEntry - $entryPrice;
-        if ($unrealizedProfit > 0 && $entryPrice > 0) {
-            $currentProfit = $price - $entryPrice;
-            $pullbackRatio = $unrealizedProfit > 0 ? $currentProfit / $unrealizedProfit : 1;
-
-            // 從最高回落超過 50%，且已有 >1% 利潤曾經出現過
-            if ($pullbackRatio < 0.5 && ($unrealizedProfit / $entryPrice * 100) > 1.0) {
-                $this->exitPosition($monitor, $price, 'trailing_stop', sprintf('移動停利，從高點 %.2f 回落', $highSinceEntry));
-                return null;
-            }
-        }
-
         // 時間停損：持有 > 90 分鐘且仍虧損中
         if ($monitor->entry_time) {
             $holdingMinutes = $monitor->entry_time->diffInMinutes(now());

@@ -50,6 +50,10 @@ class DailyReviewService
 
         $log("找到 {$candidates->count()} 檔候選標的");
 
+        if ($notReady = $this->validateResultsReady($date, $candidates, 'intraday')) {
+            return $notReady;
+        }
+
         // 2. 收集每檔的盤中資料
         $intradayData = IntradayQuote::whereIn('stock_id', $candidates->pluck('stock_id'))
             ->where('date', $date)
@@ -125,6 +129,10 @@ class DailyReviewService
         }
 
         $log("找到 {$candidates->count()} 檔隔日沖候選標的");
+
+        if ($notReady = $this->validateResultsReady($date, $candidates, 'overnight')) {
+            return $notReady;
+        }
 
         // 近 10 日 K 線
         $klineData = [];
@@ -436,6 +444,50 @@ PROMPT;
             Log::error('DailyReviewService extractOvernightLessons: ' . $e->getMessage());
             return 0;
         }
+    }
+
+    private function validateResultsReady(string $date, $candidates, string $mode): ?array
+    {
+        $total = $candidates->count();
+        $ready = $candidates->filter(function ($candidate) use ($mode) {
+            $result = $candidate->result;
+
+            if (
+                !$result
+                || $result->actual_open === null
+                || $result->actual_high === null
+                || $result->actual_low === null
+                || $result->actual_close === null
+            ) {
+                return false;
+            }
+
+            if ($mode === 'overnight') {
+                return $result->overnight_outcome !== null;
+            }
+
+            return $result->buy_reachable !== null
+                && $result->target_reachable !== null
+                && $result->hit_stop_loss !== null;
+        })->count();
+
+        if ($ready === $total) {
+            return null;
+        }
+
+        $dailyQuoteCount = DailyQuote::where('date', $date)->count();
+        $updateCommand = $mode === 'overnight'
+            ? "php artisan stock:update-overnight-results {$date}"
+            : "php artisan stock:update-results {$date}";
+
+        return [
+            'error' => "{$date} [{$mode}] 盤後結果尚未回填完整：候選 {$total} 檔，已回填 {$ready} 檔，當日 daily_quotes {$dailyQuoteCount} 筆。請先確認每日行情抓取成功，再執行 {$updateCommand} 後重跑檢討。",
+            'date' => $date,
+            'mode' => $mode,
+            'candidates_count' => $total,
+            'results_count' => $ready,
+            'daily_quotes_count' => $dailyQuoteCount,
+        ];
     }
 
     private function buildReviewPrompt(
