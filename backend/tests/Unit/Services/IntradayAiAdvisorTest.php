@@ -26,12 +26,14 @@ class IntradayAiAdvisorTest extends TestCase
         );
     }
 
-    public function test_systemPrompt_contains_skip_opportunity_cost_section(): void
+    public function test_systemPrompt_contains_strategy_state_skip_framework(): void
     {
-        $this->assertStringContainsString('skip 的非對稱成本', $this->source);
-        $this->assertStringContainsString('放棄全部上漲潛力', $this->source);
-        $this->assertStringContainsString('疑似失效訊號優先 hold', $this->source);
-        $this->assertStringContainsString('明確失效再 skip', $this->source);
+        $this->assertStringContainsString('策略狀態與 skip 原則', $this->source);
+        $this->assertStringContainsString('valid：原策略仍有效', $this->source);
+        $this->assertStringContainsString('switched：原策略已不適合', $this->source);
+        $this->assertStringContainsString('uncertain：訊號不足或矛盾', $this->source);
+        $this->assertStringContainsString('failed：結構明確失敗', $this->source);
+        $this->assertStringContainsString('skip 只用在 strategy_state=failed', $this->source);
     }
 
     public function test_systemPrompt_softens_limit_up_skip_directive(): void
@@ -40,7 +42,7 @@ class IntradayAiAdvisorTest extends TestCase
         $this->assertStringNotContainsString('壓力位 = 漲停價代表上方無獲利空間，應建議 skip', $this->source);
         // 新措辭：先評估階段性壓力或切策略
         $this->assertStringContainsString('先評估是否能設更近的階段性壓力', $this->source);
-        $this->assertStringContainsString('只有確認上方絕對無獲利空間才 skip', $this->source);
+        $this->assertStringContainsString('沒有合理目標或流動性不足時才 skip', $this->source);
     }
 
     public function test_userMessage_watching_task_uses_priority_decision_tree(): void
@@ -50,10 +52,9 @@ class IntradayAiAdvisorTest extends TestCase
         // 4 個明確順序步驟
         $this->assertStringContainsString('### 1. 策略適配檢查', $this->source);
         $this->assertStringContainsString('### 2. 進場觸發評估', $this->source);
-        $this->assertStringContainsString('### 3. 是否該 skip — skip 是最後選項', $this->source);
-        // 「不應作為 skip 理由」清單
-        $this->assertStringContainsString('不應作為 skip 理由', $this->source);
-        $this->assertStringContainsString('壓力位剩 +1% 以內', $this->source);
+        $this->assertStringContainsString('### 3. 是否該 skip', $this->source);
+        $this->assertStringContainsString('只有 strategy_state=failed 才 skip', $this->source);
+        $this->assertStringContainsString('都不是 failed；優先 hold 或 switched', $this->source);
     }
 
     public function test_userMessage_strategy_switch_table_only_lists_switch_scenarios(): void
@@ -70,24 +71,20 @@ class IntradayAiAdvisorTest extends TestCase
         $this->assertStringNotContainsString('跳空高開後拉回到支撐附近', $this->source);
     }
 
-    public function test_systemPrompt_contains_unconditional_skip_principle(): void
+    public function test_prompts_require_strategy_validity_before_skipping(): void
     {
-        // 無條件 skip 段落 — 對沖「skip 是最後選項」原則被無限延伸
-        $this->assertStringContainsString('無條件 skip 的判斷原則', $this->source);
-        $this->assertStringContainsString('凌駕於「skip 是最後選項」', $this->source);
+        $this->assertStringContainsString('先做策略狀態判斷', $this->source);
+        $this->assertStringContainsString('strategy_state', $this->source);
+        $this->assertStringContainsString('沒等到拉回，不等於 failed', $this->source);
+        $this->assertStringContainsString('不可只因「沒到原買點」就 skip', $this->source);
+    }
 
-        // 4 個結構性訊號維度（質性描述，不是硬門檻）
-        $this->assertStringContainsString('趨勢明確走弱', $this->source);
-        $this->assertStringContainsString('流動性風險', $this->source);
-        $this->assertStringContainsString('結構性失敗', $this->source);
-        $this->assertStringContainsString('多方失守延續', $this->source);
-
-        // gap_reversal 例外（避免超跌反彈策略被誤殺）
-        $this->assertStringContainsString('gap_reversal 策略例外', $this->source);
-
-        // 強調「結構性訊號」而非「單一指標踩線」
-        $this->assertStringContainsString('結構性訊號', $this->source);
-        $this->assertStringContainsString('單一指標踩線', $this->source);
+    public function test_old_conflicting_skip_wording_is_removed(): void
+    {
+        $this->assertStringNotContainsString('無條件 skip 的判斷原則', $this->source);
+        $this->assertStringNotContainsString('凌駕於「skip 是最後選項」', $this->source);
+        $this->assertStringNotContainsString('典型潛在報酬 +3~10%', $this->source);
+        $this->assertStringNotContainsString('當日跌幅 ≥ -2%', $this->source);
     }
 
     public function test_userMessage_entryTrigger_softens_limit_up_skip_message(): void

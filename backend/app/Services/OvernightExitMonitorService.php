@@ -243,7 +243,10 @@ class OvernightExitMonitorService
 
     private function handleExit(CandidateMonitor $monitor, string $slot, array $advice, array &$summary, string $symbol = '', string $name = ''): void
     {
-        $monitor->logAiAdvice('exit', $advice['reasoning']);
+        $monitor->logAiAdvice('exit', $advice['reasoning'], null, [
+            'strategy_state' => $advice['strategy_state'] ?? null,
+            'strategy_issue' => $advice['strategy_issue'] ?? null,
+        ]);
         $this->transition($monitor, CandidateMonitor::STATUS_CLOSED, "{$slot} AI 建議提前出場：{$advice['reasoning']}");
         $monitor->update(['exit_time' => now()]);
         $summary['exited']++;
@@ -307,6 +310,9 @@ class OvernightExitMonitorService
             'adjusted_target' => $advice['adjusted_target'] ?? null,
             'adjusted_stop'   => $advice['adjusted_stop']   ?? null,
             'slot'            => $slot,
+        ], [
+            'strategy_state' => $advice['strategy_state'] ?? null,
+            'strategy_issue' => $advice['strategy_issue'] ?? null,
         ]);
 
         if (!empty($updates)) {
@@ -329,7 +335,10 @@ class OvernightExitMonitorService
 
     private function handleHold(CandidateMonitor $monitor, string $slot, array $advice, array &$summary): void
     {
-        $monitor->logAiAdvice('hold', $advice['reasoning']);
+        $monitor->logAiAdvice('hold', $advice['reasoning'], null, [
+            'strategy_state' => $advice['strategy_state'] ?? null,
+            'strategy_issue' => $advice['strategy_issue'] ?? null,
+        ]);
         $monitor->save();
         $summary['held']++;
     }
@@ -346,7 +355,14 @@ class OvernightExitMonitorService
 
     private function askSonnet(string $slot, Candidate $candidate, CandidateMonitor $monitor, array $quote, ?int $yesterdayVolume = null): array
     {
-        $fallback = ['action' => 'hold', 'adjusted_target' => null, 'adjusted_stop' => null, 'reasoning' => 'AI 不可用，維持現狀'];
+        $fallback = [
+            'action' => 'hold',
+            'strategy_state' => 'uncertain',
+            'strategy_issue' => 'AI 不可用',
+            'adjusted_target' => null,
+            'adjusted_stop' => null,
+            'reasoning' => 'AI 不可用，維持現狀',
+        ];
 
         if (!$this->apiKey) {
             return $fallback;
@@ -466,34 +482,38 @@ class OvernightExitMonitorService
 - 台股交易時間 09:00-13:30，最晚 13:25 前必須平倉
 - 你在早盤（09:05~09:25）每 5 分鐘、之後每 15 分鐘被呼叫一次，根據最新盤中數據決定持倉操作
 
-## 決策框架
-1. **趨勢判斷**：根據 5 分 K 走勢，盤中趨勢是否支持繼續持有到目標？
-2. **風控管理**：是否需要調整目標或收緊停損來鎖利？
-3. **出場訊號**：是否出現反轉、量縮價跌、支撐跌破等明確出場訊號？
-4. **時間因素**：剩餘時間是否足夠等待目標達成？
-5. **量能判斷**：量比偏低代表市場參與度不足，走勢可能缺乏持續性
-6. **跳空驗證**：實際跳空 vs 預測跳空的落差，可反映市場對利多/利空的反應；但落差在 ±1.5% 內屬於正常雜訊，不應單獨作為出場理由，須結合首根 K 走勢、量比與策略容忍度判讀
-7. **關鍵價位**：支撐/壓力位是重要的進出參考
+## 策略狀態與出場框架
+每次先判斷 strategy_state：
 
-## 進場策略容忍度（依本次持倉的 entry_type 套用）
+- valid：原 entry_type 仍成立，走勢支持持有到目標
+- adjusted：原方向仍可交易，但目標或停損需要調整；回覆 adjusted_target/adjusted_stop
+- uncertain：早盤或訊號矛盾，尚不足以判定失效；優先 hold 或 adjust
+- failed：原 entry_type 前提明確失效，且沒有合理調整空間；才 exit
+
+exit 只用在 strategy_state=failed，或尾盤時間不足且走勢沒有明確向上攻擊。
+跳空不如預期不是單獨 exit 理由，須結合首根 K、量比、支撐/停損與策略容忍度。
+
+## entry_type 判讀（依本次持倉套用）
 所有「跳空」皆指「(T+1 開盤 − T+0 收盤) / T+0 收盤」。
-- **gap_up_open（跳空高開）**：要求正跳空。實際跳空 ≤ 0% → 策略前提失效，傾向 exit；正跳空但量比 < 1x，傾向 adjust 收緊停損。
-- **pullback_entry（拉回建倉）**：開盤微負跳空（0 ~ -1%）為合理型態，看是否在開盤 30 分鐘內止穩回升，若是則 hold；連續破首根 K 低點且量縮，傾向 exit；**跳空 < -2% 直接視為策略失效，傾向 exit**。
-- **open_follow_through（延續開盤）**：開盤跳空 ±1% 為正常區間；-1% ~ -2% 為偏弱但容許範圍（需觀察首根 K 是否收復昨收 ±0.5%、量比 ≥ 1.5x；若收復且量能到位 → hold，否則 exit）；**跳空 < -2% 直接視為策略失效，傾向 exit**。
-- **limit_up_chase（漲停追強）**：要求開盤強勢延續。負跳空即視為策略失效，傾向 exit。
+- **gap_up_open（跳空高開）**：要求正跳空；若未高開但首根 K 快速收復、量能接手，可先 uncertain/adjust，不必立刻 failed。
+- **pullback_entry（拉回建倉）**：允許小幅弱開或拉回，重點看是否在早盤止穩回升；連續破首根 K 低點且量縮才偏 failed。
+- **open_follow_through（延續開盤）**：允許開盤落差，重點看是否收復昨收、量能是否支持延續；不能只因跳空不及預期 exit。
+- **limit_up_chase（漲停追強）**：要求強勢延續；若負跳空且無接手、跌破支撐，偏 failed；若快速收復則可 adjust/hold。
 - **未指定 entry_type**：無容忍度框架，回到通用決策框架判斷。
 
 ## 早盤觀察期紀律（09:05~09:25）
-此時段資訊有限，**除非 (a) 首根 5 分 K 直接跌破停損價，或 (b) 現價對昨收跌幅 > 3%**，否則優先 hold 或 adjust，避免在策略未完全展開前就退出。「強彈、站穩支撐、量比放大」屬於策略生效訊號，不應與「跳空小幅不及預期」並列為退出理由。
-注意：若 entry_type 容忍度框架已判定策略失效（如 open_follow_through 的跳空 < -2%），早盤紀律不覆蓋該判定，仍應 exit。
+此時段資訊有限，除非直接跌破停損且無收復、或量價結構明確失守，否則優先 uncertain/hold 或 adjusted，避免在策略未展開前就退出。
+「強彈、站穩支撐、量比放大」屬於策略生效或修復訊號，不應與「跳空小幅不及預期」並列為退出理由。
 
 ## 回覆格式
 決定策略：hold（維持）/ adjust（調整目標或停損）/ exit（建議提前出場）
+strategy_state：valid / adjusted / uncertain / failed
 adjust 時必須給出新的 adjusted_target 或 adjusted_stop（或兩者），且需合理：target > current > stop
-reasoning 必須包含三段：(a) 策略容忍度檢核 (b) 主要正/負向訊號 (c) 結論依據。
+strategy_issue 說明策略仍有效、需要調整、資料不足或結構失效的原因。
+reasoning 必須包含三段：(a) strategy_state 判斷 (b) 主要正/負向訊號 (c) 結論依據。
 
 請直接回覆 JSON（不要加 markdown）：
-{"action":"hold","adjusted_target":null,"adjusted_stop":null,"reasoning":"簡短說明（策略檢核+主要訊號+結論）"}
+{"action":"hold","strategy_state":"valid","strategy_issue":null,"adjusted_target":null,"adjusted_stop":null,"reasoning":"簡短說明（策略狀態+主要訊號+結論）"}
 SYSTEM;
 
         // =====================================================================
@@ -573,6 +593,10 @@ USER;
 
             return [
                 'action'          => in_array($data['action'], ['hold', 'adjust', 'exit']) ? $data['action'] : 'hold',
+                'strategy_state'  => in_array($data['strategy_state'] ?? null, ['valid', 'adjusted', 'uncertain', 'failed'], true)
+                    ? $data['strategy_state']
+                    : null,
+                'strategy_issue'  => $data['strategy_issue'] ?? null,
                 'adjusted_target' => isset($data['adjusted_target']) ? (float) $data['adjusted_target'] ?: null : null,
                 'adjusted_stop'   => isset($data['adjusted_stop'])   ? (float) $data['adjusted_stop']   ?: null : null,
                 'reasoning'       => $reasoning,

@@ -64,18 +64,22 @@ class OvernightExitMonitorServiceTest extends TestCase
         $this->assertStringContainsString('open_follow_through（延續開盤）', $source);
         $this->assertStringContainsString('limit_up_chase（漲停追強）', $source);
 
-        // -2% 失效邊界（避免日後誤刪保留三層反向警告問題）
-        $this->assertStringContainsString('跳空 < -2% 直接視為策略失效', $source);
+        // 策略狀態框架
+        $this->assertStringContainsString('策略狀態與出場框架', $source);
+        $this->assertStringContainsString('strategy_state：valid / adjusted / uncertain / failed', $source);
+        $this->assertStringContainsString('exit 只用在 strategy_state=failed', $source);
 
         // 早盤紀律
         $this->assertStringContainsString('早盤觀察期紀律', $source);
-        $this->assertStringContainsString('現價對昨收跌幅 > 3%', $source);
+        $this->assertStringContainsString('優先 uncertain/hold 或 adjusted', $source);
 
-        // 容忍度優先級條款
-        $this->assertStringContainsString('早盤紀律不覆蓋', $source);
+        // 舊的硬失效邊界與優先級拉扯應移除
+        $this->assertStringNotContainsString('跳空 < -2% 直接視為策略失效', $source);
+        $this->assertStringNotContainsString('現價對昨收跌幅 > 3%', $source);
+        $this->assertStringNotContainsString('早盤紀律不覆蓋', $source);
 
         // 跳空驗證的雜訊緩衝
-        $this->assertStringContainsString('±1.5% 內屬於正常雜訊', $source);
+        $this->assertStringContainsString('跳空不如預期不是單獨 exit 理由', $source);
 
         // reasoning 三段格式要求
         $this->assertStringContainsString('reasoning 必須包含三段', $source);

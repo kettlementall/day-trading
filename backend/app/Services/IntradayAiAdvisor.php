@@ -115,7 +115,7 @@ class IntradayAiAdvisor
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model'      => $this->model,
-                    'max_tokens' => 512,
+                    'max_tokens' => 768,
                     'system'     => [
                         [
                             'type'          => 'text',
@@ -176,7 +176,7 @@ class IntradayAiAdvisor
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model'      => $this->model,
-                    'max_tokens' => 256,
+                    'max_tokens' => 384,
                     'system'     => [
                         [
                             'type'          => 'text',
@@ -523,13 +523,20 @@ MSG;
 | C（觀察） | score尚可但有矛盾訊號 | 紙上交易追蹤，不實際進場 |
 | D（放棄） | 明確轉弱訊號（低開量縮、開盤即最高、跳空過大等） | 不進場 |
 
+## 先做策略狀態判斷
+每檔標的分級前，先判斷 strategy_state，並回覆 strategy_issue：
+
+- valid：原策略仍能解釋開盤走法
+- switched：原策略已不適合，但可切換到其他策略；搭配 strategy_override
+- uncertain：資料不足或訊號矛盾；優先 C 觀察
+- failed：結構明確失敗；才給 D
+
+skip/D 只用在 strategy_state=failed。failed 代表沒有可切換策略，且量價、外盤、支撐或上方報酬空間已明確破壞。
+gap_pullback / breakout_retest 沒等到拉回，不等於 failed；若開盤直接越過原壓力且量價續強，應考慮 switched → momentum 或 breakout_fresh。
+
 ### gap_reversal 策略特別處理
-策略為 gap_reversal（超跌反彈）的標的，評估邏輯不同：
-- 開盤跳空高開 ≥2% + 量比 ≥2x → 傾向給 A 或 B（跳空有量支撐）
-- 跳空高開但量比不足（<2x）或外盤比偏低 → 給 C（觀望確認）
-- 開盤平開或低開 → 給 D（催化失效，放棄）
-- **不應以「跳空過大」為由給 D**：gap_reversal 本來就預期大幅跳空
-- 進場條件設定較寬鬆：min_volume_ratio 可設 1.5，min_external_ratio 可設 50（重點是缺口不回補）
+gap_reversal 是超跌反彈策略，不適用一般 momentum 的跌幅或跳空失敗判準。
+重點看缺口是否守住、量能是否支持、是否出現接手；不要只因「跳空過大」給 D。
 
 等級 A/B/C 的標的，請設定進場條件（C 級用於紙上追蹤）。
 
@@ -548,7 +555,7 @@ MSG;
 
 ## 漲停價限制（當沖核心邏輯）
 - 當沖靠價差獲利，漲停價是天花板 — 鎖漲停後買不到，即使買到也無上漲空間
-- 若壓力位只剩漲停價（沒有更低的前高可設），代表上方已無獲利空間，應給 D 級放棄
+- 若原壓力位接近漲停，先判斷是否有可交易的階段性目標；沒有合理目標或流動性不足時才給 D
 - adjusted_resistance 必須低於漲停價，且 target 也不可設漲停價（到價時流動性極差，根本賣不掉）
 - 同理 adjusted_support（支撐位）不可設為跌停價
 
@@ -557,6 +564,9 @@ MSG;
   {
     "symbol": "2460",
     "grade": "A",
+    "strategy_state": "valid",
+    "strategy_valid": true,
+    "strategy_issue": null,
     "strategy_override": null,
     "adjusted_support": 29.5,
     "adjusted_resistance": 30.5,
@@ -572,6 +582,9 @@ MSG;
   {
     "symbol": "6206",
     "grade": "D",
+    "strategy_state": "failed",
+    "strategy_valid": false,
+    "strategy_issue": "開盤量縮且跌破首根低點，原突破前提失效",
     "reason": "低開量縮，開盤即最高，放棄",
     "notes": null
   }
@@ -637,22 +650,16 @@ PROMPT;
         return <<<SYSTEM
 你是台股當沖 AI 助手，正在協助管理 {$stock->symbol} {$stock->name}（{$industry}）的盤中倉位。
 
-## skip 的非對稱成本（決策原則）
-- **skip**：放棄全部上漲潛力（典型潛在報酬 +3~10% 直接歸零）
-- **hold**：等待條件再次成立（成本：機會成本 + 觀察時間，下行風險受 stop 保護）
-- 兩者明顯不對稱：**疑似失效訊號優先 hold，明確失效再 skip**
-- 不確定時優先「策略切換 + adjustments」而非 skip
+## 策略狀態與 skip 原則
+每次先判斷 strategy_state：
 
-## 無條件 skip 的判斷原則（凌駕於「skip 是最後選項」）
+- valid：原策略仍有效，照原策略判斷 hold/entry/exit
+- switched：原策略已不適合，但可切換策略；回覆 strategy + adjustments
+- uncertain：訊號不足或矛盾；優先 hold 等下一輪
+- failed：結構明確失敗；才 skip
 
-當「結構性失敗」明確成立時直接 skip — 此時延後決策的成本（觸停損實際虧損）大於放棄機會成本：
-
-- **趨勢明確走弱**：5 分 K 連續走低 + 量縮無接手（典型參考：當日跌幅 ≥ -2% 且無反彈跡象；**但 gap_reversal 策略例外 — 超跌本就是其進場前提，不適用此條**）
-- **流動性風險**：瀕跌停（典型參考：現價接近跌停價，買到也賣不掉）
-- **結構性失敗**：原策略前提徹底破壞（如突破型連跌破多個支撐 + 量縮）
-- **多方失守延續**：開盤即破首根 K 低點且後續無止穩（量縮但價未止跌、外盤比持續走低）
-
-關鍵：上列為「**結構性訊號**」，不是「**單一指標踩線**」。AI 應結合走勢結構、量價配合、策略本身性質綜合判斷。例如同樣 -2%，gap_reversal 是進場時機，momentum 是失敗訊號。
+skip 只用在 strategy_state=failed。failed 代表沒有可切換策略，且量價、外盤、支撐或上方報酬空間已明確破壞。
+gap_reversal 是超跌反彈策略，不適用一般 momentum 的跌幅失敗判準；重點看缺口、量能與接手。
 
 ## 時間規則
 - 當沖部位必須在 13:30 收盤前平倉
@@ -661,7 +668,7 @@ PROMPT;
 
 ## 價格限制
 - 目標價和停損價不可超過漲停價或低於跌停價（狀態行會提供漲跌停價）
-- 壓力位若已接近漲停：**先評估是否能設更近的階段性壓力**（adjustments.target，如盤中已形成的高點），或考慮 strategy 切換；只有確認上方絕對無獲利空間才 skip
+- 壓力位若已接近漲停：先評估是否能設更近的階段性壓力（adjustments.target，如盤中已形成的高點），或考慮 strategy 切換；沒有合理目標或流動性不足時才 skip
 - 若持有中標的漲到接近漲停，應建議 exit 獲利了結（鎖漲停後流動性極差賣不掉）
 - adjustments.target/stop 同樣受漲跌停限制
 
@@ -752,7 +759,8 @@ SYSTEM;
 1. 走勢是否仍支持持有到目標？是否建議調整目標或收緊停損？
 2. 是否出現出場訊號？（明確建議 hold 或 exit）
 3. 日K趨勢排列是否仍支持持有方向？
-4. 若盤勢特徵已從原策略轉變（如 momentum 轉盤整、breakout 失敗轉 bounce），可在回覆加入 "strategy" 欄位切換策略標籤，影響後續判斷框架。
+4. 先判斷 strategy_state（valid/switched/uncertain/failed），回覆 strategy_issue。
+5. 若盤勢特徵已從原策略轉變（如 momentum 轉盤整、breakout 失敗轉 bounce），可在回覆加入 "strategy" 欄位切換策略標籤，並用 adjustments 同步更新 target/stop。
 TASK;
         } else {
             // WATCHING
@@ -787,8 +795,13 @@ TASK;
 ### 1. 策略適配檢查（最先做）
 當前盤勢與原策略 {$strategy} 是否仍匹配？
 
-- **不匹配** → 在 "strategy" 欄位填新策略 + adjustments 更新 target/stop（限 A/B 級才會生效）
-- **匹配** → 進入步驟 2
+- strategy_state=valid：原策略仍有效，進入步驟 2
+- strategy_state=switched：原策略已不適合，但可切換策略；在 "strategy" 欄位填新策略 + adjustments 更新 target/stop（限 A/B 級才會生效）
+- strategy_state=uncertain：資料不足或訊號矛盾，優先 hold 等下一輪確認
+- strategy_state=failed：沒有可切換策略且結構已破壞，才 skip
+- strategy_issue 要寫清楚是「策略型態切換」、「資料不足」還是「結構性失敗」
+
+若價格已經走過原本低接/回測區，不可只因「沒到原買點」就 skip；要判斷是否變成 momentum / breakout_fresh / breakout_retest。
 
 策略切換對照表（只列「原策略失效，改用其他策略」場景；若原策略仍生效，無需切換）：
 
@@ -798,7 +811,7 @@ TASK;
 | 突破壓力後回測支撐附近止穩（原 momentum / breakout_fresh 已過時點） | breakout_retest |
 | 突破失敗破支撐後在更低支撐反彈（原突破型策略失效） | bounce |
 | 超跌反彈日跳空缺口不回補 + 量能放大（原一般策略不適用） | gap_reversal |
-| 連續跌破多個支撐 + 量縮無撐 | （直接 skip，不切換） |
+| 連續跌破多個支撐 + 量縮無撐 | failed（skip，不切換） |
 
 ### 2. 進場觸發評估
 策略條件是否成立？
@@ -806,17 +819,10 @@ TASK;
 - 接近但未成立 → hold + 視需要 adjustments 更新 target/stop
 - 否則進入步驟 3
 
-### 3. 是否該 skip — skip 是最後選項
-**只有以下情況才 skip：**
-- (a) 走勢已破壞所有可用策略前提（連跌破多個支撐 + 量縮）
-- (b) 上方絕對無獲利空間（壓力位 = 漲停且無更近階段性壓力可設）
-- (c) 走勢分類為 weakness（連續走弱 + 大量出貨）
-
-**不應作為 skip 理由（這些情況優先 hold 或 strategy 切換）：**
-- 壓力位剩 +1% 以內 → 應在 adjustments.target 設更近的階段性壓力（如盤中高點）
-- 量比偶爾低於門檻 → 應 hold 等待
-- 短期 K 線回落但未破支撐 → 應 hold 觀察
-- 原策略條件不符但其他策略可能適用 → 優先 strategy 切換而非 skip
+### 3. 是否該 skip
+只有 strategy_state=failed 才 skip。
+failed 代表：沒有可切換策略，且走勢已破壞可用策略前提、上方沒有合理交易目標，或走勢分類為 weakness。
+壓力位接近漲停、量比暫時下降、短線回落但未破支撐、原策略不符但其他策略可用，都不是 failed；優先 hold 或 switched。
 
 ### 4. 日 K 趨勢檢核
 日K趨勢是否支持當前操作方向？若明確不支持，將此納入決策。
@@ -868,6 +874,9 @@ TASK;
 ## 回覆格式（JSON，不要加 markdown 標記）
 {
   "action": "hold",
+  "strategy_state": "valid",
+  "strategy_valid": true,
+  "strategy_issue": null,
   "notes": "量能從 2.1x 降至 1.6x，支撐有效，繼續持有",
   "strategy": null,
   "adjustments": {
@@ -877,6 +886,7 @@ TASK;
 }
 adjustments.target = 新目標價（壓力位），adjustments.stop = 新停損價（支撐位），不調整則為 null。
 strategy 欄位在需要切換策略時填寫（觀望中或持有中皆可），不切換則為 null。
+strategy_state 優先使用 valid/switched/uncertain/failed；strategy_valid 為向下相容欄位；strategy_issue 說明策略切換、資料不足或結構失效原因，沒有則為 null。
 MSG;
     }
 

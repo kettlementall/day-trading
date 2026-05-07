@@ -236,10 +236,19 @@ class DailyReviewService
             ->get();
 
         if ($monitors->isNotEmpty()) {
-            $monitorLines = ["symbol\tstatus\tentry_price\tentry_time\texit_price\texit_time\ttarget\tstop\tai_notes"];
+            $monitorLines = ["symbol\tstatus\tentry_price\tentry_time\texit_price\texit_time\ttarget\tstop\tstrategy_state\tstrategy_issue\tai_notes"];
             foreach ($monitors as $m) {
                 $c = $m->candidate;
-                $lastAdvice = $m->ai_advice_log ? collect($m->ai_advice_log)->pluck('notes')->implode(' → ') : '';
+                $adviceLog = collect($m->ai_advice_log ?? []);
+                $lastAdvice = $adviceLog->pluck('notes')->implode(' → ');
+                $stateTrail = $adviceLog
+                    ->pluck('strategy_state')
+                    ->filter()
+                    ->implode(' → ');
+                $issueTrail = $adviceLog
+                    ->pluck('strategy_issue')
+                    ->filter()
+                    ->implode(' → ');
 
                 $monitorLines[] = implode("\t", [
                     $c->stock->symbol,
@@ -250,6 +259,8 @@ class DailyReviewService
                     $m->exit_time?->format('H:i') ?? '-',
                     $m->current_target ?? '-',
                     $m->current_stop ?? '-',
+                    mb_substr($stateTrail ?: '-', 0, 60),
+                    mb_substr($issueTrail ?: '-', 0, 80),
                     mb_substr($lastAdvice, 0, 80),
                 ]);
             }
@@ -260,7 +271,7 @@ class DailyReviewService
 {$monitorTsv}
 
 ### 欄位說明
-status=最終狀態(target_hit/stop_hit/trailing_stop/closed/holding), entry/exit=進出場價與時間, target/stop=最終目標與停損（可能經 AI 調整）, ai_notes=AI 滾動建議摘要
+status=最終狀態(target_hit/stop_hit/trailing_stop/closed/holding), entry/exit=進出場價與時間, target/stop=最終目標與停損（可能經 AI 調整）, strategy_state=AI 對持倉策略狀態的判斷軌跡, strategy_issue=策略狀態理由, ai_notes=AI 滾動建議摘要
 MONITOR;
         }
 
@@ -587,7 +598,7 @@ PROMPT;
             ->get();
 
         if ($monitors->isNotEmpty()) {
-            $monitorLines = ["symbol\tstatus\tentry_price\tentry_time\texit_price\texit_time\ttarget\tstop\tMFE%\tMAE%\tcalibration\tai_notes"];
+            $monitorLines = ["symbol\tstatus\tentry_price\tentry_time\texit_price\texit_time\ttarget\tstop\tMFE%\tMAE%\tcalibration\tstrategy_state\tstrategy_issue\tai_notes"];
             foreach ($monitors as $m) {
                 $c = $m->candidate;
                 $r = $c->result;
@@ -595,7 +606,16 @@ PROMPT;
                 if ($m->ai_calibration) {
                     $calNotes = $m->ai_calibration['notes'] ?? ($m->ai_calibration['reason'] ?? '');
                 }
-                $lastAdvice = $m->ai_advice_log ? collect($m->ai_advice_log)->pluck('notes')->implode(' → ') : '';
+                $adviceLog = collect($m->ai_advice_log ?? []);
+                $lastAdvice = $adviceLog->pluck('notes')->implode(' → ');
+                $stateTrail = $adviceLog
+                    ->pluck('strategy_state')
+                    ->filter()
+                    ->implode(' → ');
+                $issueTrail = $adviceLog
+                    ->pluck('strategy_issue')
+                    ->filter()
+                    ->implode(' → ');
 
                 $monitorLines[] = implode("\t", [
                     $c->stock->symbol,
@@ -609,6 +629,8 @@ PROMPT;
                     $r?->mfe_percent ?? '-',
                     $r?->mae_percent ?? '-',
                     mb_substr($calNotes, 0, 50),
+                    mb_substr($stateTrail ?: '-', 0, 60),
+                    mb_substr($issueTrail ?: '-', 0, 80),
                     mb_substr($lastAdvice, 0, 80),
                 ]);
             }
@@ -618,7 +640,7 @@ PROMPT;
 {$monitorTsv}
 
 ### 欄位說明
-status=最終狀態(target_hit/stop_hit/trailing_stop/closed/skipped/watching), entry/exit=進出場價與時間, MFE%=持有期間最大有利偏移, MAE%=最大不利偏移, calibration=AI開盤校準備註, ai_notes=AI滾動建議摘要
+status=最終狀態(target_hit/stop_hit/trailing_stop/closed/skipped/watching), entry/exit=進出場價與時間, MFE%=持有期間最大有利偏移, MAE%=最大不利偏移, calibration=AI開盤校準備註, strategy_state=AI 對策略狀態的判斷軌跡, strategy_issue=策略狀態理由, ai_notes=AI滾動建議摘要
 MONITOR;
         }
 

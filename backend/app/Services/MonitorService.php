@@ -45,7 +45,7 @@ class MonitorService
     /**
      * 套用 AI 開盤校準結果
      *
-     * @param  array  $calibrations  keyed by symbol: {approved, strategy_override, adjusted_support, adjusted_resistance, entry_conditions, notes}
+     * @param  array  $calibrations  keyed by symbol: {approved|grade, strategy_state?, strategy_valid?, strategy_issue?, strategy_override, adjusted_support, adjusted_resistance, entry_conditions, notes}
      */
     public function applyCalibration(string $date, array $calibrations): void
     {
@@ -657,7 +657,12 @@ class MonitorService
         $action = $advice['action'] ?? 'hold';
         $notes = $advice['notes'] ?? '';
 
-        $monitor->logAiAdvice($action, $notes, $advice['adjustments'] ?? null);
+        $monitor->logAiAdvice($action, $notes, $advice['adjustments'] ?? null, [
+            'strategy_state' => $advice['strategy_state'] ?? null,
+            'strategy_valid' => $advice['strategy_valid'] ?? null,
+            'strategy_issue' => $advice['strategy_issue'] ?? null,
+            'strategy' => $advice['strategy'] ?? null,
+        ]);
 
         $candidate = $monitor->candidate;
 

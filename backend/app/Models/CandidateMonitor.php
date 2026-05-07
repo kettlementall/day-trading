@@ -95,15 +95,23 @@ class CandidateMonitor extends Model
     /**
      * 記錄 AI 建議
      */
-    public function logAiAdvice(string $action, string $notes, ?array $adjustments = null): void
+    public function logAiAdvice(string $action, string $notes, ?array $adjustments = null, array $context = []): void
     {
         $log = $this->ai_advice_log ?? [];
-        $log[] = [
+        $entry = [
             'time' => now()->format('H:i:s'),
             'action' => $action,
             'notes' => $notes,
             'adjustments' => $adjustments,
         ];
+
+        foreach (['strategy_state', 'strategy_valid', 'strategy_issue', 'strategy'] as $key) {
+            if (array_key_exists($key, $context)) {
+                $entry[$key] = $context[$key];
+            }
+        }
+
+        $log[] = $entry;
         $this->ai_advice_log = $log;
         $this->last_ai_advice_at = now();
     }
