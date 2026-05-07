@@ -47,13 +47,36 @@ class MonitorServiceTest extends TestCase
         $this->assertStringContainsString("\$confirm['action'] === 'skip'", $this->source);
         $this->assertStringContainsString('AI 即時確認 skip', $this->source);
 
-        // go 路徑（隱式：通過前兩個 if 後繼續執行 transition）
-        $this->assertStringContainsString("'go' → 繼續執行原本的 transition", $this->source);
+        // go 路徑（隱式：通過前兩個 if 後進入共用進場 executor）
+        $this->assertStringContainsString("'go' → 進入共用進場 executor", $this->source);
     }
 
     public function test_confirmRuleEntry_call_uses_strategy_and_entryType(): void
     {
         // 呼叫時應傳入 strategy 與 entryType 作為 trigger reason，便於事後分析
         $this->assertStringContainsString('{$strategy} 觸發（{$entryType}）', $this->source);
+    }
+
+    public function test_rolling_ai_entry_uses_ai_led_entry_flow(): void
+    {
+        // rolling advice action=entry 必須能主動嘗試進場，而不是只升格等待規則層下輪觸發
+        $this->assertStringContainsString('tryEnterFromRollingAdvice($monitor, $advice)', $this->source);
+        $this->assertStringContainsString('AI rolling entry override', $this->source);
+        $this->assertStringContainsString("'entry_type' => \$entryType", $this->source);
+    }
+
+    public function test_rolling_ai_entry_keeps_hard_risk_checks(): void
+    {
+        // AI 主導不代表無條件追價；硬風控仍保留在進場前
+        $this->assertStringContainsString('hardEntryBlockReason(', $this->source);
+        $this->assertStringContainsString('接近漲停', $this->source);
+        $this->assertStringContainsString('跌破停損', $this->source);
+    }
+
+    public function test_c_grade_entry_is_not_timeboxed_to_pre_11_upgrade_only(): void
+    {
+        // 舊版 C 級 action=entry 在 11:00 前只升格並 return，導致 AI entry 不會真的進場
+        $this->assertStringNotContainsString("now()->hour < 11", $this->source);
+        $this->assertStringContainsString('[當沖AI升格 C→B]', $this->source);
     }
 }

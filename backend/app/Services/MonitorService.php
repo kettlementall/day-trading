@@ -330,45 +330,179 @@ class MonitorService
             $this->skipByAiAdvice($monitor, "AI 即時確認 skip：{$confirm['notes']}");
             return;
         }
-        // 'go' → 繼續執行原本的 transition + enterPosition
+        // 'go' → 進入共用進場 executor
+        $this->enterPositionFromSignal($monitor, $candidate, $latest, $strategy, $entryType, "進場條件成立（{$strategy}）", '進場確認');
+    }
 
-        // 觸發進場訊號
-        $this->transition($monitor, CandidateMonitor::STATUS_ENTRY_SIGNAL, "進場條件成立（{$strategy}）");
+    /**
+     * AI 滾動建議 action=entry：AI 主導進場，規則只保留硬風控與最後握手確認。
+     */
+    private function tryEnterFromRollingAdvice(CandidateMonitor $monitor, array $advice): void
+    {
+        $candidate = $monitor->candidate;
+        $stock = $candidate->stock;
+        $date = $candidate->trade_date->format('Y-m-d');
 
-        // 漲跌停價（prevClose 已在上方取得）
+        if ($monitor->status !== CandidateMonitor::STATUS_WATCHING || $candidate->mode !== 'intraday') {
+            return;
+        }
+
+        $latest = IntradaySnapshot::where('stock_id', $candidate->stock_id)
+            ->where('trade_date', $date)
+            ->orderByDesc('snapshot_time')
+            ->first();
+
+        $hardBlockReason = $this->hardEntryBlockReason($monitor, $candidate, $latest);
+        if ($hardBlockReason !== null) {
+            Log::info("MonitorService: {$stock->symbol} AI rolling entry blocked by hard risk — {$hardBlockReason}");
+            return;
+        }
+
+        $newStrategy = $this->normalizeStrategy($advice['strategy'] ?? $candidate->intraday_strategy ?? 'momentum');
+        if ($newStrategy !== $candidate->intraday_strategy) {
+            $oldStrategy = $candidate->intraday_strategy;
+            $candidate->update(['intraday_strategy' => $newStrategy]);
+            Log::info("MonitorService: {$stock->symbol} AI entry 策略切換 {$oldStrategy} → {$newStrategy}");
+        }
+
+        if ($candidate->morning_grade === 'C') {
+            $candidate->update(['morning_grade' => 'B', 'morning_confirmed' => true]);
+            $this->telegram->broadcast(sprintf(
+                "[當沖AI升格 C→B] %s %s | %s",
+                $stock->symbol,
+                $stock->name,
+                $advice['notes'] ?? ''
+            ));
+        }
+
+        $strategy = $this->normalizeStrategy($candidate->intraday_strategy ?? $newStrategy);
+        $snapshots = $this->getRecentSnapshots($stock->id, $date, 5);
+        if ($snapshots->isEmpty()) {
+            $snapshots = collect([$latest]);
+        }
+
+        $confirm = $this->aiAdvisor->confirmRuleEntry(
+            $date,
+            $monitor,
+            $candidate,
+            $snapshots,
+            "AI rolling entry override（原策略 {$strategy}，軟規則僅供參考）"
+        );
+        $monitor->logEntryConfirm($confirm['action'], $confirm['notes'] ?? '', $confirm['fallback'] ?? false);
+
+        if ($confirm['action'] === 'wait') {
+            Log::info(sprintf(
+                'MonitorService: %s AI rolling entry 即時確認 wait%s — %s',
+                $stock->symbol,
+                ($confirm['fallback'] ?? false) ? '(fallback)' : '',
+                $confirm['notes'] ?? ''
+            ));
+            $monitor->save();
+            return;
+        }
+
+        if ($confirm['action'] === 'skip') {
+            $this->skipByAiAdvice($monitor, "AI rolling entry 即時確認 skip：{$confirm['notes']}");
+            return;
+        }
+
+        $this->enterPositionFromSignal(
+            $monitor,
+            $candidate,
+            $latest,
+            $strategy,
+            'ai_override',
+            "AI rolling entry override（{$strategy}）",
+            'AI rolling entry 確認'
+        );
+    }
+
+    private function hardEntryBlockReason(CandidateMonitor $monitor, Candidate $candidate, ?IntradaySnapshot $latest): ?string
+    {
+        if (!$latest) {
+            return '無最新快照';
+        }
+
+        if ($monitor->status !== CandidateMonitor::STATUS_WATCHING) {
+            return "狀態非 watching（{$monitor->status}）";
+        }
+
+        if ($candidate->mode !== 'intraday') {
+            return "mode 非 intraday（{$candidate->mode}）";
+        }
+
+        $tradeDate = $candidate->trade_date->format('Y-m-d');
+        $latestDate = $latest->trade_date instanceof \Carbon\CarbonInterface
+            ? $latest->trade_date->format('Y-m-d')
+            : (string) $latest->trade_date;
+        if ($latestDate !== $tradeDate) {
+            return "快照日期不符（{$latestDate} / {$tradeDate}）";
+        }
+
+        $price = (float) $latest->current_price;
+        $prevClose = (float) $latest->prev_close;
+        if ($price <= 0 || $prevClose <= 0) {
+            return '價格資料異常';
+        }
+
+        $limitUpPrice = $prevClose * 1.10;
+        if ($limitUpPrice > 0 && $price >= $limitUpPrice * 0.995) {
+            return '接近漲停';
+        }
+
+        $stop = (float) ($monitor->current_stop ?? 0);
+        if ($stop > 0 && $price <= $stop) {
+            return "跌破停損（{$price} <= {$stop}）";
+        }
+
+        return null;
+    }
+
+    private function enterPositionFromSignal(
+        CandidateMonitor $monitor,
+        Candidate $candidate,
+        IntradaySnapshot $latest,
+        string $strategy,
+        string $entryType,
+        string $signalReason,
+        string $holdingReason
+    ): void {
+        $stock = $candidate->stock;
+        $date = $candidate->trade_date->format('Y-m-d');
+        $price = (float) $latest->current_price;
+        $prevClose = (float) $latest->prev_close;
+
+        $this->transition($monitor, CandidateMonitor::STATUS_ENTRY_SIGNAL, $signalReason);
+
         $limitUp = $prevClose > 0 ? round($prevClose * 1.10, 2) : round($price * 1.10, 2);
         $limitDown = $prevClose > 0 ? round($prevClose * 0.90, 2) : round($price * 0.90, 2);
 
-        // 計算動態目標/停損
         $entryPrice = $price;
         $avgAmplitude = $this->getAvgAmplitude($stock->id, $date, 5);
 
         if ($strategy === 'gap_reversal') {
-            // gap_reversal：目標設漲停或 AI 壓力位；停損設缺口中點（嚴格，-2% 以內）
             $aiResistance = (float) $monitor->current_target;
             $targetPrice = ($aiResistance > $entryPrice && $aiResistance <= $limitUp)
                 ? $aiResistance
                 : min(round($entryPrice * 1.05, 2), $limitUp);
             $targetPrice = min($targetPrice, $limitUp);
 
-            // 停損：缺口不可回補 — 設在開盤跳空幅度的一半（但至少 -2%）
             $gapMid = round(($entryPrice + $prevClose) / 2, 2);
             $stopPrice = max($gapMid, round($entryPrice * 0.98, 2));
             $stopPrice = max($stopPrice, $limitDown);
         } else {
             $targetPrice = round($entryPrice * (1 + $avgAmplitude * 0.6 / 100), 2);
-            $targetPrice = min($targetPrice, round($entryPrice * 1.08, 2));  // 振幅公式上限
+            $targetPrice = min($targetPrice, round($entryPrice * 1.08, 2));
 
-            // 若 AI 校準壓力位更高且在漲停以內，以 AI 為準（可超越振幅公式上限）
             $aiResistance = (float) $monitor->current_target;
             if ($aiResistance > $entryPrice && $aiResistance <= $limitUp) {
                 $targetPrice = max($targetPrice, $aiResistance);
             }
-            $targetPrice = min($targetPrice, $limitUp);  // 不可超過漲停
+            $targetPrice = min($targetPrice, $limitUp);
 
             $stopPrice = round($entryPrice * (1 - $avgAmplitude * 0.55 / 100), 2);
             $stopPrice = max($stopPrice, round($entryPrice * 0.97, 2));
-            $stopPrice = max($stopPrice, $limitDown);  // 不可低於跌停
+            $stopPrice = max($stopPrice, $limitDown);
         }
 
         $monitor->update([
@@ -379,8 +513,7 @@ class MonitorService
             'current_stop' => $stopPrice,
         ]);
 
-        // 自動轉為 holding
-        $this->transition($monitor, CandidateMonitor::STATUS_HOLDING, '進場確認');
+        $this->transition($monitor, CandidateMonitor::STATUS_HOLDING, $holdingReason);
 
         $this->telegram->broadcast(sprintf(
             "🚨🚨🚨 *當沖進場* 🚨🚨🚨\n\n"
@@ -545,20 +678,7 @@ class MonitorService
 
         $monitor->logAiAdvice($action, $notes, $advice['adjustments'] ?? null);
 
-        // C 級升格：AI 建議進場且時間 < 11:00 → 升為 B，下次 tick 自動觸發進場
         $candidate = $monitor->candidate;
-        if ($action === 'entry' && $candidate->morning_grade === 'C' && now()->hour < 11) {
-            $stock = $candidate->stock;
-            $candidate->update(['morning_grade' => 'B', 'morning_confirmed' => true]);
-            $this->telegram->broadcast(sprintf(
-                "[當沖升格 C→B] %s %s | %s",
-                $stock->symbol,
-                $stock->name,
-                $notes
-            ));
-            $monitor->save();
-            return;
-        }
 
         // 策略切換（獨立於 action，任何建議都可附帶策略調整）
         $newStrategy = $advice['strategy'] ?? null;
@@ -579,11 +699,17 @@ class MonitorService
             ));
         }
 
-        match ($action) {
-            'exit' => $this->exitByAiAdvice($monitor, $notes),
-            'skip' => $this->skipByAiAdvice($monitor, $notes),
-            default => $this->applyAdjustments($monitor, $advice),  // hold、entry 及其他都套用 adjustments
-        };
+        if ($action === 'exit') {
+            $this->exitByAiAdvice($monitor, $notes);
+        } elseif ($action === 'skip') {
+            $this->skipByAiAdvice($monitor, $notes);
+        } else {
+            $this->applyAdjustments($monitor, $advice);  // hold、entry 及其他都套用 adjustments
+
+            if ($action === 'entry') {
+                $this->tryEnterFromRollingAdvice($monitor, $advice);
+            }
+        }
 
         $monitor->save();
     }
@@ -738,6 +864,13 @@ class MonitorService
             ->get()
             ->slice(-$count)
             ->values();
+    }
+
+    private function normalizeStrategy(?string $strategy): string
+    {
+        $validStrategies = ['breakout_fresh', 'breakout_retest', 'gap_pullback', 'bounce', 'momentum', 'gap_reversal'];
+
+        return in_array($strategy, $validStrategies, true) ? $strategy : 'momentum';
     }
 
     /**
