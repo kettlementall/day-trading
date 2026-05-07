@@ -25,7 +25,7 @@ class OvernightExitMonitorService
     }
 
     /**
-     * 指定時段的監控執行（09:05~13:15，每 15 分鐘）
+     * 指定時段的監控執行（09:05~13:25；13:25 對未出場部位強制平倉）
      *
      * @param  string  $tradeDate  T+1 出場日（YYYY-MM-DD）
      * @param  string  $slot       時段代碼，如 '905'、'930'、'1000'
@@ -33,6 +33,7 @@ class OvernightExitMonitorService
     public function checkTimeSlot(string $tradeDate, string $slot): array
     {
         $summary = ['slot' => $slot, 'checked' => 0, 'target_hit' => 0, 'stop_hit' => 0, 'adjusted' => 0, 'held' => 0, 'exited' => 0];
+        $forceClose = $this->slotToMinutes($slot) >= 13 * 60 + 25;
 
         // 取得今日隔日沖、AI 選入、監控尚未終止的候選
         $candidates = Candidate::with(['stock', 'monitor'])
@@ -125,6 +126,12 @@ class OvernightExitMonitorService
                     $symbol, $name, $buyPrice, $exitPrice, $profitPct, $low, $currentStop, $slot
                 ));
                 Log::info("OvernightExitMonitor [{$slot}] {$symbol}：停損觸發（low={$low}）");
+                continue;
+            }
+
+            // ── 13:25 強制平倉 ────────────────────────────────────────
+            if ($forceClose) {
+                $this->handleForceClose($monitor, $slot, $quote, $summary, $symbol, $name, $candidate);
                 continue;
             }
 
@@ -249,6 +256,42 @@ class OvernightExitMonitorService
         ));
     }
 
+    private function handleForceClose(
+        CandidateMonitor $monitor,
+        string $slot,
+        array $quote,
+        array &$summary,
+        string $symbol,
+        string $name,
+        Candidate $candidate
+    ): void {
+        $exitPrice = (float) ($quote['current_price'] ?? $quote['close'] ?? $quote['open'] ?? 0);
+        $buyPrice = (float) $candidate->suggested_buy;
+        $profitPct = ($buyPrice > 0 && $exitPrice > 0)
+            ? round(($exitPrice - $buyPrice) / $buyPrice * 100, 1)
+            : 0;
+
+        $monitor->logAiAdvice('exit', '13:25 強制平倉，不再等待 AI 判斷', ['slot' => $slot]);
+        $this->transition($monitor, CandidateMonitor::STATUS_CLOSED, "{$slot} 收盤前強制平倉");
+        $monitor->update(['exit_price' => $exitPrice, 'exit_time' => now()]);
+        $summary['exited']++;
+
+        $this->telegram->broadcast(sprintf(
+            "🔴 *隔日沖強制平倉* %s %s\n\n"
+            . "💰 買進：*%.2f* → 出場：*%.2f*\n"
+            . "📈 損益：*%+.1f%%*\n"
+            . "⏰ %s",
+            $symbol,
+            $name,
+            $buyPrice,
+            $exitPrice,
+            $profitPct,
+            $slot
+        ));
+
+        Log::info("OvernightExitMonitor [{$slot}] {$symbol}：13:25 強制平倉（price={$exitPrice}）");
+    }
+
     private function handleAdjust(CandidateMonitor $monitor, string $slot, array $advice, array &$summary, string $symbol = '', string $name = ''): void
     {
         $updates = [];
@@ -289,6 +332,12 @@ class OvernightExitMonitorService
         $monitor->logAiAdvice('hold', $advice['reasoning']);
         $monitor->save();
         $summary['held']++;
+    }
+
+    private function slotToMinutes(string $slot): int
+    {
+        $slot = (int) $slot;
+        return intdiv($slot, 100) * 60 + ($slot % 100);
     }
 
     // -------------------------------------------------------------------------
