@@ -111,8 +111,8 @@
         <div class="strategy-grid">
           <div v-for="(m, type) in stats.by_strategy" :key="type" class="stock-card strategy-card">
             <div class="strategy-title">
-              <el-tag :type="type === 'bounce' ? 'warning' : 'success'" size="small">
-                {{ type === 'bounce' ? '跌深反彈' : '突破追多' }}
+              <el-tag :type="strategyTagType(type)" size="small">
+                {{ strategyLabel(type) }}
               </el-tag>
               <span class="strategy-count">{{ m.evaluated }} 筆</span>
             </div>
@@ -308,6 +308,32 @@ const tipSymbol = ref('')
 const tipDate = ref(dayjs().format('YYYY-MM-DD'))
 const tipNotes = ref('')
 const tipOutcome = ref('win')
+
+const strategyLabels = {
+  bounce: '跌深反彈',
+  breakout_fresh: '首次突破',
+  breakout_retest: '突破回測',
+  gap_pullback: '跳空回拉',
+  momentum: '動能追強',
+  gap_reversal: '超跌反轉',
+}
+
+const strategyTagTypes = {
+  bounce: 'warning',
+  breakout_fresh: 'success',
+  breakout_retest: 'primary',
+  gap_pullback: 'info',
+  momentum: 'danger',
+  gap_reversal: 'warning',
+}
+
+function strategyLabel(type) {
+  return strategyLabels[type] || type
+}
+
+function strategyTagType(type) {
+  return strategyTagTypes[type] || 'info'
+}
 
 async function fetchData() {
   loading.value = true
