@@ -67,6 +67,12 @@ class TelegramService
             $response = Http::timeout(10)
                 ->post("https://api.telegram.org/bot{$this->token}/sendMessage", $payload);
 
+            if (!$response->successful() && $parseMode !== '' && str_contains($response->body(), "can't parse entities")) {
+                unset($payload['parse_mode']);
+                $response = Http::timeout(10)
+                    ->post("https://api.telegram.org/bot{$this->token}/sendMessage", $payload);
+            }
+
             if (!$response->successful()) {
                 Log::error("Telegram send failed (chat_id={$chatId}): " . $response->body());
                 return false;

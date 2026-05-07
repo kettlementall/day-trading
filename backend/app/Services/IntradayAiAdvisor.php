@@ -731,6 +731,7 @@ SYSTEM;
         $status = $monitor->status;
         $statusLines = [];
         $taskSection = '';
+        $strategy = $candidate->intraday_strategy ?? 'momentum';
 
         if ($status === CandidateMonitor::STATUS_HOLDING && $monitor->entry_price) {
             $entry = (float) $monitor->entry_price;
@@ -763,7 +764,7 @@ TASK;
             // 壓力位 ≈ 漲停價時，提示優先設階段性壓力或切策略，而非直接 skip
             $resistanceIsLimitUp = $limitUpPrice > 0 && abs($resistance - $limitUpPrice) < 0.1;
             $limitUpHint = "⚠ 壓力位即漲停價，建議 adjustments.target 設階段性壓力（如盤中高點）或考慮 strategy 切換；確認無階段性壓力可設才 skip";
-            $entryTrigger = match ($candidate->intraday_strategy ?? 'momentum') {
+            $entryTrigger = match ($strategy) {
                 'breakout_fresh', 'momentum' => $resistanceIsLimitUp
                     ? $limitUpHint
                     : "突破 {$resistance} → 進場",
