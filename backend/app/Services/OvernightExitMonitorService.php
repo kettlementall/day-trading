@@ -488,7 +488,7 @@ USER;
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model'      => $this->model,
-                    'max_tokens' => 384,
+                    'max_tokens' => 768,
                     'system'     => [
                         [
                             'type'          => 'text',
@@ -500,17 +500,17 @@ USER;
                 ]);
 
             if (!$response->successful()) {
-                Log::warning("OvernightExitMonitor Sonnet {$symbol}: HTTP {$response->status()}");
+                Log::warning("OvernightExitMonitor Sonnet {$symbol}: HTTP {$response->status()} — "
+                    . mb_substr($response->body(), 0, 500));
                 return $fallback;
             }
 
             $text = trim($response->json('content.0.text', ''));
-            $text = preg_replace('/^```json?\s*/i', '', $text);
-            $text = preg_replace('/\s*```$/', '', $text);
-            $data = json_decode($text, true);
+            $data = $this->parseSonnetJson($text);
 
             if (!is_array($data) || !isset($data['action'])) {
-                Log::warning("OvernightExitMonitor Sonnet {$symbol}: 無法解析回應");
+                Log::warning("OvernightExitMonitor Sonnet {$symbol}: 無法解析回應 — "
+                    . mb_substr($text, 0, 500));
                 return $fallback;
             }
 
@@ -532,6 +532,27 @@ USER;
             Log::error("OvernightExitMonitor Sonnet {$symbol}: " . $e->getMessage());
             return $fallback;
         }
+    }
+
+    private function parseSonnetJson(string $text): mixed
+    {
+        $text = trim($text);
+        $text = preg_replace('/^```json?\s*/i', '', $text);
+        $text = preg_replace('/\s*```$/', '', $text);
+
+        $decoded = json_decode($text, true);
+        if (is_array($decoded)) {
+            return $decoded;
+        }
+
+        if (preg_match('/\{[\s\S]*\}/u', $text, $match)) {
+            $decoded = json_decode($match[0], true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return null;
     }
 
     /**
