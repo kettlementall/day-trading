@@ -55,12 +55,17 @@ class TelegramService
         }
 
         try {
+            $payload = [
+                'chat_id' => $chatId,
+                'text' => $message,
+            ];
+
+            if ($parseMode !== '') {
+                $payload['parse_mode'] = $parseMode;
+            }
+
             $response = Http::timeout(10)
-                ->post("https://api.telegram.org/bot{$this->token}/sendMessage", [
-                    'chat_id' => $chatId,
-                    'text' => $message,
-                    'parse_mode' => $parseMode,
-                ]);
+                ->post("https://api.telegram.org/bot{$this->token}/sendMessage", $payload);
 
             if (!$response->successful()) {
                 Log::error("Telegram send failed (chat_id={$chatId}): " . $response->body());
