@@ -11,6 +11,8 @@ class FugleRealtimeClient
     private const API_BASE       = 'https://api.fugle.tw/marketdata/v1.0';
     private const QUOTE_PATH     = '/stock/intraday/quote';
     private const CANDLES_PATH   = '/stock/intraday/candles';
+    private const MOVERS_PATH    = '/stock/snapshot/movers';
+    private const ACTIVES_PATH   = '/stock/snapshot/actives';
     private const REQUEST_DELAY_US = 150000;  // 150ms，避免超過 rate limit
     private const MAX_429_RETRIES  = 3;       // 429 backoff 最大重試次數
     private const BACKOFF_BASE_US  = 500000;  // 500ms，每次 ×2（500ms → 1s → 2s）
@@ -262,6 +264,84 @@ class FugleRealtimeClient
         } catch (\Exception $e) {
             Log::error("Fugle raw candles [{$symbol}]: " . $e->getMessage());
             return null;
+        }
+    }
+
+    /**
+     * 抓取市場漲跌幅排行（Fugle snapshot movers）
+     *
+     * @return array[] 原始 data rows
+     */
+    public function fetchMovers(string $market, string $direction, string $change = 'percent'): array
+    {
+        $market = strtoupper($market);
+        if (!in_array($market, ['TSE', 'OTC'], true)) {
+            return [];
+        }
+        if (!in_array($direction, ['up', 'down'], true)) {
+            return [];
+        }
+        if (!in_array($change, ['percent', 'value'], true)) {
+            $change = 'percent';
+        }
+
+        try {
+            $response = $this->requestWithRetry(
+                self::API_BASE . self::MOVERS_PATH . '/' . $market,
+                [
+                    'direction' => $direction,
+                    'change' => $change,
+                    'type' => 'COMMONSTOCK',
+                ],
+                label: "{$market}/movers/{$direction}",
+            );
+
+            if (!$response || !$response->successful()) {
+                Log::warning("Fugle movers [{$market}/{$direction}] HTTP " . ($response?->status() ?? 'null'));
+                return [];
+            }
+
+            return $response->json('data') ?? [];
+        } catch (\Exception $e) {
+            Log::error("Fugle movers [{$market}/{$direction}]: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * 抓取市場成交量/成交值排行（Fugle snapshot actives）
+     *
+     * @return array[] 原始 data rows
+     */
+    public function fetchActives(string $market, string $trade = 'value'): array
+    {
+        $market = strtoupper($market);
+        if (!in_array($market, ['TSE', 'OTC'], true)) {
+            return [];
+        }
+        if (!in_array($trade, ['volume', 'value'], true)) {
+            $trade = 'value';
+        }
+
+        try {
+            $response = $this->requestWithRetry(
+                self::API_BASE . self::ACTIVES_PATH . '/' . $market,
+                [
+                    'trade' => $trade,
+                    'type' => 'COMMONSTOCK',
+                ],
+                label: "{$market}/actives/{$trade}",
+            );
+
+            if (!$response || !$response->successful()) {
+                Log::warning("Fugle actives [{$market}/{$trade}] HTTP " . ($response?->status() ?? 'null'));
+                return [];
+            }
+
+            return $response->json('data') ?? [];
+        } catch (\Exception $e) {
+            Log::error("Fugle actives [{$market}/{$trade}]: " . $e->getMessage());
+            return [];
         }
     }
 

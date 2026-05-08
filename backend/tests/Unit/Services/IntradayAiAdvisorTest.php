@@ -161,4 +161,24 @@ class IntradayAiAdvisorTest extends TestCase
         $this->assertStringContainsString('timing=%s quality=%s chase=%s', $this->source);
         $this->assertStringContainsString('若最近 advice 顯示 entry_timing=late_chase/wait_pullback', $this->source);
     }
+
+    public function test_rolling_prompt_includes_selected_universe_regime_context(): void
+    {
+        $this->assertStringContainsString('候選池盤中環境使用原則', $this->source);
+        $this->assertStringContainsString('不等於全市場大盤', $this->source);
+        $this->assertStringContainsString('regime=gap_fade_day', $this->source);
+        $this->assertStringContainsString('regime=trend_day', $this->source);
+        $this->assertStringContainsString('regime=selloff_day', $this->source);
+        $this->assertStringContainsString('## 今日候選池盤中環境', $this->source);
+        $this->assertStringContainsString('source:', $this->source);
+        $this->assertStringContainsString('entry_bias:', $this->source);
+        $this->assertStringContainsString('risk_mode:', $this->source);
+    }
+
+    public function test_rolling_and_emergency_advice_accept_market_regime(): void
+    {
+        $this->assertStringContainsString('public function rollingAdvice(string $date, CandidateMonitor $monitor, Collection $allSnapshots, ?array $marketRegime = null)', $this->source);
+        $this->assertStringContainsString('public function emergencyAdvice(string $date, CandidateMonitor $monitor, Collection $allSnapshots, string $reason, ?array $marketRegime = null)', $this->source);
+        $this->assertStringContainsString('formatSelectedUniverseRegimeSection(?array $marketRegime)', $this->source);
+    }
 }

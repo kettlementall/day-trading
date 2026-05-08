@@ -14,6 +14,7 @@ use App\Models\NewsIndex;
 use App\Models\SectorIndex;
 use App\Models\StockValuation;
 use App\Models\UsMarketIndex;
+use App\Services\IntradayMarketRegimeService;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Artisan;
@@ -257,6 +258,62 @@ class HealthCheck extends Command
                 }
             } catch (\Exception $e) {
                 $checks[] = ['name' => 'Fugle API', 'status' => 'error', 'detail' => '無法連線: ' . $e->getMessage()];
+            }
+        }
+
+        // 6b. Fugle snapshot API（候選池盤中環境的 optional enhancement；無權限時只用候選池）
+        if ($fugleKey) {
+            try {
+                $moversResp = Http::timeout(10)
+                    ->withHeaders(['X-API-KEY' => $fugleKey])
+                    ->get('https://api.fugle.tw/marketdata/v1.0/stock/snapshot/movers/TSE', [
+                        'direction' => 'up',
+                        'change' => 'percent',
+                        'type' => 'COMMONSTOCK',
+                    ]);
+                $activesResp = Http::timeout(10)
+                    ->withHeaders(['X-API-KEY' => $fugleKey])
+                    ->get('https://api.fugle.tw/marketdata/v1.0/stock/snapshot/actives/TSE', [
+                        'trade' => 'value',
+                        'type' => 'COMMONSTOCK',
+                    ]);
+
+                if ($moversResp->successful() && $activesResp->successful()) {
+                    $moversCount = count($moversResp->json('data') ?? []);
+                    $activesCount = count($activesResp->json('data') ?? []);
+                    $status = ($moversCount > 0 && $activesCount > 0) ? 'ok' : 'warn';
+                    $checks[] = ['name' => 'Fugle Snapshot', 'status' => $status,
+                        'detail' => "movers {$moversCount} 筆，actives {$activesCount} 筆"];
+                } elseif (in_array($moversResp->status(), [401, 403], true) || in_array($activesResp->status(), [401, 403], true)) {
+                    $checks[] = ['name' => 'Fugle Snapshot', 'status' => 'info',
+                        'detail' => "snapshot 權限未開（movers HTTP {$moversResp->status()} / actives HTTP {$activesResp->status()}），候選池環境僅用 selected universe"];
+                } else {
+                    $checks[] = ['name' => 'Fugle Snapshot', 'status' => 'warn',
+                        'detail' => "movers HTTP {$moversResp->status()} / actives HTTP {$activesResp->status()}"];
+                }
+            } catch (\Exception $e) {
+                $checks[] = ['name' => 'Fugle Snapshot', 'status' => 'error', 'detail' => '無法連線: ' . $e->getMessage()];
+            }
+        }
+
+        // 6c. 候選池盤中環境偵測（當日有當沖候選時檢查）
+        if (!$isHoliday && $todayCandidateCount > 0) {
+            try {
+                $regime = app(IntradayMarketRegimeService::class)->detect($date);
+                $metrics = $regime['metrics'] ?? [];
+                $sampleSize = (int) ($metrics['sample_size'] ?? 0);
+                $status = ($regime['regime'] ?? 'unknown') === 'unknown' ? 'warn' : 'ok';
+                $source = $regime['source'] ?? (($metrics['snapshot_enhanced'] ?? false) ? 'selected_universe+fugle_snapshot' : 'selected_universe');
+                $checks[] = ['name' => '候選池盤中環境', 'status' => $status,
+                    'detail' => sprintf(
+                        '%s confidence %s，source %s，候選池 %d 檔',
+                        $regime['regime'] ?? 'unknown',
+                        $regime['confidence'] ?? '-',
+                        $source,
+                        $sampleSize
+                    )];
+            } catch (\Exception $e) {
+                $checks[] = ['name' => '候選池盤中環境', 'status' => 'warn', 'detail' => '偵測失敗: ' . $e->getMessage()];
             }
         }
 

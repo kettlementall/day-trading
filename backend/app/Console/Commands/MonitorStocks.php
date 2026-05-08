@@ -9,6 +9,7 @@ use App\Models\IntradaySnapshot;
 use App\Models\MarketHoliday;
 use App\Models\Stock;
 use App\Services\IntradayAiAdvisor;
+use App\Services\IntradayMarketRegimeService;
 use App\Services\MonitorService;
 use App\Services\TelegramService;
 use App\Services\FugleRealtimeClient;
@@ -27,6 +28,7 @@ class MonitorStocks extends Command
         private FugleRealtimeClient $client,
         private MonitorService $monitorService,
         private IntradayAiAdvisor $aiAdvisor,
+        private IntradayMarketRegimeService $marketRegime,
         private TelegramService $telegram,
     ) {
         parent::__construct();
@@ -127,18 +129,21 @@ class MonitorStocks extends Command
         $emergencyMonitors = $this->monitorService->processSnapshot($date);
 
         // ===== Step 4: AI 滾動判斷（以上次執行時間控制間隔） =====
+        $marketRegime = null;
         $aiInterval = $this->getAiInterval($hour, $minute);
         if ($aiInterval > 0 && $timeStr >= '09:15') {
             $elapsed = $this->lastAiAdviceAt ? $this->lastAiAdviceAt->diffInMinutes($now) : PHP_INT_MAX;
             if ($elapsed >= $aiInterval) {
-                $this->performRollingAdvice($date);
+                $marketRegime = $this->detectMarketRegime($date);
+                $this->performRollingAdvice($date, $marketRegime);
                 $this->lastAiAdviceAt = $now->copy();
             }
         }
 
         // ===== Step 5: 緊急 AI 觸發 =====
         if (!empty($emergencyMonitors)) {
-            $this->performEmergencyAdvice($date, $emergencyMonitors);
+            $marketRegime ??= $this->detectMarketRegime($date);
+            $this->performEmergencyAdvice($date, $emergencyMonitors, $marketRegime);
         }
     }
 
@@ -170,7 +175,7 @@ class MonitorStocks extends Command
     /**
      * AI 滾動判斷（取當日所有快照供 5 分 K 聚合）
      */
-    private function performRollingAdvice(string $date): void
+    private function performRollingAdvice(string $date, ?array $marketRegime = null): void
     {
         $monitors = CandidateMonitor::with(['candidate.stock'])
             ->whereHas('candidate', fn($q) => $q->where('trade_date', $date)->where('mode', 'intraday'))
@@ -192,7 +197,7 @@ class MonitorStocks extends Command
 
             if ($allSnapshots->isEmpty()) continue;
 
-            $advice = $this->aiAdvisor->rollingAdvice($date, $monitor, $allSnapshots);
+            $advice = $this->aiAdvisor->rollingAdvice($date, $monitor, $allSnapshots, $marketRegime);
             $this->monitorService->applyRollingAdvice($monitor, $advice);
 
             $this->line("  {$stock->symbol}: {$advice['action']} - {$advice['notes']}");
@@ -202,7 +207,7 @@ class MonitorStocks extends Command
     /**
      * 緊急 AI 觸發：HOLDING 中出現急殺，不等排程週期
      */
-    private function performEmergencyAdvice(string $date, array $emergencyMonitors): void
+    private function performEmergencyAdvice(string $date, array $emergencyMonitors, ?array $marketRegime = null): void
     {
         foreach ($emergencyMonitors as $monitorId => $reason) {
             $monitor = CandidateMonitor::with(['candidate.stock'])->find($monitorId);
@@ -225,11 +230,25 @@ class MonitorStocks extends Command
 
             if ($allSnapshots->isEmpty()) continue;
 
-            $advice = $this->aiAdvisor->emergencyAdvice($date, $monitor, $allSnapshots, $reason);
+            $advice = $this->aiAdvisor->emergencyAdvice($date, $monitor, $allSnapshots, $reason, $marketRegime);
             $this->monitorService->applyRollingAdvice($monitor, $advice);
 
             $this->line("  {$stock->symbol} [緊急]: {$advice['action']} - {$advice['notes']}");
         }
+    }
+
+    private function detectMarketRegime(string $date): array
+    {
+        $regime = $this->marketRegime->detect($date);
+        $this->line(sprintf(
+            '候選池環境：%s confidence=%s bias=%s source=%s',
+            $regime['regime'] ?? 'unknown',
+            $regime['confidence'] ?? '-',
+            $regime['entry_bias'] ?? '-',
+            $regime['source'] ?? 'selected_universe',
+        ));
+
+        return $regime;
     }
 
     /**
