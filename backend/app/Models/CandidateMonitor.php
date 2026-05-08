@@ -105,7 +105,15 @@ class CandidateMonitor extends Model
             'adjustments' => $adjustments,
         ];
 
-        foreach (['strategy_state', 'strategy_valid', 'strategy_issue', 'strategy'] as $key) {
+        foreach ([
+            'strategy_state',
+            'strategy_valid',
+            'strategy_issue',
+            'strategy',
+            'entry_timing',
+            'entry_quality',
+            'chase_risk',
+        ] as $key) {
             if (array_key_exists($key, $context)) {
                 $entry[$key] = $context[$key];
             }

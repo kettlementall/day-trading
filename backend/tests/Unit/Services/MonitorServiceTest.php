@@ -73,6 +73,16 @@ class MonitorServiceTest extends TestCase
         $this->assertStringContainsString('跌破停損', $this->source);
     }
 
+    public function test_threshold_exits_record_threshold_price_not_snapshot_price(): void
+    {
+        // 停損/達標觸發時，前端與 DailyReview 應呈現實際委託/策略價位，
+        // 不應把低於停損或高於目標的快照現價寫成成交出場價。
+        $this->assertStringContainsString("\$this->exitPosition(\$monitor, \$target, 'target_hit'", $this->source);
+        $this->assertStringContainsString("\$this->exitPosition(\$monitor, \$stop, 'stop_hit'", $this->source);
+        $this->assertStringNotContainsString("\$this->exitPosition(\$monitor, \$price, 'target_hit'", $this->source);
+        $this->assertStringNotContainsString("\$this->exitPosition(\$monitor, \$price, 'stop_hit'", $this->source);
+    }
+
     public function test_c_grade_entry_is_not_timeboxed_to_pre_11_upgrade_only(): void
     {
         // 舊版 C 級 action=entry 在 11:00 前只升格並 return，導致 AI entry 不會真的進場

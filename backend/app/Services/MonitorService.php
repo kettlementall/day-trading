@@ -579,13 +579,13 @@ class MonitorService
 
         // 達標出場
         if ($target > 0 && $price >= $target) {
-            $this->exitPosition($monitor, $price, 'target_hit', sprintf('達標 %.2f', $target));
+            $this->exitPosition($monitor, $target, 'target_hit', sprintf('達標 %.2f', $target));
             return null;
         }
 
         // 停損出場
         if ($stop > 0 && $price <= $stop) {
-            $this->exitPosition($monitor, $price, 'stop_hit', sprintf('停損 %.2f', $stop));
+            $this->exitPosition($monitor, $stop, 'stop_hit', sprintf('停損 %.2f', $stop));
             return null;
         }
 
@@ -663,6 +663,9 @@ class MonitorService
             'strategy_valid' => $advice['strategy_valid'] ?? null,
             'strategy_issue' => $advice['strategy_issue'] ?? null,
             'strategy' => $advice['strategy'] ?? null,
+            'entry_timing' => $advice['entry_timing'] ?? null,
+            'entry_quality' => $advice['entry_quality'] ?? null,
+            'chase_risk' => $advice['chase_risk'] ?? null,
         ]);
 
         $candidate = $monitor->candidate;

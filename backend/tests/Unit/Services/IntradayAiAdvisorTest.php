@@ -51,7 +51,7 @@ class IntradayAiAdvisorTest extends TestCase
         $this->assertStringContainsString('## 任務（觀望中）— 依優先順序判斷', $this->source);
         // 4 個明確順序步驟
         $this->assertStringContainsString('### 1. 策略適配檢查', $this->source);
-        $this->assertStringContainsString('### 2. 進場觸發評估', $this->source);
+        $this->assertStringContainsString('### 2. 進場品質評估', $this->source);
         $this->assertStringContainsString('### 3. 是否該 skip', $this->source);
         $this->assertStringContainsString('只有 strategy_state=failed 才 skip', $this->source);
         $this->assertStringContainsString('都不是 failed；優先 hold 或 switched', $this->source);
@@ -134,5 +134,31 @@ class IntradayAiAdvisorTest extends TestCase
         $this->assertStringContainsString('最近 3 根 5 分 K', $this->source);
         // 任務指引：警示型措辭優先 wait
         $this->assertStringContainsString('優先 wait', $this->source);
+    }
+
+    public function test_rolling_prompt_separates_strategy_state_from_entry_quality(): void
+    {
+        $this->assertStringContainsString('策略狀態 ≠ 進場品質', $this->source);
+        $this->assertStringContainsString('switched 只代表原策略不適合但可改用新策略，不等於 entry', $this->source);
+        $this->assertStringContainsString('不可直接把「錯過」合理化成追高', $this->source);
+        $this->assertStringContainsString('entry_timing：good / early / late_chase / wait_pullback / no_trade', $this->source);
+        $this->assertStringContainsString('entry_quality：0-100', $this->source);
+        $this->assertStringContainsString('chase_risk：0-100', $this->source);
+    }
+
+    public function test_rolling_response_format_requires_entry_quality_fields(): void
+    {
+        $this->assertStringContainsString('"entry_timing": "wait_pullback"', $this->source);
+        $this->assertStringContainsString('"entry_quality": 45', $this->source);
+        $this->assertStringContainsString('"chase_risk": 70', $this->source);
+        $this->assertStringContainsString('entry_timing 必填 good/early/late_chase/wait_pullback/no_trade', $this->source);
+    }
+
+    public function test_entryConfirm_uses_rolling_entry_quality_context(): void
+    {
+        $this->assertStringContainsString('entry_timing 是 late_chase / wait_pullback', $this->source);
+        $this->assertStringContainsString('entry_quality 低、chase_risk 高', $this->source);
+        $this->assertStringContainsString('timing=%s quality=%s chase=%s', $this->source);
+        $this->assertStringContainsString('若最近 advice 顯示 entry_timing=late_chase/wait_pullback', $this->source);
     }
 }

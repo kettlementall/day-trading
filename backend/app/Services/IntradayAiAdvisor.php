@@ -335,6 +335,8 @@ class IntradayAiAdvisor
 ## 對稱成本提示
 - 誤進場成本（觸停損 -2~3% 實際虧損）> 誤延後成本（延後一輪 0%）
 - **疑似訊號優先 wait，明確失效再 skip，無警示才 go**
+- 若最近 rolling advice 的 entry_timing 是 late_chase / wait_pullback，或 entry_quality 低、chase_risk 高，除非當前 K 線已重新止穩或重新站穩，否則優先 wait
+- rolling advice 若已明確說「策略可切但進場品質不足」，不可只因規則層觸發就 go
 
 ## 回覆格式
 直接回 JSON，不要加 markdown：
@@ -368,10 +370,24 @@ SYSTEM;
         $recent = array_slice($log, -2);
         $adviceLines = [];
         foreach ($recent as $entry) {
+            $quality = '';
+            if (
+                array_key_exists('entry_timing', $entry)
+                || array_key_exists('entry_quality', $entry)
+                || array_key_exists('chase_risk', $entry)
+            ) {
+                $quality = sprintf(
+                    ' | timing=%s quality=%s chase=%s',
+                    $entry['entry_timing'] ?? '-',
+                    $entry['entry_quality'] ?? '-',
+                    $entry['chase_risk'] ?? '-'
+                );
+            }
             $adviceLines[] = sprintf(
-                '[%s] %s — %s',
+                '[%s] %s%s — %s',
                 $entry['time'] ?? '?',
                 $entry['action'] ?? '?',
+                $quality,
                 mb_substr($entry['notes'] ?? '', 0, 100)
             );
         }
@@ -406,6 +422,7 @@ SYSTEM;
 ## 任務
 依「最近 rolling advice 措辭 + 當前 K 線結構」回覆 go / wait / skip。
 若最近 advice 含警示性語言（「謹慎」「不宜」「等止穩」等），優先 wait。
+若最近 advice 顯示 entry_timing=late_chase/wait_pullback、entry_quality 低或 chase_risk 高，除非最近 3 根 5 分 K 已重新止穩或重新站穩，否則優先 wait。
 MSG;
     }
 
@@ -694,6 +711,27 @@ PROMPT;
 skip 只用在 strategy_state=failed。failed 代表沒有可切換策略，且量價、外盤、支撐或上方報酬空間已明確破壞。
 gap_reversal 是超跌反彈策略，不適用一般 momentum 的跌幅失敗判準；重點看缺口、量能與接手。
 
+## 策略狀態 ≠ 進場品質
+strategy_state 只判斷「這檔是否仍有可交易框架」，不代表現在就是好買點。
+
+- switched 只代表原策略不適合但可改用新策略，不等於 entry
+- 若可切 momentum / breakout，但當前價位已是急拉後高檔、靠近日高、停損點太遠或上方空間不足，應 hold 等回測，不要追價
+- 若原低接/回測買點已錯過，不可直接把「錯過」合理化成追高；要明確評估 entry_timing 與 chase_risk
+- entry 只在策略成立且當前進場品質足夠時使用；策略可切但進場品質不足時，action 應為 hold，notes 說明等待條件
+
+## 進場品質自評
+每次回覆都要給：
+
+- entry_timing：good / early / late_chase / wait_pullback / no_trade
+- entry_quality：0-100，現在進場的品質分數；越高代表位置、風險報酬、停損點越合理
+- chase_risk：0-100，追價風險；越高代表越像急拉後追高或錯過買點後硬追
+
+判斷原則：
+- good：策略成立，仍有清楚上方空間，停損點可執行，並非急拉後高檔
+- late_chase：策略可能成立，但現在像追價；通常應 hold
+- wait_pullback：策略仍可交易，但需要回測、止穩或重新站穩再說
+- no_trade：沒有合理交易框架，但只有 strategy_state=failed 時才搭配 skip
+
 ## 時間規則
 - 當沖部位必須在 13:30 收盤前平倉
 - 距收盤 ≤ 30 分鐘（尾盤）：不建議新進場；持有中應積極決斷，傾向出場而非繼續觀望
@@ -835,22 +873,24 @@ TASK;
 - strategy_issue 要寫清楚是「策略型態切換」、「資料不足」還是「結構性失敗」
 
 若價格已經走過原本低接/回測區，不可只因「沒到原買點」就 skip；要判斷是否變成 momentum / breakout_fresh / breakout_retest。
+但策略可切換不代表可以立刻進場；若新策略成立但目前位置偏追高，應 hold 並等待回測、止穩或重新站穩確認。
 
 策略切換對照表（只列「原策略失效，改用其他策略」場景；若原策略仍生效，無需切換）：
 
 | 盤中觀察到 | 切換為 |
 |---|---|
-| 開盤跳空已超壓力位且不回頭（gap_pullback / breakout_retest 永不觸發） | momentum |
+| 開盤跳空已超壓力位且不回頭（gap_pullback / breakout_retest 永不觸發） | 可切 momentum，但仍需判斷進場品質 |
 | 突破壓力後回測支撐附近止穩（原 momentum / breakout_fresh 已過時點） | breakout_retest |
 | 突破失敗破支撐後在更低支撐反彈（原突破型策略失效） | bounce |
 | 超跌反彈日跳空缺口不回補 + 量能放大（原一般策略不適用） | gap_reversal |
 | 連續跌破多個支撐 + 量縮無撐 | failed（skip，不切換） |
 
-### 2. 進場觸發評估
-策略條件是否成立？
-- 已成立 → entry
-- 接近但未成立 → hold + 視需要 adjustments 更新 target/stop
-- 否則進入步驟 3
+### 2. 進場品質評估（strategy_state 之後必做）
+策略條件是否成立，不等於現在可以買。請先輸出 entry_timing / entry_quality / chase_risk：
+- 策略成立 + 進場品質足夠 → entry_timing=good，可 entry
+- 策略成立但像追高、靠近日高、停損太遠、上方空間不足 → entry_timing=late_chase，action=hold
+- 策略仍可交易但需要回測或止穩 → entry_timing=wait_pullback，action=hold + 視需要 adjustments 更新 target/stop
+- 策略未明 → entry_timing=early 或 no_trade，action=hold
 
 ### 3. 是否該 skip
 只有 strategy_state=failed 才 skip。
@@ -879,10 +919,24 @@ TASK;
             $recent = array_slice($log, -3);
             $historyLines = [];
             foreach ($recent as $entry) {
+                $quality = '';
+                if (
+                    array_key_exists('entry_timing', $entry)
+                    || array_key_exists('entry_quality', $entry)
+                    || array_key_exists('chase_risk', $entry)
+                ) {
+                    $quality = sprintf(
+                        ' | timing=%s quality=%s chase=%s',
+                        $entry['entry_timing'] ?? '-',
+                        $entry['entry_quality'] ?? '-',
+                        $entry['chase_risk'] ?? '-'
+                    );
+                }
                 $historyLines[] = sprintf(
-                    "[%s] %s — %s",
+                    "[%s] %s%s — %s",
                     $entry['time'] ?? '?',
                     $entry['action'] ?? '?',
+                    $quality,
                     mb_substr($entry['notes'] ?? '', 0, 120)
                 );
             }
@@ -910,6 +964,9 @@ TASK;
   "strategy_state": "valid",
   "strategy_valid": true,
   "strategy_issue": null,
+  "entry_timing": "wait_pullback",
+  "entry_quality": 45,
+  "chase_risk": 70,
   "notes": "量能從 2.1x 降至 1.6x，支撐有效，繼續持有",
   "strategy": null,
   "adjustments": {
@@ -920,6 +977,7 @@ TASK;
 adjustments.target = 新目標價（壓力位），adjustments.stop = 新停損價（支撐位），不調整則為 null。
 strategy 欄位在需要切換策略時填寫（觀望中或持有中皆可），不切換則為 null。
 strategy_state 優先使用 valid/switched/uncertain/failed；strategy_valid 為向下相容欄位；strategy_issue 說明策略切換、資料不足或結構失效原因，沒有則為 null。
+entry_timing 必填 good/early/late_chase/wait_pullback/no_trade；entry_quality 與 chase_risk 必填 0-100。
 MSG;
     }
 
