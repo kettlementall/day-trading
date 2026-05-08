@@ -99,6 +99,7 @@ class MonitorService
                 $monitor->update([
                     'current_target' => $calTarget,
                     'current_stop' => $calStop,
+                    'skip_reason' => null,
                     'ai_calibration' => $cal,
                 ]);
 

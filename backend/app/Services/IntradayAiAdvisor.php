@@ -17,12 +17,18 @@ class IntradayAiAdvisor
     private string $apiKey;
     private string $model;
     private string $entryConfirmModel;
+    private int $calibrationBatchSize;
+    private int $calibrationTimeout;
+    private int $calibrationMaxTokens;
 
     public function __construct()
     {
         $this->apiKey = config('services.anthropic.api_key', '');
         $this->model = config('services.anthropic.intraday_model', 'claude-sonnet-4-6');
         $this->entryConfirmModel = config('services.anthropic.entry_confirm_model', 'claude-haiku-4-5-20251001');
+        $this->calibrationBatchSize = max(1, (int) config('services.anthropic.intraday_calibration_batch_size', 6));
+        $this->calibrationTimeout = max(15, (int) config('services.anthropic.intraday_calibration_timeout', 75));
+        $this->calibrationMaxTokens = max(1024, (int) config('services.anthropic.intraday_calibration_max_tokens', 4096));
     }
 
     /**
@@ -41,10 +47,27 @@ class IntradayAiAdvisor
             return $this->fallbackCalibration($candidates, $snapshots);
         }
 
+        $results = [];
+
+        foreach ($candidates->values()->chunk($this->calibrationBatchSize) as $batch) {
+            $stockIds = $batch->pluck('stock_id');
+            $batchSnapshots = $snapshots->whereIn('stock_id', $stockIds);
+            $batchResults = $this->requestCalibrationBatch($date, $batch, $batchSnapshots);
+
+            foreach ($batchResults as $symbol => $calibration) {
+                $results[$symbol] = $calibration;
+            }
+        }
+
+        return $results;
+    }
+
+    private function requestCalibrationBatch(string $date, Collection $candidates, Collection $snapshots): array
+    {
         $prompt = $this->buildCalibrationPrompt($date, $candidates, $snapshots);
 
         try {
-            $response = Http::timeout(120)
+            $response = Http::timeout($this->calibrationTimeout)
                 ->withHeaders([
                     'x-api-key' => $this->apiKey,
                     'anthropic-version' => '2023-06-01',
@@ -52,7 +75,7 @@ class IntradayAiAdvisor
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
-                    'max_tokens' => 16384,
+                    'max_tokens' => $this->calibrationMaxTokens,
                     'messages' => [
                         ['role' => 'user', 'content' => $prompt],
                     ],
@@ -76,6 +99,16 @@ class IntradayAiAdvisor
                 if (isset($item['symbol'])) {
                     $map[$item['symbol']] = $item;
                 }
+            }
+
+            $missing = $candidates
+                ->reject(fn($candidate) => isset($map[$candidate->stock->symbol]));
+
+            if ($missing->isNotEmpty()) {
+                Log::warning('IntradayAiAdvisor calibration: 部分標的缺少回應，缺漏標的使用 fallback', [
+                    'symbols' => $missing->map(fn($candidate) => $candidate->stock->symbol)->values()->all(),
+                ]);
+                $map += $this->fallbackCalibration($missing, $snapshots);
             }
 
             return $map;
