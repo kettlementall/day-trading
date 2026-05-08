@@ -81,14 +81,14 @@ class FetchDailyQuotes extends Command
                 $symbol = trim($row[0]);
                 $name = trim($row[1]);
 
-                // 跳過非一般股票
-                if (!preg_match('/^\d{4}$/', $symbol)) {
+                // 保留 ETF/特別股等含字母代號，供即時報價頁日 K 使用；選股池仍只開給 4 碼普通股。
+                if (!preg_match('/^\d{4,6}[A-Z]?$/', $symbol)) {
                     continue;
                 }
 
                 $stock = Stock::firstOrCreate(
                     ['symbol' => $symbol],
-                    ['name' => $name, 'market' => 'twse', 'is_day_trading' => true]
+                    ['name' => $name, 'market' => 'twse', 'is_day_trading' => preg_match('/^\d{4}$/', $symbol) === 1]
                 );
 
                 $close = $this->parseNumber($row[8]);
@@ -166,13 +166,13 @@ class FetchDailyQuotes extends Command
                 $symbol = trim($row[0]);
                 $name = trim($row[1]);
 
-                if (!preg_match('/^\d{4}$/', $symbol)) {
+                if (!preg_match('/^\d{4,6}[A-Z]?$/', $symbol)) {
                     continue;
                 }
 
                 $stock = Stock::firstOrCreate(
                     ['symbol' => $symbol],
-                    ['name' => $name, 'market' => 'tpex', 'is_day_trading' => true]
+                    ['name' => $name, 'market' => 'tpex', 'is_day_trading' => preg_match('/^\d{4}$/', $symbol) === 1]
                 );
 
                 $close = $this->parseNumber($row[2]);

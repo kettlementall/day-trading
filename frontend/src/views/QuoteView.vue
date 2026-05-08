@@ -289,10 +289,10 @@ function quickSearch(symbol) {
 
 async function handleSuggest(query, cb) {
   if (!query || query.trim().length < 1) return cb([])
-  // 純數字直接不查（直接 enter 查詢即可）
-  if (/^\d+$/.test(query.trim())) return cb([])
+  // 明確的股票/ETF 代號直接不查（直接 enter 查詢即可）
+  if (isSymbolLike(query.trim())) return cb([])
   try {
-    const { data } = await searchQuote(query.trim())
+    const { data } = await searchQuote(query.trim().toUpperCase())
     cb(data.map(s => ({ ...s, label: `${s.symbol} ${s.name}`, value: s.symbol })))
   } catch {
     cb([])
@@ -313,14 +313,15 @@ onMounted(() => {
 })
 
 async function fetchQuote() {
-  let sym = symbolInput.value.trim()
+  const rawInput = symbolInput.value.trim()
+  let sym = extractSymbol(rawInput) || rawInput.toUpperCase()
   if (!sym) return
   loading.value = true
   searched.value = true
   rateLimited.value = false
   try {
-    // 非純數字 → 先搜尋名稱，取第一筆結果的代號
-    if (!/^\d{4,6}$/.test(sym)) {
+    // 非明確代號 → 先搜尋名稱，取第一筆結果的代號
+    if (!isSymbolLike(sym)) {
       const { data: results } = await searchQuote(sym)
       if (results.length === 0) {
         quote.value = null
@@ -339,6 +340,14 @@ async function fetchQuote() {
   } finally {
     loading.value = false
   }
+}
+
+function isSymbolLike(value) {
+  return /^\d{4,6}[A-Z]?$/.test(value.trim().toUpperCase())
+}
+
+function extractSymbol(value) {
+  return value.trim().toUpperCase().match(/^(\d{4,6}[A-Z]?)(?:\s|$)/)?.[1] || ''
 }
 
 async function doAnalyze() {

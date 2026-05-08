@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Http;
 class QuoteController extends Controller
 {
     private const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
+    private const SYMBOL_PATTERN = '/^\d{4,6}[A-Z]?$/';
 
     public function __construct(private FugleRealtimeClient $fugle)
     {
@@ -25,7 +26,7 @@ class QuoteController extends Controller
      */
     public function search(): JsonResponse
     {
-        $q = trim(request('q', ''));
+        $q = strtoupper(trim(request('q', '')));
         if (mb_strlen($q) < 1) {
             return response()->json([]);
         }
@@ -43,7 +44,8 @@ class QuoteController extends Controller
 
     public function show(string $symbol): JsonResponse
     {
-        if (!preg_match('/^\d{4,6}$/', $symbol)) {
+        $symbol = $this->normalizeSymbol($symbol);
+        if (!$this->isValidSymbol($symbol)) {
             return response()->json(['error' => '無效代號'], 422);
         }
 
@@ -271,6 +273,8 @@ class QuoteController extends Controller
      */
     public function analyze(string $symbol): JsonResponse
     {
+        $symbol = $this->normalizeSymbol($symbol);
+
         $cost = (float) request('cost');
         if ($cost <= 0) {
             return response()->json(['error' => '請輸入有效的成本價'], 422);
@@ -282,7 +286,7 @@ class QuoteController extends Controller
             $direction = 'long';
         }
 
-        if (!preg_match('/^\d{4,6}$/', $symbol)) {
+        if (!$this->isValidSymbol($symbol)) {
             return response()->json(['error' => '無效代號'], 422);
         }
 
@@ -539,6 +543,16 @@ PROMPT;
             'current' => $close,
             'cost'    => $cost,
         ]);
+    }
+
+    private function normalizeSymbol(string $symbol): string
+    {
+        return strtoupper(trim($symbol));
+    }
+
+    private function isValidSymbol(string $symbol): bool
+    {
+        return preg_match(self::SYMBOL_PATTERN, $symbol) === 1;
     }
 
     /**

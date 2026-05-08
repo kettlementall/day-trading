@@ -226,8 +226,8 @@ class FugleRealtimeClient
 
             $data = $response->json()['data'] ?? [];
 
-            // API 回傳由新到舊，取最近 N 筆
-            return array_slice(array_map(fn($c) => [
+            // API 回傳由新到舊；取最近 N 筆後轉成舊到新，讓 K 線圖時間軸正常。
+            $candles = array_slice(array_map(fn($c) => [
                 'date'           => $c['date'] ?? '',
                 'open'           => (float) ($c['open'] ?? 0),
                 'high'           => (float) ($c['high'] ?? 0),
@@ -238,6 +238,8 @@ class FugleRealtimeClient
                     ? round(($c['change']) / ($c['close'] - $c['change']) * 100, 2)
                     : 0,
             ], $data), 0, $days);
+
+            return array_reverse($candles);
         } catch (\Exception $e) {
             Log::error("Fugle historical [{$symbol}]: " . $e->getMessage());
             return [];
