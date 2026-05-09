@@ -15,9 +15,16 @@ class SwingController extends Controller
     {
         $date = $request->get('date', now()->toDateString());
 
-        $candidates = Candidate::with('stock')
+        $query = Candidate::with('stock')
             ->where('trade_date', $date)
-            ->where('mode', 'swing')
+            ->where('mode', 'swing');
+
+        // viewer 只看 AI 選中的標的（不顯示被排除的卡片）
+        if (! $request->user()?->isAdmin()) {
+            $query->where('ai_selected', true);
+        }
+
+        $candidates = $query
             ->orderByDesc('ai_selected')
             ->orderByDesc('score')
             ->get();
