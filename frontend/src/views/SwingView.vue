@@ -60,6 +60,7 @@
               <el-tag size="small" :type="positionTag(p.status)" effect="light" round>
                 {{ statusLabel(p.status) }}
               </el-tag>
+              <button class="quote-btn" title="即時報價" @click.stop="goQuote(p)">💹</button>
             </div>
             <div class="pnl" :class="p.unrealized_profit_percent >= 0 ? 'price-up' : 'price-down'">
               {{ signed(p.unrealized_profit_percent) }}%
@@ -169,6 +170,7 @@
               <span class="symbol">{{ c.stock.symbol }}</span>
               <span class="stock-name">{{ c.stock.name }}</span>
               <span v-if="c.stock.industry" class="industry-tag">{{ c.stock.industry }}</span>
+              <button class="quote-btn" title="即時報價" @click.stop="goQuote(c)">💹</button>
             </div>
             <div class="score-badge" :class="{ 'is-dim': !c.ai_selected }">
               <div class="score-num">{{ c.score }}</div>
@@ -308,6 +310,7 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -327,6 +330,12 @@ function lastWeekday() {
   return d.format('YYYY-MM-DD')
 }
 const currentDate = ref(lastWeekday())
+const router = useRouter()
+
+function goQuote(item) {
+  if (!item?.stock?.symbol) return
+  router.push({ path: '/quote', query: { symbol: item.stock.symbol } })
+}
 const loading = ref(false)
 const saving = ref(false)
 const candidates = ref([])
@@ -710,6 +719,22 @@ function isActiveStatus(status) {
   padding: 1px 6px;
   border: 1px solid var(--c-border);
   border-radius: var(--r-pill);
+}
+
+.quote-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.quote-btn:hover {
+  opacity: 1;
+  transform: scale(1.1);
 }
 
 /* PnL */
