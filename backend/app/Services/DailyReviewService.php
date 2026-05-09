@@ -168,20 +168,39 @@ class DailyReviewService
 
     private function buildOvernightReviewPrompt(string $date, $candidates, array $klineData): string
     {
-        $lines = ["symbol\tname\tind\tai_selected\tentry_type\thaiku_reason\thaiku_conf\tbuy\ttarget\tstop\trr\tgap_potential%\topen\thigh\tlow\tclose\topen_gap%\tgap_ok?\toutcome\tprofit%"];
+        $lines = ["symbol\tname\tind\tai_selected\tentry_type\thaiku_reason\thaiku_conf\tbuy\tplan_target\tplan_stop\tfinal_target\tfinal_stop\trr\tgap_potential%\topen\thigh\tlow\tclose\topen_gap%\tgap_ok?\ttheoretical_outcome\ttheoretical_profit%\tmonitor_status\tmonitor_entry\tmonitor_exit\tmonitor_profit%\tmonitor_note"];
 
         foreach ($candidates as $c) {
             $r = $c->result;
+            $m = $c->monitor;
             $suggestedBuy = (float) $c->suggested_buy;
+            $planTarget = (float) $c->target_price;
+            $planStop = (float) $c->stop_loss;
+            $finalTarget = $m && $m->current_target ? (float) $m->current_target : $planTarget;
+            $finalStop = $m && $m->current_stop ? (float) $m->current_stop : $planStop;
 
-            $profit = '-';
+            $theoreticalProfit = '-';
             if ($r && $suggestedBuy > 0) {
                 if ($r->hit_target) {
-                    $profit = round(((float) $c->target_price - $suggestedBuy) / $suggestedBuy * 100, 2);
+                    $theoreticalProfit = round(($planTarget - $suggestedBuy) / $suggestedBuy * 100, 2);
                 } elseif ($r->hit_stop_loss) {
-                    $profit = round(-($suggestedBuy - (float) $c->stop_loss) / $suggestedBuy * 100, 2);
+                    $theoreticalProfit = round(($planStop - $suggestedBuy) / $suggestedBuy * 100, 2);
                 } elseif ($r->actual_close) {
-                    $profit = round(((float) $r->actual_close - $suggestedBuy) / $suggestedBuy * 100, 2);
+                    $theoreticalProfit = round(((float) $r->actual_close - $suggestedBuy) / $suggestedBuy * 100, 2);
+                }
+            }
+
+            $monitorProfit = '-';
+            if ($m && $m->exit_price && $suggestedBuy > 0) {
+                $monitorProfit = round(((float) $m->exit_price - $suggestedBuy) / $suggestedBuy * 100, 2);
+            }
+
+            $monitorNote = '-';
+            if ($m && $r) {
+                $theoreticalStatus = $r->hit_target ? 'target' : ($r->hit_stop_loss ? 'stop' : ($r->overnight_outcome ?? '-'));
+                $monitorStatus = $m->status ?? '-';
+                if ($monitorStatus !== '-' && $theoreticalStatus !== '-' && !str_contains($monitorStatus, $theoreticalStatus)) {
+                    $monitorNote = "monitor={$monitorStatus}; theoretical={$theoreticalStatus}; compare separately";
                 }
             }
 
@@ -194,8 +213,10 @@ class DailyReviewService
                 $c->haiku_reasoning ?? '-',
                 $c->score ?? 0,
                 $suggestedBuy,
-                (float) $c->target_price,
-                (float) $c->stop_loss,
+                $planTarget,
+                $planStop,
+                $finalTarget,
+                $finalStop,
                 (float) $c->risk_reward_ratio,
                 (float) $c->gap_potential_percent,
                 $r ? (float) $r->actual_open : '-',
@@ -205,7 +226,12 @@ class DailyReviewService
                 $r ? (float) $r->open_gap_percent : '-',
                 $r ? ($r->gap_predicted_correctly ? 'Y' : 'N') : '-',
                 $r ? ($r->overnight_outcome ?? '-') : '-',
-                $profit,
+                $theoreticalProfit,
+                $m ? ($m->status ?? '-') : '-',
+                $m ? ($m->entry_price ?? '-') : '-',
+                $m ? ($m->exit_price ?? '-') : '-',
+                $monitorProfit,
+                $monitorNote,
             ]);
         }
         $candidatesTsv = implode("\n", $lines);
@@ -236,7 +262,7 @@ class DailyReviewService
             ->get();
 
         if ($monitors->isNotEmpty()) {
-            $monitorLines = ["symbol\tstatus\tentry_price\tentry_time\texit_price\texit_time\ttarget\tstop\tstrategy_state\tstrategy_issue\tai_notes"];
+            $monitorLines = ["symbol\tmonitor_status\tmonitor_entry\tentry_time\tmonitor_exit\texit_time\tfinal_target\tfinal_stop\tplanned_target\tplanned_stop\texit_basis\tstrategy_state\tstrategy_issue\tai_notes"];
             foreach ($monitors as $m) {
                 $c = $m->candidate;
                 $adviceLog = collect($m->ai_advice_log ?? []);
@@ -249,6 +275,12 @@ class DailyReviewService
                     ->pluck('strategy_issue')
                     ->filter()
                     ->implode(' → ');
+                $exitBasis = match ($m->status) {
+                    CandidateMonitor::STATUS_TARGET_HIT => 'final_target',
+                    CandidateMonitor::STATUS_STOP_HIT => 'final_stop_or_gap_open',
+                    CandidateMonitor::STATUS_CLOSED => 'ai_or_force_close',
+                    default => '-',
+                };
 
                 $monitorLines[] = implode("\t", [
                     $c->stock->symbol,
@@ -259,6 +291,9 @@ class DailyReviewService
                     $m->exit_time?->format('H:i') ?? '-',
                     $m->current_target ?? '-',
                     $m->current_stop ?? '-',
+                    $c->target_price ?? '-',
+                    $c->stop_loss ?? '-',
+                    $exitBasis,
                     mb_substr($stateTrail ?: '-', 0, 60),
                     mb_substr($issueTrail ?: '-', 0, 80),
                     mb_substr($lastAdvice, 0, 80),
@@ -271,7 +306,7 @@ class DailyReviewService
 {$monitorTsv}
 
 ### 欄位說明
-status=最終狀態(target_hit/stop_hit/trailing_stop/closed/holding), entry/exit=進出場價與時間, target/stop=最終目標與停損（可能經 AI 調整）, strategy_state=AI 對持倉策略狀態的判斷軌跡, strategy_issue=策略狀態理由, ai_notes=AI 滾動建議摘要
+monitor_status=監控最終狀態(target_hit/stop_hit/trailing_stop/closed/holding), monitor_entry/monitor_exit=監控記錄的進出場價, final_target/final_stop=監控最後使用的目標/停損（可能經 AI 調整）, planned_target/planned_stop=原始計畫目標/停損, exit_basis=monitor_exit 的價格依據, strategy_state=AI 對持倉策略狀態的判斷軌跡, strategy_issue=策略狀態理由, ai_notes=AI 滾動建議摘要
 MONITOR;
         }
 
@@ -293,11 +328,18 @@ MONITOR;
 4. 進場策略（entry_type）與實際開盤表現的匹配度
 5. 找出共通的成功/失敗模式
 
+## 重要：理論盤後結果與監控結果必須分開解讀
+- theoretical_outcome/theoretical_profit% 來自 T+1 日 K 與原始 planned buy/target/stop，用於評估選股與原始價格設定。
+- monitor_status/monitor_exit/monitor_profit% 來自盤中監控系統，可能使用 final_target/final_stop（AI 調整後價格），用於評估監控執行。
+- monitor_status=target_hit 不代表原始 planned_target 達標；必須同時看 monitor_exit、final_target、planned_target。
+- result outcome 與 monitor_status 若不一致，不可說成資料錯誤；請明確寫成「理論盤後結果」與「監控執行結果」差異。
+- 若 monitor_entry 為空，代表監控未記錄實際買入成交價；monitor_profit% 是以 suggested_buy 推估，請勿描述為真實成交報酬。
+
 ## 候選標的明細
 {$candidatesTsv}
 
 ### 欄位說明
-symbol=股票代號, name=名稱, ind=產業, ai_selected=AI最終選入(Y/N), entry_type=進場策略(gap_up_open/pullback_entry/open_follow_through/limit_up_chase), haiku_conf=Haiku信度, buy/target/stop=建議價, rr=風報比, gap_potential%=預測跳空幅度, open/high/low/close=實際T+1 OHLC, open_gap%=實際開盤跳空%, gap_ok?=跳空方向預測正確(Y/N), outcome=最終結果, profit%=報酬率
+symbol=股票代號, name=名稱, ind=產業, ai_selected=AI最終選入(Y/N), entry_type=進場策略(gap_up_open/pullback_entry/open_follow_through/limit_up_chase), haiku_conf=Haiku信度, buy=建議買入價, plan_target/plan_stop=原始計畫目標/停損, final_target/final_stop=監控最後使用目標/停損, rr=風報比, gap_potential%=預測跳空幅度, open/high/low/close=實際T+1 OHLC, open_gap%=實際開盤跳空%, gap_ok?=跳空方向預測正確(Y/N), theoretical_outcome/theoretical_profit%=依日K與原始計畫價格計算的理論結果, monitor_status/monitor_entry/monitor_exit/monitor_profit%=盤中監控結果, monitor_note=理論與監控差異提示
 
 ## 近 5 日 K 線（含今日）
 {$klineTsv}
@@ -311,13 +353,14 @@ symbol=股票代號, name=名稱, ind=產業, ai_selected=AI最終選入(Y/N), e
 - AI 選入標的：成功率、平均報酬率、跳空預測準確率
 - AI 排除標的：假如也進場的成功率（驗證排除決策品質）
 - 整體策略有效性評估
+- 請分開列「理論盤後結果」與「監控執行結果」，不要混用 hit_target/hit_stop 與 monitor_status
 
 ### 二、AI 選入標的逐檔分析
 針對 ai_selected=Y 的標的，逐檔詳細分析：
 - 選股邏輯是否合理（為何前一日選擇建倉？）
 - 明日實際走勢是否符合預期？
 - 三個價格設定（買入/目標/停損）是否合理？
-- 監控系統的進出場決策是否恰當？
+- 監控系統的進出場決策是否恰當？請同時比較 planned_target/planned_stop 與 final_target/final_stop，若 monitor_status 與 theoretical_outcome 不一致，需明確說明差異來源
 
 ### 三、排除決策檢討
 挑出被排除但事後表現好的標的（最多 5 檔），分析：

@@ -257,6 +257,9 @@ class QuoteController extends Controller
             300,
             fn() => $this->fugle->fetchDailyCandles($symbol, 30)
         );
+
+        usort($fugleDaily, fn($a, $b) => strcmp((string) ($a['date'] ?? ''), (string) ($b['date'] ?? '')));
+
         return array_map(fn($c) => [
             'date'   => \Carbon\Carbon::parse($c['date'])->format('m/d'),
             'open'   => $c['open'],
