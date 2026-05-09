@@ -26,6 +26,7 @@
         :class="{ 'us-index-highlight': idx.symbol === 'TX' }"
       >
         <span class="us-index-name">{{ idx.name }}</span>
+        <span v-if="isVix(idx)" class="us-index-close">{{ formatIndexClose(idx) }}</span>
         <span :class="idx.change_percent >= 0 ? 'price-up' : 'price-down'">
           {{ idx.change_percent >= 0 ? '+' : '' }}{{ idx.change_percent }}%
         </span>
@@ -507,6 +508,16 @@ function formatTime(dt) {
   return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`
 }
 
+function isVix(idx) {
+  return idx?.symbol === '^VIX'
+}
+
+function formatIndexClose(idx) {
+  const close = Number(idx?.close)
+  if (!Number.isFinite(close)) return '-'
+  return close.toFixed(2)
+}
+
 function scoreType(score) {
   if (score >= 65) return 'success'
   if (score >= 40) return 'warning'
@@ -618,6 +629,11 @@ function gradeLabel(grade) {
 
 .us-index-name {
   color: #909399;
+}
+
+.us-index-close {
+  color: #303133;
+  font-weight: 600;
 }
 
 .us-index-highlight {

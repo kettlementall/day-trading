@@ -40,6 +40,11 @@ class UsMarketIndex extends Model
 
         $otherLines = $others->map(function ($i) {
             $sign = $i->change_percent >= 0 ? '+' : '';
+
+            if ($i->symbol === '^VIX') {
+                return "{$i->name} {$i->close} ({$sign}{$i->change_percent}%，波動風險參考；上升代表市場避險需求升溫)";
+            }
+
             return "{$i->name} {$sign}{$i->change_percent}%";
         });
 

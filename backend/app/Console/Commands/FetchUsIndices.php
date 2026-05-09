@@ -19,6 +19,7 @@ class FetchUsIndices extends Command
         '^DJI'     => '道瓊',
         '^IXIC'    => '那斯達克',
         'DX-Y.NYB' => '美元指數',
+        '^VIX'     => 'VIX',
     ];
 
     public function handle(): int
