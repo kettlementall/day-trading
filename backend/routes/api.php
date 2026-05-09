@@ -5,11 +5,13 @@ use App\Http\Controllers\Api\BacktestController;
 use App\Http\Controllers\Api\CandidateController;
 use App\Http\Controllers\Api\DataSyncController;
 use App\Http\Controllers\Api\FormulaSettingController;
+use App\Http\Controllers\Api\InvestmentThesisController;
 use App\Http\Controllers\Api\NewsController;
 use App\Http\Controllers\Api\PinController;
 use App\Http\Controllers\Api\ScreeningRuleController;
 use App\Http\Controllers\Api\StockController;
 use App\Http\Controllers\Api\QuoteController;
+use App\Http\Controllers\Api\SwingController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -60,6 +62,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // 消息面（viewer + admin 可看）
     Route::get('/news/dashboard', [NewsController::class, 'dashboard']);
 
+    // 短線配置（viewer + admin）
+    Route::get('/swing/candidates', [SwingController::class, 'candidates']);
+    Route::get('/swing/positions', [SwingController::class, 'positions']);
+    Route::post('/swing/positions', [SwingController::class, 'storePosition']);
+    Route::patch('/swing/positions/{position}', [SwingController::class, 'updatePosition']);
+    Route::post('/swing/sizing', [SwingController::class, 'sizing']);
+
     // ── Admin only ───────────────────────────────────────────────────────────
     Route::middleware('admin')->group(function () {
 
@@ -87,6 +96,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // 篩選規則
         Route::apiResource('screening-rules', ScreeningRuleController::class);
+
+        // AI 產業論點
+        Route::get('/investment-theses', [InvestmentThesisController::class, 'index']);
+        Route::patch('/investment-theses/{investmentThesis}', [InvestmentThesisController::class, 'update']);
+        Route::post('/investment-theses/{investmentThesis}/disable', [InvestmentThesisController::class, 'disable']);
+        Route::post('/investment-theses/{investmentThesis}/enable', [InvestmentThesisController::class, 'enable']);
 
         // 系統規格
         Route::get('/spec', function () {

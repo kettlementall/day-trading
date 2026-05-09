@@ -17,8 +17,8 @@ class DailyReviewCommand extends Command
         $mode = $this->option('mode');
         $date = $this->argument('date') ?? now()->format('Y-m-d');
 
-        if (!in_array($mode, ['intraday', 'overnight'])) {
-            $this->error("--mode 必須為 intraday 或 overnight");
+        if (!in_array($mode, ['intraday', 'overnight', 'swing'])) {
+            $this->error("--mode 必須為 intraday、overnight 或 swing");
             return 1;
         }
 

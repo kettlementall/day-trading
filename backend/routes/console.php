@@ -72,6 +72,14 @@ scheduledCommand('news:compute-indices', '新聞指數(12:15)', selfNotify: true
 scheduledCommand('news:fetch', '新聞抓取(18:00)', selfNotify: true)->dailyAt('18:00');
 scheduledCommand('news:compute-indices', '新聞指數(18:15)', selfNotify: true)->dailyAt('18:15');
 
+// 短線配置：盤後研究論點 → 更新既有持倉 → 產生新候選
+scheduledCommand('stock:research-investment-theses', 'AI 產業論點研究', selfNotify: true)
+    ->dailyAt('18:25')->weekdays();
+scheduledCommand('stock:update-swing-positions', '短線持倉更新', selfNotify: true)
+    ->dailyAt('18:30')->weekdays();
+scheduledCommand('stock:ai-screen-swing', '短線 AI 選股', selfNotify: true)
+    ->dailyAt('19:00')->weekdays();
+
 // 腿 2：盤中動態加入（4+1 軸聯集 → Fugle 即時報價 → 4 條規則 → Haiku 快評 → 寫入 candidates）
 // 09:35 觸發 = 09:30 5 分 K 收後 5 分鐘，足夠抓老師 09:37 報的明牌
 scheduledCommand('stock:scan-intraday-movers', '盤中加入(09:35)', selfNotify: true)
@@ -124,6 +132,9 @@ scheduledCommand('stock:update-overnight-results', '隔日沖結果回填')
 // 15:35 隔日沖 AI 檢討報告（依賴 15:05 結果回填）
 scheduledCommand('stock:daily-review --mode=overnight', '隔日沖 AI 檢討')
     ->dailyAt('15:35')->weekdays();
+
+scheduledCommand('stock:daily-review --mode=swing', '短線 AI 檢討')
+    ->dailyAt('19:30')->weekdays();
 
 // 每週五 16:00 從整週檢討報告萃取通用教訓（依賴 15:30/15:35 檢討完成）
 scheduledCommand('stock:extract-weekly-lessons', '週教訓萃取')

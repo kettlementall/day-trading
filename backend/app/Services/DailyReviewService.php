@@ -10,6 +10,7 @@ use App\Models\DailyReview;
 use App\Models\IntradayQuote;
 use App\Models\NewsIndex;
 use App\Models\Stock;
+use App\Models\SwingPosition;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -31,6 +32,9 @@ class DailyReviewService
     {
         if ($mode === 'overnight') {
             return $this->reviewOvernight($date, $logger, $onChunk);
+        }
+        if ($mode === 'swing') {
+            return $this->reviewSwing($date, $logger, $onChunk);
         }
 
         $log = $logger ?? function (string $msg) { Log::info($msg); };
@@ -163,6 +167,82 @@ class DailyReviewService
             'mode'             => 'overnight',
             'candidates_count' => $candidates->count(),
             'report'           => $report,
+        ];
+    }
+
+    private function reviewSwing(string $date, ?\Closure $logger = null, ?\Closure $onChunk = null): array
+    {
+        $log = $logger ?? function (string $msg) { Log::info($msg); };
+        $log("開始分析 {$date} 的短線候選與持倉...");
+
+        $candidates = Candidate::with('stock')
+            ->where('trade_date', $date)
+            ->where('mode', 'swing')
+            ->orderByDesc('score')
+            ->get();
+
+        $positions = SwingPosition::with(['stock', 'candidate', 'snapshots' => fn ($q) => $q->orderByDesc('date')->limit(5)])
+            ->whereIn('status', SwingPosition::ACTIVE_STATUSES)
+            ->get();
+
+        if ($candidates->isEmpty() && $positions->isEmpty()) {
+            return ['error' => "無 {$date} 的短線候選或持倉資料"];
+        }
+
+        $candidateLines = $candidates->map(fn ($c) => implode("\t", [
+            $c->stock->symbol,
+            $c->stock->name,
+            $c->stock->industry,
+            $c->ai_selected ? 'Y' : 'N',
+            $c->score,
+            $c->swing_strategy ?? '-',
+            $c->suggested_buy,
+            $c->target_price,
+            $c->stop_loss,
+            $c->swing_thesis['title'] ?? '-',
+            mb_substr($c->swing_reasoning ?? '-', 0, 120),
+        ]))->implode("\n");
+
+        $positionLines = $positions->map(fn ($p) => implode("\t", [
+            $p->stock->symbol,
+            $p->stock->name,
+            $p->status,
+            $p->entry_price,
+            $p->shares,
+            $p->current_target,
+            $p->current_stop,
+            $p->latest_advice['action'] ?? '-',
+            mb_substr($p->latest_advice['reasoning'] ?? '-', 0, 120),
+        ]))->implode("\n");
+
+        $prompt = <<<PROMPT
+請以穩健型理財專員角度，檢討 {$date} 的短線 swing 候選與持倉。重點：
+1. 候選品質：產業論點、籌碼、技術位置、估值風險是否合理。
+2. 持倉管理：續抱/調整/出場建議是否符合原始論點。
+3. 組合風險：是否過度集中同一產業或論點。
+4. 明日優先注意事項。
+
+候選 TSV:
+symbol\tname\tindustry\tselected\tscore\tstrategy\tbuy\ttarget\tstop\tthesis\treasoning
+{$candidateLines}
+
+持倉 TSV:
+symbol\tname\tstatus\tentry\tshares\ttarget\tstop\tlatest_action\tlatest_reasoning
+{$positionLines}
+PROMPT;
+
+        $report = $this->callApiStreaming($prompt, $onChunk);
+
+        DailyReview::updateOrCreate(
+            ['trade_date' => $date, 'mode' => 'swing'],
+            ['candidates_count' => $candidates->count(), 'report' => $report]
+        );
+
+        return [
+            'date' => $date,
+            'mode' => 'swing',
+            'candidates_count' => $candidates->count(),
+            'report' => $report,
         ];
     }
 

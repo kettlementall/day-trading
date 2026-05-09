@@ -155,6 +155,34 @@ export const getQuote = (symbol) =>
 export const analyzeQuote = (symbol, cost, shares = 0, direction = 'long') =>
   api.post(`/quote/${symbol}/analyze`, { cost, shares, direction }, { timeout: 40000 })
 
+// 短線配置
+export const getSwingCandidates = (date) =>
+  api.get('/swing/candidates', { params: { date } })
+
+export const getSwingPositions = () =>
+  api.get('/swing/positions')
+
+export const createSwingPosition = (data) =>
+  api.post('/swing/positions', data)
+
+export const updateSwingPosition = (id, data) =>
+  api.patch(`/swing/positions/${id}`, data)
+
+export const calculateSwingSizing = (data) =>
+  api.post('/swing/sizing', data)
+
+export const getInvestmentTheses = () =>
+  api.get('/investment-theses')
+
+export const updateInvestmentThesis = (id, data) =>
+  api.patch(`/investment-theses/${id}`, data)
+
+export const disableInvestmentThesis = (id) =>
+  api.post(`/investment-theses/${id}/disable`)
+
+export const enableInvestmentThesis = (id) =>
+  api.post(`/investment-theses/${id}/enable`)
+
 // 系統規格
 export const getSpec = () =>
   api.get('/spec')

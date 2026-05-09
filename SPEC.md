@@ -35,6 +35,10 @@
 | **17:15** | **`stock:fetch-valuations`** | **從 TWSE 抓取本益比/殖利率/股價淨值比（BWIBBU_ALL），供隔日沖 Opus 估值判斷使用** |
 | 18:00 | `news:fetch`                | 盤後新聞抓取                                                    |
 | 18:15 | `news:compute-indices`      | 計算新聞指數                                                    |
+| **18:25** | **`stock:research-investment-theses`** | **AI 自動研究/更新短線產業投資論點** |
+| **18:30** | **`stock:update-swing-positions`** | **每日盤後更新使用者短線持倉與損益快照** |
+| **19:00** | **`stock:ai-screen-swing`** | **AI 理專型短線選股（產業論點 + 技術/籌碼/估值）** |
+| **19:30** | **`stock:daily-review --mode=swing`** | **短線 AI 檢討報告** |
 | 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + API 連通性 + Log 大小警告） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
 | 週一 06:00 | `stock:fill-industry`       | 從 TWSE/TPEX 公司基本資料補上 `stocks.industry`（產業別），供類股強弱、新聞題材配對使用 |
@@ -94,6 +98,18 @@
                   T+1 09:05~13:15 每 15 分鐘出場監控（Fugle + Sonnet 滾動）
                                                         │
                   T+1 15:05 盤後結果回填 → 15:35 AI 隔日沖檢討
+```
+
+**短線流程（Swing，最多 20 交易日）：**
+```
+14:30 日K ─┬─ 16:30 法人 ─ 17:00 融資 ─ 17:15 估值
+18:00 新聞 ─ 18:15 新聞指數
+             │
+             ├─ 18:25 AI 研究/更新 investment_theses（confidence 衰退與 inactive）
+             ├─ 18:30 更新 user 專屬 swing_positions + snapshots（hold/adjust/exit）
+             └─ 19:00 swing AI 選股（全域 candidates.mode=swing）
+                         │
+                         └─ 使用者於 /swing 手動確認買入，建立自己的持倉
 ```
 
 ### 休市日檢查

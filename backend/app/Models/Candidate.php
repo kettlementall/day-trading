@@ -18,6 +18,8 @@ class Candidate extends Model
         'intraday_strategy', 'reference_support', 'reference_resistance', 'ai_warnings',
         'overnight_strategy', 'overnight_reasoning', 'overnight_news_reason', 'overnight_fundamental_reason',
         'gap_potential_percent', 'overnight_key_levels',
+        'swing_strategy', 'swing_reasoning', 'swing_thesis', 'swing_time_horizon_days',
+        'swing_entry_plan', 'swing_risk_notes',
     ];
 
     protected $casts = [
@@ -43,6 +45,10 @@ class Candidate extends Model
         'ai_warnings' => 'array',
         'gap_potential_percent' => 'decimal:2',
         'overnight_key_levels' => 'array',
+        'swing_thesis' => 'array',
+        'swing_entry_plan' => 'array',
+        'swing_risk_notes' => 'array',
+        'swing_time_horizon_days' => 'integer',
     ];
 
     public function stock(): BelongsTo

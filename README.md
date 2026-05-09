@@ -92,11 +92,13 @@ docker compose exec php php artisan stock:import-holidays 2026
 | `/login` | 所有人 | 登入頁 |
 | `/` | viewer + admin | 候選標的（美股指數、盤中監控、AI 標籤） |
 | `/overnight` | viewer + admin | 隔日沖候選標的 |
+| `/swing` | viewer + admin | AI 理專型短線候選與我的持倉 |
 | `/stock/:id` | viewer + admin | 個股 K 線詳情 |
 | `/stats` | admin | 當沖績效統計 + 單日 AI 檢討報告 |
 | `/overnight/stats` | admin | 隔日沖績效統計 |
 | `/news` | admin | 消息面儀表板 |
 | `/settings` | admin | 篩選規則 + 公式設定 |
+| `/investment-theses` | admin | AI 產業論點管理 |
 | `/spec` | admin | 系統規格書 |
 | `/users` | admin | 用戶管理（新增/編輯/刪除） |
 
@@ -138,6 +140,11 @@ docker compose exec php php artisan stock:monitor-overnight-exit --slot=930 [dat
 
 # 隔日沖結果回填；可補齊既有結果中缺漏的 overnight 欄位
 docker compose exec php php artisan stock:update-overnight-results [date]
+
+# AI 產業論點研究、短線持倉更新、短線選股（通常由 18:25/18:30/19:00 排程自動執行）
+docker compose exec php php artisan stock:research-investment-theses [date]
+docker compose exec php php artisan stock:update-swing-positions [date]
+docker compose exec php php artisan stock:ai-screen-swing [date]
 
 # 回測指標查看
 docker compose exec php php artisan stock:backtest --from=2026-03-01 --to=2026-04-10

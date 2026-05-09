@@ -11,6 +11,10 @@
         <el-icon><Moon /></el-icon>
         <span>隔日沖候選</span>
       </router-link>
+      <router-link to="/swing" class="nav-item" active-class="active">
+        <el-icon><DataLine /></el-icon>
+        <span>短線配置</span>
+      </router-link>
       <router-link to="/quote" class="nav-item" active-class="active">
         <el-icon><Search /></el-icon>
         <span>即時報價</span>
@@ -33,6 +37,10 @@
         <router-link to="/settings" class="nav-item" active-class="active">
           <el-icon><Setting /></el-icon>
           <span>設定</span>
+        </router-link>
+        <router-link to="/investment-theses" class="nav-item" active-class="active">
+          <el-icon><Connection /></el-icon>
+          <span>AI論點</span>
         </router-link>
         <router-link to="/users" class="nav-item" active-class="active">
           <el-icon><UserFilled /></el-icon>

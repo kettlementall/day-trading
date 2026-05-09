@@ -22,6 +22,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/swing',
+    name: 'swing',
+    component: () => import('../views/SwingView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/stock/:id',
     name: 'stock-detail',
     component: () => import('../views/StockDetailView.vue'),
@@ -56,6 +62,12 @@ const routes = [
     path: '/settings',
     name: 'settings',
     component: () => import('../views/SettingsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true },
+  },
+  {
+    path: '/investment-theses',
+    name: 'investment-theses',
+    component: () => import('../views/InvestmentThesesView.vue'),
     meta: { requiresAuth: true, requiresAdmin: true },
   },
   {
