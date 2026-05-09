@@ -260,6 +260,8 @@ class CandidateController extends Controller
 
         if ($mode === 'overnight') {
             $metrics = $service->computeOvernightMetrics($from, $to);
+        } elseif ($mode === 'swing') {
+            $metrics = $service->computeSwingMetrics($from, $to);
         } else {
             $metrics = $service->computeMetrics($from, $to);
         }

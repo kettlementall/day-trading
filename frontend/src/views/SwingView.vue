@@ -1,6 +1,6 @@
 <template>
-  <div class="page">
-    <div class="page-header">
+  <div class="page swing-page">
+    <header class="page-header">
       <h1 class="page-title">短線配置</h1>
       <div class="header-actions">
         <el-date-picker
@@ -13,92 +13,214 @@
           style="width: 130px"
           @change="fetchAll"
         />
-        <el-button size="small" :loading="loading" @click="fetchAll">刷新</el-button>
+        <el-button size="small" type="primary" plain :loading="loading" @click="fetchAll">
+          刷新
+        </el-button>
       </div>
-    </div>
+    </header>
 
     <section class="section">
-      <div class="section-title">我的短線持倉</div>
-      <div v-if="exposure" class="exposure-bar">
-        <span>持倉 {{ exposure.active_positions }}</span>
-        <span>市值 {{ money(exposure.market_value) }}</span>
-        <span>風險 {{ money(exposure.risk_amount) }}</span>
+      <h2 class="section-title">我的短線持倉</h2>
+
+      <div v-if="exposure" class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">持倉檔數</div>
+          <div class="kpi-value">{{ exposure.active_positions ?? 0 }}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">總市值</div>
+          <div class="kpi-value">{{ money(exposure.market_value) }}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">風險預算</div>
+          <div class="kpi-value">{{ money(exposure.risk_amount) }}</div>
+        </div>
       </div>
-      <div v-if="exposure?.by_thesis?.length" class="thesis-exposure">
-        <span v-for="item in exposure.by_thesis" :key="item.thesis" class="exposure-chip">
-          {{ item.thesis }} {{ item.positions }} 檔 / {{ money(item.market_value) }}
+
+      <div v-if="exposure?.by_thesis?.length" class="thesis-pills">
+        <span v-for="item in exposure.by_thesis" :key="item.thesis" class="thesis-pill">
+          <span class="thesis-pill-name">{{ item.thesis }}</span>
+          <span class="thesis-pill-meta">{{ item.positions }} 檔 · {{ money(item.market_value) }}</span>
         </span>
       </div>
 
-      <el-empty v-if="!positions.length && !loading" description="尚無短線持倉" :image-size="90" />
+      <el-skeleton v-if="loading && !positions.length" :rows="3" animated class="skeleton-block" />
+      <el-empty
+        v-else-if="!positions.length"
+        description="尚無短線持倉"
+        :image-size="90"
+        class="empty-pad"
+      />
       <div v-else class="position-list">
-        <div v-for="p in positions" :key="p.id" class="position-row">
+        <article v-for="p in positions" :key="p.id" class="data-card position-row">
           <div class="row-main">
-            <div>
-              <strong>{{ p.stock.symbol }}</strong>
-              <span class="muted">{{ p.stock.name }}</span>
-              <el-tag size="small" :type="positionTag(p.status)">{{ statusLabel(p.status) }}</el-tag>
+            <div class="row-id">
+              <span class="symbol">{{ p.stock.symbol }}</span>
+              <span class="stock-name">{{ p.stock.name }}</span>
+              <el-tag size="small" :type="positionTag(p.status)" effect="light" round>
+                {{ statusLabel(p.status) }}
+              </el-tag>
             </div>
             <div class="pnl" :class="p.unrealized_profit_percent >= 0 ? 'price-up' : 'price-down'">
               {{ signed(p.unrealized_profit_percent) }}%
             </div>
           </div>
-          <div class="row-grid">
-            <span>成本 {{ p.entry_price }}</span>
-            <span>現價 {{ p.current_price || '-' }}</span>
-            <span>股數 {{ p.shares }}</span>
-            <span>停損 {{ p.current_stop || '-' }}</span>
-            <span>目標 {{ p.current_target || '-' }}</span>
-            <span>市值 {{ money(p.market_value) }}</span>
+
+          <div class="row-divider"></div>
+
+          <div class="row-stats">
+            <div class="stat">
+              <div class="stat-label">成本</div>
+              <div class="stat-value">{{ p.entry_price }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">現價</div>
+              <div class="stat-value">{{ p.current_price || '—' }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">股數</div>
+              <div class="stat-value">{{ p.shares }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">停損</div>
+              <div class="stat-value">{{ p.current_stop || '—' }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">目標</div>
+              <div class="stat-value">{{ p.current_target || '—' }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">市值</div>
+              <div class="stat-value">{{ money(p.market_value) }}</div>
+            </div>
           </div>
-          <div v-if="p.latest_advice" class="advice">
-            {{ p.latest_advice.action }}：{{ p.latest_advice.reasoning }}
+
+          <div v-if="p.latest_advice" class="advice-callout">
+            <span class="ai-badge">AI</span>
+            <div class="advice-body">
+              <div class="advice-action">{{ p.latest_advice.action }}</div>
+              <div class="advice-text">{{ p.latest_advice.reasoning }}</div>
+            </div>
           </div>
+
           <div class="row-actions">
-            <el-button size="small" @click="markClosed(p, 'closed')">平倉</el-button>
-            <el-button size="small" type="danger" plain @click="markClosed(p, 'stopped')">停損結束</el-button>
+            <el-button
+              class="cancel-btn"
+              size="small"
+              text
+              type="danger"
+              :loading="positionActionId === p.id"
+              @click="cancelPosition(p)"
+            >
+              取消
+            </el-button>
+            <span class="row-actions-spacer"></span>
+            <el-button
+              size="small"
+              :disabled="!isActiveStatus(p.status)"
+              @click="openAdjust(p)"
+            >
+              調整
+            </el-button>
+            <el-button
+              size="small"
+              :loading="positionActionId === p.id"
+              :disabled="!isActiveStatus(p.status)"
+              @click="markClosed(p, 'closed')"
+            >
+              平倉
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :loading="positionActionId === p.id"
+              :disabled="!isActiveStatus(p.status)"
+              @click="markClosed(p, 'stopped')"
+            >
+              停損結束
+            </el-button>
           </div>
-        </div>
+        </article>
       </div>
     </section>
 
     <section class="section">
-      <div class="section-title">短線候選</div>
-      <el-empty v-if="!candidates.length && !loading" description="今日尚無短線候選" :image-size="90" />
-      <div class="candidate-list">
-        <div v-for="c in candidates" :key="c.id" class="candidate-row" :class="{ rejected: !c.ai_selected }">
+      <h2 class="section-title">短線候選</h2>
+
+      <el-skeleton v-if="loading && !candidates.length" :rows="3" animated class="skeleton-block" />
+      <el-empty
+        v-else-if="!candidates.length"
+        description="今日尚無短線候選"
+        :image-size="90"
+        class="empty-pad"
+      />
+      <div v-else class="candidate-list">
+        <article
+          v-for="c in candidates"
+          :key="c.id"
+          class="data-card candidate-row"
+          :class="{ rejected: !c.ai_selected }"
+        >
+          <span v-if="!c.ai_selected" class="reject-corner">未選入</span>
+
           <div class="row-main">
-            <div>
-              <strong>{{ c.stock.symbol }}</strong>
-              <span class="muted">{{ c.stock.name }}</span>
-              <span class="muted">{{ c.stock.industry || '-' }}</span>
+            <div class="row-id">
+              <span class="symbol">{{ c.stock.symbol }}</span>
+              <span class="stock-name">{{ c.stock.name }}</span>
+              <span v-if="c.stock.industry" class="industry-tag">{{ c.stock.industry }}</span>
             </div>
-            <el-tag size="small" :type="c.ai_selected ? 'success' : 'info'">分數 {{ c.score }}</el-tag>
+            <div class="score-badge" :class="{ 'is-dim': !c.ai_selected }">
+              <div class="score-num">{{ c.score }}</div>
+              <div class="score-label">分數</div>
+            </div>
           </div>
-          <div class="thesis-line">{{ c.swing_thesis?.title || '未連結論點' }}</div>
+
+          <div class="thesis-line">
+            <el-icon class="thesis-icon"><Connection /></el-icon>
+            <span>{{ c.swing_thesis?.title || '未連結論點' }}</span>
+          </div>
           <div class="reasoning">{{ c.swing_reasoning || c.ai_reasoning }}</div>
-          <div class="row-grid">
-            <span>買 {{ c.suggested_buy }}</span>
-            <span>目標 {{ c.target_price }}</span>
-            <span>停損 {{ c.stop_loss }}</span>
-            <span>持有 {{ c.swing_time_horizon_days || 20 }} 日</span>
+
+          <div class="row-stats compact">
+            <div class="stat">
+              <div class="stat-label">建議買進</div>
+              <div class="stat-value">{{ c.suggested_buy }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">目標價</div>
+              <div class="stat-value">{{ c.target_price }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">停損價</div>
+              <div class="stat-value">{{ c.stop_loss }}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">持有天數</div>
+              <div class="stat-value">{{ c.swing_time_horizon_days || 20 }} 日</div>
+            </div>
           </div>
+
           <div class="row-actions">
             <el-button size="small" @click="openSizing(c)">倉位試算</el-button>
-            <el-button size="small" type="primary" :disabled="!c.ai_selected" @click="openBuy(c)">確認買入</el-button>
+            <el-button size="small" type="primary" :disabled="!c.ai_selected" @click="openBuy(c)">
+              確認買入
+            </el-button>
           </div>
-        </div>
+        </article>
       </div>
     </section>
 
-    <el-dialog v-model="buyDialog" title="確認買入" width="360px">
-      <el-form label-width="80px">
-        <el-form-item label="股票">{{ selected?.stock?.symbol }} {{ selected?.stock?.name }}</el-form-item>
+    <el-dialog v-model="buyDialog" title="確認買入" width="380px">
+      <el-form label-width="88px">
+        <el-form-item label="股票">
+          <span class="dialog-symbol">{{ selected?.stock?.symbol }} {{ selected?.stock?.name }}</span>
+        </el-form-item>
         <el-form-item label="成本">
-          <el-input-number v-model="buyForm.entry_price" :min="0" :step="0.05" style="width: 180px" />
+          <el-input-number v-model="buyForm.entry_price" :min="0" :step="0.05" style="width: 200px" />
         </el-form-item>
         <el-form-item label="股數">
-          <el-input-number v-model="buyForm.shares" :min="1" :step="1000" style="width: 180px" />
+          <el-input-number v-model="buyForm.shares" :min="1" :step="1000" style="width: 200px" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -107,20 +229,74 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="sizingDialog" title="ATR 風險試算" width="380px">
-      <el-form label-width="90px">
-        <el-form-item label="總資金">
-          <el-input-number v-model="sizingForm.capital" :min="1" :step="10000" style="width: 200px" />
+    <el-dialog v-model="adjustDialog" title="調整停損 / 目標" width="400px">
+      <el-form label-width="88px">
+        <el-form-item label="股票">
+          <span class="dialog-symbol">
+            {{ adjustingPosition?.stock?.symbol }} {{ adjustingPosition?.stock?.name }}
+          </span>
         </el-form-item>
-        <el-form-item label="風險%">
-          <el-input-number v-model="sizingForm.risk_percent" :min="0.1" :max="100" :step="0.1" style="width: 200px" />
+        <el-form-item label="成本 / 現價">
+          <span class="dialog-symbol">
+            {{ adjustingPosition?.entry_price }} / {{ adjustingPosition?.current_price ?? '—' }}
+          </span>
+        </el-form-item>
+        <el-form-item label="停損價">
+          <el-input-number
+            v-model="adjustForm.current_stop"
+            :min="0"
+            :step="0.05"
+            :precision="2"
+            :controls="true"
+            style="width: 220px"
+          />
+        </el-form-item>
+        <el-form-item label="目標價">
+          <el-input-number
+            v-model="adjustForm.current_target"
+            :min="0"
+            :step="0.05"
+            :precision="2"
+            :controls="true"
+            style="width: 220px"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="adjustDialog = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitAdjust">儲存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="sizingDialog" title="ATR 風險試算" width="400px">
+      <el-form label-width="88px">
+        <el-form-item label="總資金">
+          <el-input-number v-model="sizingForm.capital" :min="1" :step="10000" style="width: 220px" />
+        </el-form-item>
+        <el-form-item label="風險 %">
+          <el-input-number v-model="sizingForm.risk_percent" :min="0.1" :max="100" :step="0.1" style="width: 220px" />
         </el-form-item>
       </el-form>
       <div v-if="sizingResult" class="sizing-result">
-        <div>風險預算 {{ money(sizingResult.risk_budget) }}</div>
-        <div>每股風險 {{ sizingResult.risk_per_share }}</div>
-        <div>建議 {{ sizingResult.suggested_shares }} 股（{{ sizingResult.suggested_lots }} 張）</div>
-        <div>所需資金 {{ money(sizingResult.capital_required) }}</div>
+        <div class="sizing-item">
+          <div class="sizing-label">風險預算</div>
+          <div class="sizing-value">{{ money(sizingResult.risk_budget) }}</div>
+        </div>
+        <div class="sizing-item">
+          <div class="sizing-label">每股風險</div>
+          <div class="sizing-value">{{ sizingResult.risk_per_share }}</div>
+        </div>
+        <div class="sizing-item highlight">
+          <div class="sizing-label">建議股數</div>
+          <div class="sizing-value">
+            {{ sizingResult.suggested_shares }}
+            <span class="sizing-sub">（{{ sizingResult.suggested_lots }} 張）</span>
+          </div>
+        </div>
+        <div class="sizing-item">
+          <div class="sizing-label">所需資金</div>
+          <div class="sizing-value">{{ money(sizingResult.capital_required) }}</div>
+        </div>
       </div>
       <template #footer>
         <el-button @click="sizingDialog = false">關閉</el-button>
@@ -137,12 +313,20 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   calculateSwingSizing,
   createSwingPosition,
+  deleteSwingPosition,
   getSwingCandidates,
   getSwingPositions,
   updateSwingPosition,
 } from '../api'
 
-const currentDate = ref(dayjs().format('YYYY-MM-DD'))
+function lastWeekday() {
+  let d = dayjs()
+  while (d.day() === 0 || d.day() === 6) {
+    d = d.subtract(1, 'day')
+  }
+  return d.format('YYYY-MM-DD')
+}
+const currentDate = ref(lastWeekday())
 const loading = ref(false)
 const saving = ref(false)
 const candidates = ref([])
@@ -150,10 +334,14 @@ const positions = ref([])
 const exposure = ref(null)
 const buyDialog = ref(false)
 const sizingDialog = ref(false)
+const adjustDialog = ref(false)
 const selected = ref(null)
+const adjustingPosition = ref(null)
+const positionActionId = ref(null)
 const sizingResult = ref(null)
 const buyForm = reactive({ entry_price: 0, shares: 1000 })
 const sizingForm = reactive({ capital: 1000000, risk_percent: 1 })
+const adjustForm = reactive({ current_stop: null, current_target: null })
 
 onMounted(fetchAll)
 
@@ -210,13 +398,82 @@ async function submitSizing() {
   sizingResult.value = data
 }
 
+function openAdjust(position) {
+  adjustingPosition.value = position
+  adjustForm.current_stop = position.current_stop ? Number(position.current_stop) : null
+  adjustForm.current_target = position.current_target ? Number(position.current_target) : null
+  adjustDialog.value = true
+}
+
+async function submitAdjust() {
+  if (!adjustingPosition.value) return
+  saving.value = true
+  try {
+    await updateSwingPosition(adjustingPosition.value.id, {
+      current_stop: adjustForm.current_stop,
+      current_target: adjustForm.current_target,
+    })
+    ElMessage.success('已更新停損與目標價')
+    adjustDialog.value = false
+    await fetchAll()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '更新失敗，請稍後再試')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function cancelPosition(position) {
+  try {
+    await ElMessageBox.confirm(
+      `將徹底刪除「${position.stock?.symbol} ${position.stock?.name || ''}」這筆持倉與所有快照紀錄，視同沒持倉過。此操作無法復原。`,
+      '取消持倉（刪除紀錄）',
+      {
+        type: 'error',
+        confirmButtonText: '確認刪除',
+        cancelButtonText: '不刪除',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+  positionActionId.value = position.id
+  try {
+    await deleteSwingPosition(position.id)
+    ElMessage.success('已刪除這筆持倉紀錄')
+    await fetchAll()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '刪除失敗，請稍後再試')
+  } finally {
+    positionActionId.value = null
+  }
+}
+
 async function markClosed(position, status) {
-  await ElMessageBox.confirm('確定要結束這筆短線持倉？', '結束持倉', { type: 'warning' })
-  await updateSwingPosition(position.id, {
-    status,
-    exit_price: position.current_price || position.entry_price,
-  })
-  await fetchAll()
+  const isClose = status === 'closed'
+  try {
+    await ElMessageBox.confirm(
+      isClose ? '確定要平倉這筆短線持倉？' : '確定要將這筆持倉標記為停損結束？',
+      isClose ? '平倉確認' : '停損結束確認',
+      { type: 'warning', confirmButtonText: '確定', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  positionActionId.value = position.id
+  try {
+    await updateSwingPosition(position.id, {
+      status,
+      exit_price: position.current_price || position.entry_price,
+    })
+    ElMessage.success(isClose ? '已平倉' : '已標記停損結束')
+    await fetchAll()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '操作失敗，請稍後再試')
+  } finally {
+    positionActionId.value = null
+  }
 }
 
 function money(v) {
@@ -247,16 +504,43 @@ function positionTag(status) {
     stopped: 'danger',
   }[status] || 'info'
 }
+
+function isActiveStatus(status) {
+  return status === 'watching' || status === 'holding' || status === 'exit_suggested'
+}
 </script>
 
 <style scoped>
-.page {
-  padding: 12px;
+.swing-page {
+  --c-primary: #1d4ed8;
+  --c-primary-strong: #1e40af;
+  --c-primary-soft: #eef2ff;
+  --c-primary-line: #c7d2fe;
+  --c-surface: #ffffff;
+  --c-border: #e2e8f0;
+  --c-border-strong: #cbd5e1;
+  --c-text: #0f172a;
+  --c-text-sub: #475569;
+  --c-text-muted: #94a3b8;
+  --c-up: #f56c6c;
+  --c-down: #67c23a;
+  --r-card: 6px;
+  --r-pill: 999px;
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-card-hover: 0 2px 4px rgba(15, 23, 42, 0.06), 0 4px 10px rgba(15, 23, 42, 0.08);
+
+  color: var(--c-text);
+  font-feature-settings: 'tnum';
 }
 
-.page-header,
-.row-main,
-.row-actions {
+.page-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: -12px -12px 12px;
+  padding: 10px 12px;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -264,8 +548,10 @@ function positionTag(status) {
 }
 
 .page-title {
-  font-size: 20px;
+  font-size: 22px;
+  font-weight: 700;
   margin: 0;
+  letter-spacing: 0.3px;
 }
 
 .header-actions {
@@ -275,87 +561,431 @@ function positionTag(status) {
 }
 
 .section {
-  margin-top: 12px;
+  margin-top: 18px;
 }
 
 .section-title {
+  display: flex;
+  align-items: center;
+  font-size: 15px;
   font-weight: 700;
-  margin-bottom: 8px;
+  margin: 0 0 12px;
+  color: var(--c-text);
 }
 
-.exposure-bar,
-.thesis-exposure {
+.section-title::before {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--c-primary);
+  margin-right: 8px;
+}
+
+/* KPI cards */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.kpi-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-card);
+  padding: 10px 12px;
+  box-shadow: var(--shadow-card);
+}
+
+.kpi-label {
+  font-size: 11px;
+  color: var(--c-text-muted);
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.kpi-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+/* Thesis pills */
+.thesis-pills {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-  font-size: 13px;
+  gap: 6px;
+  margin-bottom: 12px;
 }
 
-.exposure-chip {
-  padding: 3px 8px;
-  border-radius: 6px;
-  background: #eef2f7;
+.thesis-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--c-primary-soft);
+  border: 1px solid var(--c-primary-line);
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  color: var(--c-primary-strong);
 }
 
+.thesis-pill-name {
+  font-weight: 600;
+}
+
+.thesis-pill-meta {
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Loading & empty */
+.skeleton-block {
+  padding: 8px 4px;
+}
+
+.empty-pad {
+  padding: 16px 0 8px;
+}
+
+/* Lists */
 .position-list,
 .candidate-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
-.position-row,
-.candidate-row {
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  padding: 10px;
+/* Generic data card */
+.data-card {
+  position: relative;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-card);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
-.candidate-row.rejected {
-  opacity: 0.68;
+.data-card:hover {
+  border-color: var(--c-border-strong);
+  box-shadow: var(--shadow-card-hover);
 }
 
-.muted {
-  color: #909399;
-  margin-left: 6px;
-  font-size: 13px;
+.row-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.row-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 4px 8px;
-  margin-top: 8px;
-  font-size: 13px;
-  color: #606266;
+.row-id {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
 
-.thesis-line {
-  margin-top: 8px;
-  font-weight: 600;
-  color: #303133;
-}
-
-.reasoning,
-.advice,
-.sizing-result {
-  margin-top: 8px;
-  color: #606266;
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.pnl {
+.symbol {
+  font-size: 18px;
   font-weight: 700;
+  color: var(--c-text);
+  letter-spacing: 0.3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-name {
+  font-size: 13px;
+  color: var(--c-text-sub);
+}
+
+.industry-tag {
+  font-size: 11px;
+  color: var(--c-text-muted);
+  padding: 1px 6px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-pill);
+}
+
+/* PnL */
+.pnl {
+  font-size: 22px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .price-up {
-  color: #f56c6c;
+  color: var(--c-up);
 }
 
 .price-down {
-  color: #67c23a;
+  color: var(--c-down);
+}
+
+/* Divider inside card */
+.row-divider {
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--c-border) 12%, var(--c-border) 88%, transparent);
+  margin: 10px 0;
+}
+
+/* Stats grid (label/value) */
+.row-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 8px;
+}
+
+.row-stats.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 10px;
+}
+
+.stat {
+  min-width: 0;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--c-text-muted);
+  letter-spacing: 0.4px;
+  margin-bottom: 2px;
+}
+
+.stat-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Position-specific */
+.position-row .row-actions {
+  margin-top: 12px;
+}
+
+/* AI advice callout */
+.advice-callout {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--c-primary-soft);
+  border-left: 3px solid var(--c-primary);
+  border-radius: var(--r-card);
+}
+
+.ai-badge {
+  flex-shrink: 0;
+  width: 26px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--c-primary);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.advice-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.advice-action {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-primary-strong);
+  margin-bottom: 2px;
+}
+
+.advice-text {
+  font-size: 13px;
+  color: var(--c-text-sub);
+  line-height: 1.5;
+}
+
+/* Row actions */
+.row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.row-actions-spacer {
+  flex: 1 1 auto;
+  min-width: 4px;
+}
+
+.cancel-btn {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.candidate-row .row-actions {
+  justify-content: flex-end;
+}
+
+/* Candidate-specific */
+.candidate-row.rejected {
+  filter: grayscale(0.6);
+  opacity: 0.6;
+}
+
+.reject-corner {
+  position: absolute;
+  top: 0;
+  right: 12px;
+  background: var(--c-text-muted);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 0 0 4px 4px;
+  letter-spacing: 0.5px;
+}
+
+.score-badge {
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--c-primary) 0%, var(--c-primary-strong) 100%);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(29, 78, 216, 0.25);
+}
+
+.score-badge.is-dim {
+  background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
+  box-shadow: none;
+}
+
+.score-num {
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.score-label {
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+  opacity: 0.85;
+}
+
+.thesis-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.thesis-icon {
+  color: var(--c-primary);
+  font-size: 14px;
+}
+
+.reasoning {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--c-text-sub);
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Sizing dialog result */
+.dialog-symbol {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.sizing-result {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-card);
+}
+
+.sizing-item {
+  min-width: 0;
+}
+
+.sizing-item.highlight {
+  grid-column: span 2;
+  padding: 8px 10px;
+  background: var(--c-primary-soft);
+  border-radius: var(--r-card);
+  border-left: 3px solid var(--c-primary);
+}
+
+.sizing-label {
+  font-size: 11px;
+  color: var(--c-text-muted);
+  letter-spacing: 0.4px;
+  margin-bottom: 3px;
+}
+
+.sizing-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.sizing-item.highlight .sizing-value {
+  color: var(--c-primary-strong);
+  font-size: 18px;
+}
+
+.sizing-sub {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--c-text-sub);
+  margin-left: 4px;
+}
+
+/* Narrow phones: KPI 3-col → 2+1 wrap, candidate stats already 2-col */
+@media (max-width: 360px) {
+  .kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .kpi-grid .kpi-card:nth-child(3) {
+    grid-column: span 2;
+  }
+  .row-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 </style>

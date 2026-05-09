@@ -168,6 +168,9 @@ export const createSwingPosition = (data) =>
 export const updateSwingPosition = (id, data) =>
   api.patch(`/swing/positions/${id}`, data)
 
+export const deleteSwingPosition = (id) =>
+  api.delete(`/swing/positions/${id}`)
+
 export const calculateSwingSizing = (data) =>
   api.post('/swing/sizing', data)
 

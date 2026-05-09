@@ -117,6 +117,15 @@ class SwingController extends Controller
         return response()->json($position->fresh(['stock', 'candidate', 'snapshots']));
     }
 
+    public function destroyPosition(Request $request, SwingPosition $position): JsonResponse
+    {
+        abort_unless($position->user_id === $request->user()->id, 403);
+
+        $position->delete();
+
+        return response()->json(['message' => 'deleted']);
+    }
+
     public function sizing(Request $request): JsonResponse
     {
         $validated = $request->validate([

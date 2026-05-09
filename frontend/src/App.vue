@@ -34,6 +34,10 @@
           <el-icon><DataLine /></el-icon>
           <span>隔日績效</span>
         </router-link>
+        <router-link to="/swing/stats" class="nav-item" active-class="active">
+          <el-icon><TrendCharts /></el-icon>
+          <span>短線績效</span>
+        </router-link>
         <router-link to="/settings" class="nav-item" active-class="active">
           <el-icon><Setting /></el-icon>
           <span>設定</span>

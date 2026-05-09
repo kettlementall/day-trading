@@ -8,7 +8,7 @@ use Illuminate\Console\Command;
 class ComputeStrategyStats extends Command
 {
     protected $signature = 'stock:compute-strategy-stats';
-    protected $description = '計算隔日沖/當沖策略量化績效統計（每週日 22:00 自動執行）';
+    protected $description = '計算當沖/隔日沖/短線策略量化績效統計（每週日 22:00 自動執行）';
 
     public function handle(StrategyStatsService $service): int
     {

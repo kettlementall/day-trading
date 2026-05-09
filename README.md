@@ -96,6 +96,7 @@ docker compose exec php php artisan stock:import-holidays 2026
 | `/stock/:id` | viewer + admin | 個股 K 線詳情 |
 | `/stats` | admin | 當沖績效統計 + 單日 AI 檢討報告 |
 | `/overnight/stats` | admin | 隔日沖績效統計 |
+| `/swing/stats` | admin | 短線績效統計（紙上達標率、實現勝率、by_strategy / by_thesis 拆解） |
 | `/news` | admin | 消息面儀表板 |
 | `/settings` | admin | 篩選規則 + 公式設定 |
 | `/investment-theses` | admin | AI 產業論點管理 |
@@ -145,6 +146,9 @@ docker compose exec php php artisan stock:update-overnight-results [date]
 docker compose exec php php artisan stock:research-investment-theses [date]
 docker compose exec php php artisan stock:update-swing-positions [date]
 docker compose exec php php artisan stock:ai-screen-swing [date]
+
+# 重算短線股票池（is_swing_eligible，由每週一 17:30 排程自動執行；新部署或調整規則後可手動補跑）
+docker compose exec php php artisan stock:refresh-swing-universe
 
 # 回測指標查看
 docker compose exec php php artisan stock:backtest --from=2026-03-01 --to=2026-04-10

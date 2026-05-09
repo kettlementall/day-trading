@@ -72,6 +72,10 @@ scheduledCommand('news:compute-indices', '新聞指數(12:15)', selfNotify: true
 scheduledCommand('news:fetch', '新聞抓取(18:00)', selfNotify: true)->dailyAt('18:00');
 scheduledCommand('news:compute-indices', '新聞指數(18:15)', selfNotify: true)->dailyAt('18:15');
 
+// 每週一 17:30 重算短線股票池（流動性、價格、ETF 類型）
+scheduledCommand('stock:refresh-swing-universe', '短線股票池重算', selfNotify: true)
+    ->weeklyOn(1, '17:30');
+
 // 短線配置：盤後研究論點 → 更新既有持倉 → 產生新候選
 scheduledCommand('stock:research-investment-theses', 'AI 產業論點研究', selfNotify: true)
     ->dailyAt('18:25')->weekdays();

@@ -53,6 +53,12 @@ const routes = [
     meta: { requiresAuth: true, requiresAdmin: true },
   },
   {
+    path: '/swing/stats',
+    name: 'swing-stats',
+    component: () => import('../views/SwingStatsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true },
+  },
+  {
     path: '/news',
     name: 'news',
     component: () => import('../views/NewsView.vue'),

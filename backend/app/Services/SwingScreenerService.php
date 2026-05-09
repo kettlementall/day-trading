@@ -33,7 +33,7 @@ class SwingScreenerService
             ->limit(12)
             ->get();
 
-        $rows = Stock::where('is_day_trading', true)->get()
+        $rows = Stock::where('is_swing_eligible', true)->get()
             ->map(fn (Stock $stock) => $this->buildCandidatePayload($stock, $date, $theses))
             ->filter()
             ->sortByDesc('pre_score')

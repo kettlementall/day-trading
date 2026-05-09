@@ -42,8 +42,9 @@
 | 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + API 連通性 + Log 大小警告） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
 | 週一 06:00 | `stock:fill-industry`       | 從 TWSE/TPEX 公司基本資料補上 `stocks.industry`（產業別），供類股強弱、新聞題材配對使用 |
+| **週一 17:30** | **`stock:refresh-swing-universe`** | **依流動性／價格／資料完整度／ETF 類型重算 `stocks.is_swing_eligible`，把短線選股池跟當沖名單解耦** |
 | **T+1 09:05–13:15** | **`stock:monitor-overnight-exit --slot={time}`** | **隔日沖 T+1 出場監控，09:05-09:25 每 5 分鐘 + 09:30 後每 15 分鐘（獨立 Fugle 報價抓取；目標/停損到價自動終止；Sonnet 滾動判斷 hold/adjust/exit）** |
-| **週日 22:00** | **`stock:compute-strategy-stats`** | **計算隔日沖/當沖策略量化績效統計（30/60 天窗口）** |
+| **週日 22:00** | **`stock:compute-strategy-stats`** | **計算當沖/隔日沖/短線策略量化績效統計（30/60 天窗口；短線含 by_strategy + by_thesis 維度）** |
 
 > `stock:backtest --validated` 已停用自動排程。指令保留可手動執行回測指標檢視。
 
@@ -102,12 +103,16 @@
 
 **短線流程（Swing，最多 20 交易日）：**
 ```
+週一 17:30 → stock:refresh-swing-universe → 重算 stocks.is_swing_eligible
+            （規則：60 天日K + 過去 20 日均量 ≥ 1000 張 + 收盤 ≥ 10 元 + 排除衍生型 ETF）
+            (此股票池與當沖 is_day_trading 解耦，獨立維護)
+
 14:30 日K ─┬─ 16:30 法人 ─ 17:00 融資 ─ 17:15 估值
 18:00 新聞 ─ 18:15 新聞指數
              │
              ├─ 18:25 AI 研究/更新 investment_theses（confidence 衰退與 inactive）
              ├─ 18:30 更新 user 專屬 swing_positions + snapshots（hold/adjust/exit）
-             └─ 19:00 swing AI 選股（全域 candidates.mode=swing）
+             └─ 19:00 swing AI 選股（讀 is_swing_eligible；全域 candidates.mode=swing）
                          │
                          └─ 使用者於 /swing 手動確認買入，建立自己的持倉
 ```

@@ -7,6 +7,7 @@ use App\Models\CandidateResult;
 use App\Models\DailyQuote;
 use App\Models\StrategyPerformanceStat;
 use App\Models\UsMarketIndex;
+use App\Services\BacktestService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -31,7 +32,58 @@ class StrategyStatsService
             }
         }
 
+        // 短線：跟前兩者邏輯不同（沒有 candidate_results），由 BacktestService::computeSwingMetrics 取
+        foreach ($periods as $days) {
+            $since = now()->subDays($days)->toDateString();
+            Log::info("StrategyStatsService: computing mode=swing period={$days}d since={$since}");
+            $this->computeSwingDimensions($days, $since);
+        }
+
         Log::info('StrategyStatsService: 計算完成');
+    }
+
+    private function computeSwingDimensions(int $days, string $since): void
+    {
+        $service = app(BacktestService::class);
+        $metrics = $service->computeSwingMetrics($since, now()->toDateString());
+
+        foreach ($metrics['by_strategy'] ?? [] as $strategy => $row) {
+            if (($row['evaluated'] ?? 0) === 0) continue;
+            StrategyPerformanceStat::updateOrCreate(
+                [
+                    'mode'            => 'swing',
+                    'dimension_type'  => 'strategy',
+                    'dimension_value' => (string) $strategy,
+                    'period_days'     => $days,
+                ],
+                [
+                    'sample_count'      => $row['evaluated'],
+                    'target_reach_rate' => $row['paper_target_reach_rate'],
+                    'expected_value'    => $row['paper_expected_value'],
+                    'avg_risk_reward'   => $row['avg_risk_reward'],
+                    'computed_at'       => now(),
+                ]
+            );
+        }
+
+        foreach ($metrics['by_thesis'] ?? [] as $row) {
+            if (($row['count'] ?? 0) === 0) continue;
+            StrategyPerformanceStat::updateOrCreate(
+                [
+                    'mode'            => 'swing',
+                    'dimension_type'  => 'thesis',
+                    'dimension_value' => (string) $row['thesis'],
+                    'period_days'     => $days,
+                ],
+                [
+                    'sample_count'      => $row['count'],
+                    'target_reach_rate' => $row['paper_target_reach_rate'],
+                    'expected_value'    => $row['paper_expected_value'],
+                    'avg_risk_reward'   => 0,
+                    'computed_at'       => now(),
+                ]
+            );
+        }
     }
 
     // -------------------------------------------------------------------------

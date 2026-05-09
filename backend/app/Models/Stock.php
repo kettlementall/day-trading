@@ -8,11 +8,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Stock extends Model
 {
     protected $fillable = [
-        'symbol', 'name', 'industry', 'market', 'is_day_trading',
+        'symbol', 'name', 'industry', 'market', 'is_day_trading', 'is_swing_eligible',
     ];
 
     protected $casts = [
         'is_day_trading' => 'boolean',
+        'is_swing_eligible' => 'boolean',
     ];
 
     public function dailyQuotes(): HasMany

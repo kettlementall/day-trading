@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Candidate;
 use App\Models\CandidateResult;
 use App\Models\DailyQuote;
+use App\Models\SwingPosition;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -417,6 +418,253 @@ class BacktestService
         Log::info("BacktestService::rescreen completed: {$from} ~ {$to}, {$tradingDays->count()} trading days");
 
         return $this->computeMetrics($from, $to);
+    }
+
+    /**
+     * 計算短線（swing）回測指標
+     *
+     * 短線跟當沖/隔日沖邏輯不同：沒有 CandidateResult，由兩個來源組合：
+     * 1. 紙上績效：候選 trade_date 後 20 個交易日的 DailyQuote 模擬，看是否觸目標/停損
+     * 2. 實現績效：使用者建倉後已平倉/停損結束的 SwingPosition
+     */
+    public function computeSwingMetrics(string $from, string $to): array
+    {
+        // 紙上績效只算「已走完 20 個交易日」的候選，避免結果偏樂觀
+        $cutoff = now()->subDays(28)->toDateString(); // 自然日 28 ≈ 20 交易日
+
+        $candidates = Candidate::where('mode', 'swing')
+            ->whereBetween('trade_date', [$from, $to])
+            ->where('trade_date', '<=', $cutoff)
+            ->get();
+
+        $totalAll = Candidate::where('mode', 'swing')
+            ->whereBetween('trade_date', [$from, $to])
+            ->count();
+        $aiSelectedAll = Candidate::where('mode', 'swing')
+            ->whereBetween('trade_date', [$from, $to])
+            ->where('ai_selected', true)
+            ->count();
+
+        $paperOutcomes = $this->computeSwingPaperOutcomes($candidates);
+        $metrics = $this->calcSwingMetricsFromCollection($candidates, $paperOutcomes, $totalAll, $aiSelectedAll);
+
+        // 實現績效（SwingPosition exit_date 落在區間內）
+        $closedPositions = SwingPosition::with('stock')
+            ->whereIn('status', [SwingPosition::STATUS_CLOSED, SwingPosition::STATUS_STOPPED])
+            ->whereBetween('exit_date', [$from, $to])
+            ->get();
+        $metrics['realized'] = $this->calcSwingRealizedMetrics($closedPositions);
+
+        // by_strategy
+        $metrics['by_strategy'] = [];
+        foreach (['trend_pullback', 'trend_follow', 'base_breakout'] as $strategy) {
+            $subset = $candidates->where('swing_strategy', $strategy);
+            if ($subset->isEmpty()) continue;
+            $subsetTotal = Candidate::where('mode', 'swing')
+                ->whereBetween('trade_date', [$from, $to])
+                ->where('swing_strategy', $strategy)
+                ->count();
+            $subsetSelected = Candidate::where('mode', 'swing')
+                ->whereBetween('trade_date', [$from, $to])
+                ->where('swing_strategy', $strategy)
+                ->where('ai_selected', true)
+                ->count();
+            $metrics['by_strategy'][$strategy] = $this->calcSwingMetricsFromCollection(
+                $subset, $paperOutcomes, $subsetTotal, $subsetSelected
+            );
+        }
+
+        // by_thesis（看哪個論點命中率高）
+        $metrics['by_thesis'] = $candidates
+            ->groupBy(fn ($c) => $c->swing_thesis['title'] ?? '未連結論點')
+            ->map(function (Collection $group, string $title) use ($paperOutcomes) {
+                $outcomes = $group->map(fn ($c) => $paperOutcomes[$c->id] ?? null)->filter();
+                $count = $group->count();
+                $hit = $outcomes->where('outcome', 'target')->count();
+                $stop = $outcomes->where('outcome', 'stop')->count();
+                return [
+                    'thesis' => $title,
+                    'count' => $count,
+                    'paper_target_reach_rate' => $count > 0 ? round($hit / $count * 100, 1) : 0,
+                    'paper_stop_loss_rate' => $count > 0 ? round($stop / $count * 100, 1) : 0,
+                    'paper_expected_value' => $outcomes->isNotEmpty() ? round($outcomes->avg('return_pct'), 2) : 0,
+                ];
+            })
+            ->sortByDesc('count')
+            ->values()
+            ->all();
+
+        $metrics['daily'] = $this->calcSwingDailyTrend($from, $to, $cutoff);
+        $metrics['period'] = ['from' => $from, 'to' => $to];
+
+        return $metrics;
+    }
+
+    /**
+     * 對每個 candidate 模擬「進場後 20 個交易日」的結果。
+     * 回傳 [candidate_id => ['outcome' => target|stop|neither, 'return_pct' => float, 'days' => int]]
+     */
+    private function computeSwingPaperOutcomes(Collection $candidates): array
+    {
+        if ($candidates->isEmpty()) return [];
+
+        $stockIds = $candidates->pluck('stock_id')->unique();
+        $earliest = $candidates->min('trade_date');
+        $forwardEnd = now()->toDateString();
+
+        $quotesByStock = DailyQuote::whereIn('stock_id', $stockIds)
+            ->where('date', '>=', $earliest)
+            ->where('date', '<=', $forwardEnd)
+            ->orderBy('date')
+            ->get(['stock_id', 'date', 'high', 'low', 'close'])
+            ->groupBy('stock_id');
+
+        $outcomes = [];
+        foreach ($candidates as $c) {
+            $tradeDateStr = $c->trade_date instanceof \Carbon\Carbon
+                ? $c->trade_date->format('Y-m-d')
+                : (string) $c->trade_date;
+
+            $forward = ($quotesByStock[$c->stock_id] ?? collect())
+                ->filter(fn ($q) => $q->date->format('Y-m-d') > $tradeDateStr)
+                ->take(20)
+                ->values();
+
+            if ($forward->isEmpty()) {
+                continue;
+            }
+
+            $entry = (float) $c->suggested_buy;
+            $target = (float) $c->target_price;
+            $stop = (float) $c->stop_loss;
+            if ($entry <= 0) continue;
+
+            $outcome = 'neither';
+            $exitPrice = (float) $forward->last()->close;
+            $days = $forward->count();
+
+            foreach ($forward as $idx => $q) {
+                $high = (float) $q->high;
+                $low = (float) $q->low;
+                // 同 K 棒高低同時觸：保守視停損先觸發
+                if ($stop > 0 && $low <= $stop) {
+                    $outcome = 'stop';
+                    $exitPrice = $stop;
+                    $days = $idx + 1;
+                    break;
+                }
+                if ($target > 0 && $high >= $target) {
+                    $outcome = 'target';
+                    $exitPrice = $target;
+                    $days = $idx + 1;
+                    break;
+                }
+            }
+
+            $outcomes[$c->id] = [
+                'outcome' => $outcome,
+                'return_pct' => round(($exitPrice - $entry) / $entry * 100, 2),
+                'days' => $days,
+            ];
+        }
+        return $outcomes;
+    }
+
+    private function calcSwingMetricsFromCollection(
+        Collection $candidates,
+        array $paperOutcomes,
+        int $totalCandidates,
+        int $aiSelectedTotal,
+    ): array {
+        $evaluated = $candidates->count();
+        if ($evaluated === 0) {
+            return [
+                'total_candidates' => $totalCandidates,
+                'ai_selected' => $aiSelectedTotal,
+                'evaluated' => 0,
+                'paper_target_reach_rate' => 0,
+                'paper_stop_loss_rate' => 0,
+                'paper_expected_value' => 0,
+                'paper_avg_holding_days' => 0,
+                'avg_risk_reward' => 0,
+            ];
+        }
+
+        $outcomes = $candidates->map(fn ($c) => $paperOutcomes[$c->id] ?? null)->filter();
+        $hits = $outcomes->where('outcome', 'target')->count();
+        $stops = $outcomes->where('outcome', 'stop')->count();
+        $expectedValue = $outcomes->isNotEmpty() ? round($outcomes->avg('return_pct'), 2) : 0;
+        $avgDays = $outcomes->isNotEmpty() ? round($outcomes->avg('days'), 1) : 0;
+
+        return [
+            'total_candidates' => $totalCandidates,
+            'ai_selected' => $aiSelectedTotal,
+            'evaluated' => $evaluated,
+            'paper_target_reach_rate' => round($hits / $evaluated * 100, 1),
+            'paper_stop_loss_rate' => round($stops / $evaluated * 100, 1),
+            'paper_expected_value' => $expectedValue,
+            'paper_avg_holding_days' => $avgDays,
+            'avg_risk_reward' => round((float) $candidates->avg('risk_reward_ratio'), 2),
+        ];
+    }
+
+    private function calcSwingRealizedMetrics(Collection $positions): array
+    {
+        $count = $positions->count();
+        if ($count === 0) {
+            return [
+                'closed_positions' => 0,
+                'win_rate' => 0,
+                'avg_return' => 0,
+                'hit_stop_rate' => 0,
+                'avg_holding_days' => 0,
+            ];
+        }
+
+        $returns = $positions->map(function (SwingPosition $p) {
+            $entry = (float) $p->entry_price;
+            $exit = (float) $p->exit_price;
+            return $entry > 0 ? round(($exit - $entry) / $entry * 100, 2) : 0;
+        });
+
+        $wins = $returns->filter(fn ($r) => $r > 0)->count();
+        $stopped = $positions->where('status', SwingPosition::STATUS_STOPPED)->count();
+
+        $holdingDays = $positions->map(function (SwingPosition $p) {
+            if (!$p->entry_date || !$p->exit_date) return null;
+            return $p->entry_date->diffInDays($p->exit_date);
+        })->filter();
+
+        return [
+            'closed_positions' => $count,
+            'win_rate' => round($wins / $count * 100, 1),
+            'avg_return' => round($returns->avg(), 2),
+            'hit_stop_rate' => round($stopped / $count * 100, 1),
+            'avg_holding_days' => $holdingDays->isNotEmpty() ? round($holdingDays->avg(), 1) : 0,
+        ];
+    }
+
+    private function calcSwingDailyTrend(string $from, string $to, string $cutoff): array
+    {
+        $rows = DB::table('candidates')
+            ->where('mode', 'swing')
+            ->whereBetween('trade_date', [$from, $to])
+            ->select(
+                'trade_date as date',
+                DB::raw('COUNT(*) as candidates'),
+                DB::raw('SUM(CASE WHEN ai_selected = 1 THEN 1 ELSE 0 END) as ai_selected'),
+                DB::raw("SUM(CASE WHEN trade_date <= '{$cutoff}' THEN 1 ELSE 0 END) as evaluated"),
+            )
+            ->groupBy('trade_date')
+            ->orderBy('trade_date')
+            ->get();
+
+        return $rows->map(fn ($row) => [
+            'date' => $row->date,
+            'candidates' => (int) $row->candidates,
+            'ai_selected' => (int) $row->ai_selected,
+            'evaluated' => (int) $row->evaluated,
+        ])->toArray();
     }
 
     /**
