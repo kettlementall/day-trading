@@ -222,9 +222,11 @@ class SwingScreenerService
     private function askAi(string $date, Collection $rows, Collection $theses): array
     {
         $thesisText = $theses->map(fn ($t) => "- #{$t->id} {$t->title} 信心{$t->confidence_score}: {$t->description}")->implode("\n");
-        $stockText = $rows->take(40)->map(fn ($r) =>
-            "{$r['symbol']} {$r['name']} {$r['industry']} score={$r['pre_score']} close={$r['entry_price']} thesis=" . json_encode($r['thesis'], JSON_UNESCAPED_UNICODE)
+        $candidates = $rows->take(30)->values();
+        $stockText = $candidates->map(fn ($r) =>
+            "{$r['symbol']} {$r['name']} {$r['industry']} pre_score={$r['pre_score']} close={$r['entry_price']} thesis=" . json_encode($r['thesis'], JSON_UNESCAPED_UNICODE)
         )->implode("\n");
+        $totalCount = $candidates->count();
 
         $prompt = <<<PROMPT
 你是穩健型台股理財專員，請從候選股票中挑選適合 1-4 週短線配置的標的。避免追高，重視下檔風險、產業論點、籌碼、技術位置與估值。
@@ -237,13 +239,24 @@ class SwingScreenerService
 股票候選：
 {$stockText}
 
-請只輸出 JSON 陣列，最多 20 筆：
+評分規則（嚴格遵守，違反此規則的回應將被視為無效）：
+1. **必須對全部 {$totalCount} 檔候選逐一輸出**，順序不限，但每一檔都要有獨立 score + reasoning。
+2. score 必須在候選之間呈現顯著差異，禁止集中給滿分。建議分布：
+   - 90 分以上：最多 2 檔，且 reasoning 必須具體說明為何優於其他候選。
+   - 80–89 分：最多 4 檔。
+   - 70–79 分：5–8 檔（次選擔當，可作為備援）。
+   - 70 分以下：其餘候選依下檔風險、論點關聯度、技術位置高低排序。
+3. selected=true 僅給予實質想下單的檔次（8–12 檔），其餘設 false。
+4. score 與 selected 必須一致：score < 70 不得 selected=true；score >= 80 應該 selected=true。
+5. 同一個 strategy（trend_pullback/trend_follow/base_breakout）內也應該有分數階梯，不要全部一樣分。
+
+請只輸出 JSON 陣列（共 {$totalCount} 筆，與候選清單一一對應）：
 {
   "symbol": "2330",
   "selected": true,
   "score": 0到100,
   "strategy": "trend_pullback/trend_follow/base_breakout",
-  "reasoning": "理專式判斷",
+  "reasoning": "理專式判斷一句話 30-60 字（90 分以上必須說明為何優於其他候選）",
   "thesis": {"title": "論點", "chain_position": "位置", "relevance_score": 0到100},
   "entry_price": 100,
   "target_price": 110,
@@ -255,7 +268,7 @@ class SwingScreenerService
 PROMPT;
 
         try {
-            $response = Http::timeout(120)
+            $response = Http::timeout(240)
                 ->withHeaders([
                     'x-api-key' => $this->apiKey,
                     'anthropic-version' => '2023-06-01',
@@ -263,7 +276,7 @@ PROMPT;
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
-                    'max_tokens' => 5000,
+                    'max_tokens' => 8000,
                     'messages' => [['role' => 'user', 'content' => $prompt]],
                 ]);
 
@@ -272,12 +285,24 @@ PROMPT;
                 return [];
             }
 
-            $text = trim($response->json('content.0.text', ''));
-            $text = preg_replace('/^```json?\s*/i', '', $text);
-            $text = preg_replace('/\s*```$/', '', $text);
-            $data = json_decode($text, true);
+            if ($response->json('stop_reason') === 'max_tokens') {
+                Log::warning('SwingScreener: hit max_tokens limit, response truncated');
+            }
 
-            return is_array($data) ? $data : [];
+            $text = $response->json('content.0.text', '');
+            // Robust JSON array extraction：取第一個 [ 到最後一個 ]，避開 markdown 包裹與前後雜訊
+            $start = strpos($text, '[');
+            $end = strrpos($text, ']');
+            if ($start === false || $end === false || $end <= $start) {
+                Log::warning('SwingScreener: no JSON array brackets found, snippet=' . mb_substr(trim($text), 0, 200));
+                return [];
+            }
+            $data = json_decode(substr($text, $start, $end - $start + 1), true);
+            if (!is_array($data)) {
+                Log::warning('SwingScreener: JSON decode failed, snippet=' . mb_substr(trim($text), 0, 200));
+                return [];
+            }
+            return $data;
         } catch (\Throwable $e) {
             Log::error('SwingScreener: ' . $e->getMessage());
             return [];

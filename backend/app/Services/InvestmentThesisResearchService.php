@@ -94,18 +94,35 @@ class InvestmentThesisResearchService
 產業/新聞指數：
 {$indexLines}
 
-請只輸出 JSON 陣列，最多 8 筆。每筆格式：
-{
-  "title": "論點名稱",
-  "description": "為什麼這個論點成立",
-  "industry_chain": ["上游", "中游", "下游"],
-  "beneficiary_industries": ["半導體"],
-  "beneficiary_keywords": ["HBM", "PCB"],
-  "evidence_summary": "新聞與資料佐證",
-  "risk_factors": ["風險"],
-  "sentiment_divergence": "none/bullish_fundamental_bearish_sentiment/bearish_fundamental_bullish_sentiment",
-  "confidence_score": 0到100整數
-}
+# 輸出規範（嚴格遵守）
+
+只輸出 JSON 陣列，最多 8 筆，不要有任何解釋文字、不要包裹 markdown code block。
+每筆物件**必須**包含下列所有欄位（欄位名稱完全一致，不可改成 sector/horizon/direction 等別名）：
+
+- `title` (string)：論點名稱，例：「AI 算力基建供應鏈」
+- `description` (string)：為什麼這個論點成立的核心敘事（2-4 句）
+- `industry_chain` (string[])：上中下游節點，例 ["晶圓代工", "封測", "PCB", "散熱"]
+- `beneficiary_industries` (string[])：受惠產業類別（用以對應 stocks.industry 欄位），例 ["半導體", "電子零組件"]
+- `beneficiary_keywords` (string[])：股票名稱/個股關鍵字，用以對 Stock.name 字串匹配，例 ["台積電", "TSMC", "日月光", "HBM"]
+- `evidence_summary` (string)：佐證新聞重點摘要
+- `risk_factors` (string[])：風險清單
+- `sentiment_divergence` (string)：必須為這三個值之一 — `none` / `bullish_fundamental_bearish_sentiment` / `bearish_fundamental_bullish_sentiment`
+- `confidence_score` (整數，0-100)：信心分。建議分布：> 80 信心極強的最多 2 筆；60-80 主流 4-5 筆；< 60 列觀察。
+
+範例（僅示範格式，請依新聞實際內容產生）：
+[
+  {
+    "title": "AI 算力基建供應鏈",
+    "description": "AI server 訂單能見度延伸到 2027 年，HBM、CoWoS、液冷需求同步爆發，台廠在 PCB/CCL/封測有獨家受惠位置。",
+    "industry_chain": ["晶圓代工", "HBM", "CoWoS", "PCB", "液冷"],
+    "beneficiary_industries": ["半導體", "電子零組件"],
+    "beneficiary_keywords": ["台積電", "TSMC", "日月光", "華通", "台光電", "雙鴻"],
+    "evidence_summary": "10/30 NVDA 法說上修；華通 11/5 公告 N3 PCB 出貨；台光電 CCL 連 5 月成長",
+    "risk_factors": ["美中對 AI 晶片出口管制", "下游雲端資本支出放緩"],
+    "sentiment_divergence": "none",
+    "confidence_score": 85
+  }
+]
 PROMPT;
 
         try {
@@ -117,7 +134,7 @@ PROMPT;
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
-                    'max_tokens' => 3500,
+                    'max_tokens' => 6000,
                     'messages' => [['role' => 'user', 'content' => $prompt]],
                 ]);
 
@@ -126,12 +143,31 @@ PROMPT;
                 return $this->fallbackTheses($articles);
             }
 
-            $text = trim($response->json('content.0.text', ''));
-            $text = preg_replace('/^```json?\s*/i', '', $text);
-            $text = preg_replace('/\s*```$/', '', $text);
-            $data = json_decode($text, true);
+            $stopReason = $response->json('stop_reason');
+            if ($stopReason === 'max_tokens') {
+                Log::warning('InvestmentThesisResearch: hit max_tokens limit, response truncated');
+            }
 
-            return is_array($data) ? $data : $this->fallbackTheses($articles);
+            $text = $response->json('content.0.text', '');
+            // Robust JSON array extraction: 不論 AI 是否包 markdown / 有前後文字，
+            // 只取第一個 [ 到最後一個 ] 之間（過去 preg_replace 會把整段吃掉）。
+            $start = strpos($text, '[');
+            $end = strrpos($text, ']');
+            if ($start === false || $end === false || $end <= $start) {
+                Log::warning('InvestmentThesisResearch: no JSON array brackets found, snippet=' . mb_substr(trim($text), 0, 200));
+                return $this->fallbackTheses($articles);
+            }
+            $data = json_decode(substr($text, $start, $end - $start + 1), true);
+            if (!is_array($data)) {
+                Log::warning('InvestmentThesisResearch: JSON decode failed, snippet=' . mb_substr(trim($text), 0, 200));
+                return $this->fallbackTheses($articles);
+            }
+            $valid = collect($data)->filter(fn ($i) => is_array($i) && !empty($i['title']))->count();
+            if ($valid === 0 && count($data) > 0) {
+                Log::warning('InvestmentThesisResearch: AI response missing title field, first item keys=' . json_encode(array_keys($data[0] ?? [])));
+                return $this->fallbackTheses($articles);
+            }
+            return $data;
         } catch (\Throwable $e) {
             Log::error('InvestmentThesisResearch: ' . $e->getMessage());
             return $this->fallbackTheses($articles);
