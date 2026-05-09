@@ -19,6 +19,12 @@
       </div>
     </header>
 
+    <div v-if="swingMeta" class="market-meta">
+      <span>訊號交易日 {{ swingMeta.trade_date || swingMeta.date }}</span>
+      <span v-if="swingMeta.is_holiday">查詢日 {{ swingMeta.requested_date }} 休市，顯示最近交易日</span>
+      <span v-if="swingMeta.thesis_updated_at">論點更新 {{ formatDateTime(swingMeta.thesis_updated_at) }}</span>
+    </div>
+
     <section class="section">
       <h2 class="section-title">我的短線持倉</h2>
 
@@ -99,10 +105,48 @@
           <div v-if="p.latest_advice" class="advice-callout">
             <span class="ai-badge">AI</span>
             <div class="advice-body">
-              <div class="advice-action">{{ p.latest_advice.action }}</div>
+              <div class="advice-action">
+                {{ adviceActionLabel(p.latest_advice.action) }}
+                <span v-if="p.tracking_status?.latest_snapshot_at" class="advice-time">
+                  {{ formatDateTime(p.tracking_status.latest_snapshot_at) }}
+                </span>
+              </div>
+              <div v-if="p.latest_advice.stop_changed || p.latest_advice.target_changed" class="adjust-line">
+                <span v-if="p.latest_advice.stop_changed">
+                  停損 {{ p.latest_advice.previous_stop }} → {{ p.latest_advice.current_stop }}
+                </span>
+                <span v-if="p.latest_advice.target_changed">
+                  目標 {{ p.latest_advice.previous_target }} → {{ p.latest_advice.current_target }}
+                </span>
+              </div>
+              <div class="health-grid">
+                <span>論點 {{ healthLabel(p.latest_advice.thesis_health) }}</span>
+                <span>技術 {{ healthLabel(p.latest_advice.technical_health) }}</span>
+                <span>籌碼 {{ healthLabel(p.latest_advice.chip_health) }}</span>
+                <span>風險 {{ riskLabel(p.latest_advice.risk_pressure) }}</span>
+              </div>
+              <div class="time-grid">
+                <span>預估持有 {{ p.latest_advice.expected_holding_days || '—' }}</span>
+                <span>目標 ETA {{ etaLabel(p.latest_advice.target_eta_days) }}</span>
+                <span>時間 {{ timePressureLabel(p.latest_advice.time_pressure) }}</span>
+              </div>
+              <div v-if="p.latest_advice.volume_price_signal" class="advice-note">
+                {{ p.latest_advice.volume_price_signal }}
+              </div>
               <div class="advice-text">{{ p.latest_advice.reasoning }}</div>
             </div>
           </div>
+
+          <details v-if="p.snapshots?.length" class="snapshot-details">
+            <summary>每日追蹤紀錄</summary>
+            <div v-for="s in [...p.snapshots].slice(-5).reverse()" :key="s.id" class="snapshot-row">
+              <span>{{ s.date }}</span>
+              <span>{{ adviceActionLabel(s.advice?.action) }}</span>
+              <span>停損 {{ s.current_stop || '—' }}</span>
+              <span>目標 {{ s.current_target || '—' }}</span>
+              <span>{{ s.advice?.reasoning || '' }}</span>
+            </div>
+          </details>
 
           <div class="row-actions">
             <el-button
@@ -198,8 +242,8 @@
               <div class="stat-value">{{ c.stop_loss }}</div>
             </div>
             <div class="stat">
-              <div class="stat-label">持有天數</div>
-              <div class="stat-value">{{ c.swing_time_horizon_days || 20 }} 日</div>
+              <div class="stat-label">目標 ETA</div>
+              <div class="stat-value">{{ etaLabel(c.swing_entry_plan?.target_eta_days || c.swing_time_horizon_days) }}</div>
             </div>
           </div>
 
@@ -341,6 +385,7 @@ const saving = ref(false)
 const candidates = ref([])
 const positions = ref([])
 const exposure = ref(null)
+const swingMeta = ref(null)
 const buyDialog = ref(false)
 const sizingDialog = ref(false)
 const adjustDialog = ref(false)
@@ -362,6 +407,7 @@ async function fetchAll() {
       getSwingPositions(),
     ])
     candidates.value = cRes.data.data || []
+    swingMeta.value = cRes.data || null
     positions.value = pRes.data.data || []
     exposure.value = pRes.data.total_risk_exposure || null
   } finally {
@@ -495,6 +541,52 @@ function signed(v) {
   return `${v >= 0 ? '+' : ''}${v}`
 }
 
+function formatDateTime(v) {
+  if (!v) return '-'
+  return dayjs(v).format('MM/DD HH:mm')
+}
+
+function adviceActionLabel(v) {
+  return {
+    hold: '續抱',
+    adjust: '調整',
+    trim: '減碼',
+    exit: '出場',
+  }[v] || v || '-'
+}
+
+function healthLabel(v) {
+  return {
+    healthy: '良好',
+    neutral: '中性',
+    weak: '轉弱',
+    broken: '破線',
+    invalidated: '失效',
+    unknown: '未知',
+  }[v] || v || '-'
+}
+
+function riskLabel(v) {
+  return {
+    low: '低',
+    medium: '中',
+    high: '高',
+  }[v] || v || '-'
+}
+
+function timePressureLabel(v) {
+  return {
+    normal: '正常',
+    delayed: '落後',
+    expired: '過期',
+  }[v] || v || '-'
+}
+
+function etaLabel(v) {
+  if (v === null || v === undefined || v === '') return '—'
+  return `約 ${v} 日`
+}
+
 function statusLabel(status) {
   return {
     watching: '觀察',
@@ -590,6 +682,22 @@ function isActiveStatus(status) {
   border-radius: 2px;
   background: var(--c-primary);
   margin-right: 8px;
+}
+
+.market-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.market-meta span {
+  padding: 4px 8px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-pill);
+  background: #f8fafc;
 }
 
 /* KPI cards */
@@ -838,10 +946,70 @@ function isActiveStatus(status) {
   margin-bottom: 2px;
 }
 
+.advice-time {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--c-text-muted);
+}
+
+.adjust-line,
+.health-grid,
+.time-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.adjust-line span,
+.health-grid span,
+.time-grid span {
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  background: #fff;
+  border: 1px solid var(--c-primary-line);
+  color: var(--c-text-sub);
+}
+
+.advice-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
 .advice-text {
+  margin-top: 6px;
   font-size: 13px;
   color: var(--c-text-sub);
   line-height: 1.5;
+}
+
+.snapshot-details {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.snapshot-details summary {
+  cursor: pointer;
+  color: var(--c-primary-strong);
+  font-weight: 600;
+}
+
+.snapshot-row {
+  display: grid;
+  grid-template-columns: 78px 48px 86px 86px minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.snapshot-row span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Row actions */

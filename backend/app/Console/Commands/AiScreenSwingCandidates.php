@@ -15,8 +15,9 @@ class AiScreenSwingCandidates extends Command
     public function handle(SwingScreenerService $service): int
     {
         $date = $this->argument('date') ?? now()->toDateString();
-        if (!$this->argument('date') && MarketHoliday::isHoliday($date)) {
-            $this->info("{$date} 休市，跳過短線選股");
+        if (MarketHoliday::isHoliday($date)) {
+            $previous = MarketHoliday::previousTradingDay($date);
+            $this->warn("{$date} 休市，不產生短線候選。請改跑最近交易日 {$previous}。");
             return self::SUCCESS;
         }
 

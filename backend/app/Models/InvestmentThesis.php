@@ -20,6 +20,7 @@ class InvestmentThesis extends Model
         'evidence_summary',
         'risk_factors',
         'sentiment_divergence',
+        'research_date',
         'confidence_score',
         'status',
         'last_evaluated_at',
@@ -30,6 +31,7 @@ class InvestmentThesis extends Model
         'beneficiary_industries' => 'array',
         'beneficiary_keywords' => 'array',
         'risk_factors' => 'array',
+        'research_date' => 'date:Y-m-d',
         'confidence_score' => 'integer',
         'last_evaluated_at' => 'datetime',
     ];

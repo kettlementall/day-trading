@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Candidate;
 use App\Models\DailyQuote;
+use App\Models\InvestmentThesis;
+use App\Models\MarketHoliday;
 use App\Models\SwingPosition;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -13,7 +15,10 @@ class SwingController extends Controller
 {
     public function candidates(Request $request): JsonResponse
     {
-        $date = $request->get('date', now()->toDateString());
+        $requestedDate = $request->get('date', now()->toDateString());
+        $isHoliday = MarketHoliday::isHoliday($requestedDate);
+        $date = $isHoliday ? MarketHoliday::previousTradingDay($requestedDate) : $requestedDate;
+        $holiday = $isHoliday ? MarketHoliday::where('date', $requestedDate)->first() : null;
 
         $query = Candidate::with('stock')
             ->where('trade_date', $date)
@@ -31,6 +36,17 @@ class SwingController extends Controller
 
         return response()->json([
             'date' => $date,
+            'requested_date' => $requestedDate,
+            'trade_date' => $date,
+            'is_holiday' => $isHoliday,
+            'holiday_name' => $isHoliday
+                ? ($holiday?->name ?? (\Carbon\Carbon::parse($requestedDate)->isWeekend() ? '週末' : null))
+                : null,
+            'latest_trading_date' => $date,
+            'thesis_updated_at' => InvestmentThesis::where(function ($q) use ($date) {
+                $q->whereNull('research_date')
+                    ->orWhere('research_date', '<=', $date);
+            })->max('last_evaluated_at'),
             'count' => $candidates->count(),
             'data' => $candidates,
         ]);
@@ -56,6 +72,12 @@ class SwingController extends Controller
                 $position->setAttribute('market_value', $marketValue);
                 $position->setAttribute('cost_amount', $cost);
                 $position->setAttribute('risk_amount', $position->current_stop ? max(0, ($entry - (float) $position->current_stop) * $shares) : null);
+                $latestSnapshot = $position->snapshots->last();
+                $position->setAttribute('tracking_status', [
+                    'latest_snapshot_date' => $latestSnapshot?->date?->format('Y-m-d'),
+                    'latest_snapshot_at' => $latestSnapshot?->updated_at?->toDateTimeString(),
+                    'has_latest_snapshot' => $latest && $latestSnapshot && $latestSnapshot->date->isSameDay($latest->date),
+                ]);
                 return $position;
             });
 
@@ -83,6 +105,8 @@ class SwingController extends Controller
             return response()->json(['message' => '這檔候選已存在於你的短線持倉中'], 422);
         }
 
+        $entryPlan = $candidate->swing_entry_plan ?? [];
+
         $position = SwingPosition::create([
             'user_id' => $request->user()->id,
             'candidate_id' => $candidate->id,
@@ -97,6 +121,15 @@ class SwingController extends Controller
             'latest_advice' => [
                 'action' => 'hold',
                 'reasoning' => '使用者手動建立短線持倉，等待每日盤後追蹤。',
+                'current_stop' => (float) $candidate->stop_loss,
+                'current_target' => (float) $candidate->target_price,
+                'expected_holding_days' => $entryPlan['expected_holding_days'] ?? null,
+                'target_eta_days' => $entryPlan['target_eta_days'] ?? null,
+                'time_pressure' => 'normal',
+                'thesis_health' => 'unknown',
+                'technical_health' => 'unknown',
+                'chip_health' => 'unknown',
+                'risk_pressure' => 'low',
             ],
         ]);
 

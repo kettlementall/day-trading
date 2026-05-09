@@ -40,4 +40,16 @@ class MarketHoliday extends Model
         }
         return $next->toDateString();
     }
+
+    /**
+     * 給定日期，回傳「前一個交易日」（跳過週末與國定假日）
+     */
+    public static function previousTradingDay(string $date): string
+    {
+        $previous = \Carbon\Carbon::parse($date)->subDay();
+        while (static::isHoliday($previous->toDateString())) {
+            $previous->subDay();
+        }
+        return $previous->toDateString();
+    }
 }

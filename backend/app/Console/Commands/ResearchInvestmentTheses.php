@@ -2,7 +2,6 @@
 
 namespace App\Console\Commands;
 
-use App\Models\MarketHoliday;
 use App\Services\InvestmentThesisResearchService;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
@@ -15,10 +14,6 @@ class ResearchInvestmentTheses extends Command
     public function handle(InvestmentThesisResearchService $service): int
     {
         $date = $this->argument('date') ?? now()->toDateString();
-        if (!$this->argument('date') && MarketHoliday::isHoliday($date)) {
-            $this->info("{$date} 休市，跳過 AI 產業論點研究");
-            return self::SUCCESS;
-        }
         $result = $service->research($date);
 
         app(TelegramService::class)->broadcast(

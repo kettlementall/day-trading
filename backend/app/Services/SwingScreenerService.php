@@ -18,6 +18,7 @@ class SwingScreenerService
 {
     private string $apiKey;
     private string $model;
+    private int $maxAiAttempts = 3;
 
     public function __construct()
     {
@@ -29,6 +30,10 @@ class SwingScreenerService
     {
         $theses = InvestmentThesis::where('status', InvestmentThesis::STATUS_ACTIVE)
             ->where('confidence_score', '>=', 40)
+            ->where(function ($q) use ($date) {
+                $q->whereNull('research_date')
+                    ->orWhere('research_date', '<=', $date);
+            })
             ->orderByDesc('confidence_score')
             ->limit(12)
             ->get();
@@ -40,15 +45,20 @@ class SwingScreenerService
             ->take(100)
             ->values();
 
-        Candidate::where('trade_date', $date)->where('mode', 'swing')->delete();
+        if (!$this->apiKey) {
+            throw new \RuntimeException('短線 AI 選股需要 Anthropic API key；禁止退回規則分數產生候選。');
+        }
 
-        $selected = $this->apiKey ? $this->askAi($date, $rows, $theses) : [];
+        $aiRows = $rows->take(30)->values();
+        $selected = $this->askAiWithRetry($date, $rows, $theses, $aiRows);
         $selectedBySymbol = collect($selected)->keyBy('symbol');
 
-        $created = $rows->take(30)->map(function (array $row) use ($date, $selectedBySymbol) {
-            $ai = $selectedBySymbol->get($row['symbol'], []);
-            $score = max(0, min(100, (float) ($ai['score'] ?? $row['pre_score'])));
-            $aiSelected = (bool) ($ai['selected'] ?? $score >= 55);
+        Candidate::where('trade_date', $date)->where('mode', 'swing')->delete();
+
+        $created = $aiRows->map(function (array $row) use ($date, $selectedBySymbol) {
+            $ai = $selectedBySymbol->get($row['symbol']);
+            $score = max(0, min(100, (float) $ai['score']));
+            $aiSelected = (bool) $ai['selected'];
             $entry = (float) ($ai['entry_price'] ?? $row['entry_price']);
             $stop = (float) ($ai['stop_loss'] ?? $row['stop_loss']);
             $target = (float) ($ai['target_price'] ?? $row['target_price']);
@@ -67,15 +77,18 @@ class SwingScreenerService
                 'haiku_selected' => $score >= 45,
                 'haiku_reasoning' => '短線物理篩選與論點關聯分數',
                 'ai_selected' => $aiSelected,
-                'ai_reasoning' => $ai['reasoning'] ?? $row['reasoning'],
+                'ai_reasoning' => $ai['reasoning'],
                 'swing_strategy' => $ai['strategy'] ?? $row['strategy'],
-                'swing_reasoning' => $ai['reasoning'] ?? $row['reasoning'],
+                'swing_reasoning' => $ai['reasoning'],
                 'swing_thesis' => $ai['thesis'] ?? $row['thesis'],
-                'swing_time_horizon_days' => (int) ($ai['time_horizon_days'] ?? 20),
+                'swing_time_horizon_days' => (int) ($ai['time_horizon_days'] ?? $ai['target_eta_days'] ?? 20),
                 'swing_entry_plan' => $ai['entry_plan'] ?? [
                     'entry_price' => $entry,
                     'target_price' => $target,
                     'stop_loss' => $stop,
+                    'expected_holding_days' => $ai['expected_holding_days'] ?? null,
+                    'target_eta_days' => $ai['target_eta_days'] ?? null,
+                    'review_after_days' => $ai['review_after_days'] ?? null,
                 ],
                 'swing_risk_notes' => $ai['risk_notes'] ?? $row['risk_notes'],
             ]);
@@ -262,7 +275,10 @@ class SwingScreenerService
   "target_price": 110,
   "stop_loss": 95,
   "time_horizon_days": 20,
-  "entry_plan": {},
+  "expected_holding_days": "10-25",
+  "target_eta_days": 12,
+  "review_after_days": 5,
+  "entry_plan": {"expected_holding_days":"10-25","target_eta_days":12,"review_after_days":5},
   "risk_notes": ["風險"]
 }
 PROMPT;
@@ -276,17 +292,18 @@ PROMPT;
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
-                    'max_tokens' => 8000,
+                    'max_tokens' => 16000,
                     'messages' => [['role' => 'user', 'content' => $prompt]],
                 ]);
 
             if (!$response->successful()) {
                 Log::error('SwingScreener API error: ' . $response->body());
-                return [];
+                throw new \RuntimeException('短線 AI 選股 API 失敗：' . mb_substr($response->body(), 0, 300));
             }
 
             if ($response->json('stop_reason') === 'max_tokens') {
-                Log::warning('SwingScreener: hit max_tokens limit, response truncated');
+                Log::error('SwingScreener: hit max_tokens limit, response truncated');
+                throw new \RuntimeException('短線 AI 選股回覆超過 max_tokens，被截斷；未寫入候選。');
             }
 
             $text = $response->json('content.0.text', '');
@@ -294,18 +311,82 @@ PROMPT;
             $start = strpos($text, '[');
             $end = strrpos($text, ']');
             if ($start === false || $end === false || $end <= $start) {
-                Log::warning('SwingScreener: no JSON array brackets found, snippet=' . mb_substr(trim($text), 0, 200));
-                return [];
+                Log::error('SwingScreener: no JSON array brackets found, snippet=' . mb_substr(trim($text), 0, 500));
+                throw new \RuntimeException('短線 AI 選股回覆不是 JSON 陣列；未寫入候選。');
             }
             $data = json_decode(substr($text, $start, $end - $start + 1), true);
             if (!is_array($data)) {
-                Log::warning('SwingScreener: JSON decode failed, snippet=' . mb_substr(trim($text), 0, 200));
-                return [];
+                Log::error('SwingScreener: JSON decode failed, snippet=' . mb_substr(trim($text), 0, 500));
+                throw new \RuntimeException('短線 AI 選股 JSON 解析失敗；未寫入候選。');
             }
             return $data;
         } catch (\Throwable $e) {
             Log::error('SwingScreener: ' . $e->getMessage());
-            return [];
+            throw $e;
+        }
+    }
+
+    private function askAiWithRetry(string $date, Collection $rows, Collection $theses, Collection $aiRows): array
+    {
+        $last = null;
+
+        for ($attempt = 1; $attempt <= $this->maxAiAttempts; $attempt++) {
+            try {
+                $selected = $this->askAi($date, $rows, $theses);
+                $this->assertValidAiSelections($selected, $aiRows);
+
+                if ($attempt > 1) {
+                    Log::info("SwingScreener: AI succeeded on retry attempt {$attempt}");
+                }
+
+                return $selected;
+            } catch (\Throwable $e) {
+                $last = $e;
+                Log::warning("SwingScreener: AI attempt {$attempt}/{$this->maxAiAttempts} failed: " . $e->getMessage());
+
+                if ($attempt < $this->maxAiAttempts) {
+                    usleep(500000 * $attempt);
+                }
+            }
+        }
+
+        throw new \RuntimeException(
+            '短線 AI 選股重試 ' . $this->maxAiAttempts . ' 次仍失敗；未寫入候選。最後錯誤：' . ($last?->getMessage() ?? 'unknown'),
+            previous: $last
+        );
+    }
+
+    private function assertValidAiSelections(array $selected, Collection $rows): void
+    {
+        $expectedSymbols = $rows->pluck('symbol')->map(fn ($symbol) => (string) $symbol)->values();
+        $selectedBySymbol = collect($selected)->filter(fn ($item) => is_array($item) && isset($item['symbol']))
+            ->keyBy(fn ($item) => (string) $item['symbol']);
+
+        $missing = $expectedSymbols->reject(fn ($symbol) => $selectedBySymbol->has($symbol))->values();
+        if ($missing->isNotEmpty()) {
+            throw new \RuntimeException('短線 AI 選股回覆缺少候選：' . $missing->take(8)->implode(', '));
+        }
+
+        $selectedCount = 0;
+        foreach ($expectedSymbols as $symbol) {
+            $item = $selectedBySymbol->get($symbol);
+            if (!isset($item['score'], $item['selected'], $item['reasoning'])) {
+                throw new \RuntimeException("短線 AI 選股 {$symbol} 缺少 score/selected/reasoning。");
+            }
+            $score = (float) $item['score'];
+            if ($score < 0 || $score > 100) {
+                throw new \RuntimeException("短線 AI 選股 {$symbol} score 超出 0-100。");
+            }
+            if (trim((string) $item['reasoning']) === '' || trim((string) $item['reasoning']) === '趨勢、籌碼、量能與產業論點綜合評估入選。') {
+                throw new \RuntimeException("短線 AI 選股 {$symbol} reasoning 無效。");
+            }
+            if ((bool) $item['selected']) {
+                $selectedCount++;
+            }
+        }
+
+        if ($selectedCount < 8 || $selectedCount > 15) {
+            throw new \RuntimeException("短線 AI 選股 selected 數量異常：{$selectedCount}。");
         }
     }
 }
