@@ -14,7 +14,6 @@ class RefreshSwingUniverse extends Command
     protected $signature = 'stock:refresh-swing-universe';
     protected $description = '依流動性／價格／資料完整度／ETF 類型重算 stocks.is_swing_eligible';
 
-    private const MIN_QUOTE_DAYS = 60;
     private const AVG_VOLUME_DAYS = 20;
     private const MIN_AVG_VOLUME_LOTS = 1000;
     private const MIN_CLOSE_PRICE = 10.0;
@@ -49,11 +48,6 @@ class RefreshSwingUniverse extends Command
                 if (mb_stripos($stock->name ?? '', $keyword) !== false) {
                     return;
                 }
-            }
-
-            $quoteCount = DailyQuote::where('stock_id', $stock->id)->count();
-            if ($quoteCount < self::MIN_QUOTE_DAYS) {
-                return;
             }
 
             $recent = DailyQuote::where('stock_id', $stock->id)

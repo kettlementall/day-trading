@@ -20,7 +20,7 @@ class SwingScreenerService
     private string $model;
     private int $maxAiAttempts = 3;
 
-    public function __construct()
+    public function __construct(private FugleRealtimeClient $fugle)
     {
         $this->apiKey = config('services.anthropic.api_key', '');
         $this->model = config('services.anthropic.screening_model', 'claude-opus-4-6');
@@ -124,7 +124,16 @@ class SwingScreenerService
             ->orderByDesc('date')
             ->limit(80)
             ->get();
+        if ($quotes->count() < 60 && $date === now()->toDateString()) {
+            $this->backfillDailyQuotesFromFugle($stock, 80);
+            $quotes = DailyQuote::where('stock_id', $stock->id)
+                ->where('date', '<=', $date)
+                ->orderByDesc('date')
+                ->limit(80)
+                ->get();
+        }
         if ($quotes->count() < 60) {
+            Log::info("SwingScreener skipped {$stock->symbol}: insufficient_kline_after_fugle count={$quotes->count()} date={$date}");
             return null;
         }
 
@@ -230,6 +239,47 @@ class SwingScreenerService
                 'evidence' => array_slice($evidence, 0, 5),
             ];
         })->filter(fn ($link) => $link['score'] >= 20)->values()->all();
+    }
+
+    private function backfillDailyQuotesFromFugle(Stock $stock, int $days): void
+    {
+        $candles = $this->fugle->fetchDailyCandles($stock->symbol, $days);
+        if (empty($candles)) {
+            return;
+        }
+
+        foreach ($candles as $candle) {
+            if (empty($candle['date']) || (float) ($candle['close'] ?? 0) <= 0) {
+                continue;
+            }
+
+            $open = (float) ($candle['open'] ?? 0);
+            $high = (float) ($candle['high'] ?? 0);
+            $low = (float) ($candle['low'] ?? 0);
+            $close = (float) ($candle['close'] ?? 0);
+            $changePercent = (float) ($candle['change_percent'] ?? 0);
+            $change = $changePercent !== 0
+                ? round($close - ($close / (1 + ($changePercent / 100))), 2)
+                : 0.0;
+            $prevClose = $close - $change;
+            $amplitude = $prevClose > 0 ? round(($high - $low) / $prevClose * 100, 2) : 0;
+
+            DailyQuote::updateOrCreate(
+                ['stock_id' => $stock->id, 'date' => $candle['date']],
+                [
+                    'open' => $open,
+                    'high' => $high,
+                    'low' => $low,
+                    'close' => $close,
+                    'volume' => (int) ($candle['volume'] ?? 0),
+                    'trade_value' => 0,
+                    'trade_count' => 0,
+                    'change' => $change,
+                    'change_percent' => $changePercent,
+                    'amplitude' => $amplitude,
+                ]
+            );
+        }
     }
 
     private function askAi(string $date, Collection $rows, Collection $theses): array

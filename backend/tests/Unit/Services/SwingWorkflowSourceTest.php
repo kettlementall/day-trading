@@ -40,4 +40,15 @@ class SwingWorkflowSourceTest extends TestCase
         $this->assertStringContainsString('短線 AI 選股回覆缺少候選', $source);
         $this->assertStringContainsString('短線 AI 選股重試', $source);
     }
+
+    public function test_swing_screening_backfills_current_day_kline_from_fugle(): void
+    {
+        $screener = file_get_contents(__DIR__ . '/../../../app/Services/SwingScreenerService.php');
+        $universe = file_get_contents(__DIR__ . '/../../../app/Console/Commands/RefreshSwingUniverse.php');
+
+        $this->assertStringContainsString('FugleRealtimeClient $fugle', $screener);
+        $this->assertStringContainsString('backfillDailyQuotesFromFugle', $screener);
+        $this->assertStringContainsString('insufficient_kline_after_fugle', $screener);
+        $this->assertStringNotContainsString('MIN_QUOTE_DAYS', $universe);
+    }
 }
