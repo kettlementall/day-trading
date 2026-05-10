@@ -28,6 +28,7 @@ class SwingPositionUpdateService
 
         $positions = SwingPosition::with(['stock', 'candidate'])
             ->whereIn('status', SwingPosition::ACTIVE_STATUSES)
+            ->whereDate('entry_date', '<=', $date)
             ->get();
 
         foreach ($positions as $position) {
@@ -119,7 +120,7 @@ class SwingPositionUpdateService
                 'chip_health' => $chipContext['health'],
                 'risk_pressure' => 'high',
                 'time_pressure' => $this->timePressure($holdingDays, $position),
-            ]);
+            ], $profitPct);
         }
 
         if ($thesisStatus['status'] === InvestmentThesis::STATUS_INACTIVE || ($thesisStatus['confidence_score'] ?? 100) < 35) {
@@ -135,13 +136,13 @@ class SwingPositionUpdateService
                 'chip_health' => $chipContext['health'],
                 'risk_pressure' => 'high',
                 'time_pressure' => $this->timePressure($holdingDays, $position),
-            ]);
+            ], $profitPct);
         }
 
         if ($this->apiKey) {
             $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext);
             if ($ai) {
-                return $this->normalizeAdvice($position, $ai);
+                return $this->normalizeAdvice($position, $ai, $profitPct);
             }
         }
 
@@ -157,7 +158,7 @@ class SwingPositionUpdateService
                 'chip_health' => $chipContext['health'],
                 'risk_pressure' => 'medium',
                 'time_pressure' => 'normal',
-            ]);
+            ], $profitPct);
         }
 
         if ($profitPct >= 8) {
@@ -172,7 +173,7 @@ class SwingPositionUpdateService
                 'chip_health' => $chipContext['health'],
                 'risk_pressure' => 'medium',
                 'time_pressure' => 'normal',
-            ]);
+            ], $profitPct);
         }
 
         return $this->normalizeAdvice($position, [
@@ -186,7 +187,7 @@ class SwingPositionUpdateService
             'chip_health' => $chipContext['health'],
             'risk_pressure' => $chipContext['health'] === 'weak' || $technicalContext['health'] === 'weak' ? 'medium' : 'low',
             'time_pressure' => $this->timePressure($holdingDays, $position),
-        ]);
+        ], $profitPct);
     }
 
     private function askAi(
@@ -221,10 +222,12 @@ class SwingPositionUpdateService
 - current_stop 不可低於目前停損，除非 action=exit；停損只能上移或維持。
 - current_target 可以上修或下修，但 reasoning 必須說明原因。
 - expected_holding_days 與 target_eta_days 必須依今日狀態重新估，不要沿用固定 20 天。
+- target_price_reasoning 必須說明「current_target 為何是該數字」，需引用壓力區、均線/通道、ATR 波動、風險報酬或論點催化之一。
+- eta_reasoning 必須說明「target_eta_days 為何是該天數」，需引用趨勢斜率、波動率、量能、籌碼或題材催化時間窗之一。
 - thesis_health / technical_health / chip_health / risk_pressure 必須明確反映論點、技術、籌碼與風險。
 
 格式：
-{"action":"hold/adjust/trim/exit","reasoning":"原因","current_stop":數字,"current_target":數字,"profit_percent":數字,"expected_holding_days":"8-15","target_eta_days":8,"time_pressure":"normal/delayed/expired","thesis_health":"healthy/weak/invalidated/unknown","technical_health":"healthy/weak/broken","chip_health":"healthy/neutral/weak","risk_pressure":"low/medium/high","chip_risk_notes":["原因"],"volume_price_signal":"量價描述"}
+{"action":"hold/adjust/trim/exit","reasoning":"原因","current_stop":數字,"current_target":數字,"target_price_reasoning":"目標價數字理由","profit_percent":數字,"expected_holding_days":"8-15","target_eta_days":8,"eta_reasoning":"ETA 數字理由","time_pressure":"normal/delayed/expired","thesis_health":"healthy/weak/invalidated/unknown","technical_health":"healthy/weak/broken","chip_health":"healthy/neutral/weak","risk_pressure":"low/medium/high","chip_risk_notes":["原因"],"volume_price_signal":"量價描述"}
 PROMPT;
 
         try {
@@ -260,7 +263,7 @@ PROMPT;
         }
     }
 
-    private function normalizeAdvice(SwingPosition $position, array $advice): array
+    private function normalizeAdvice(SwingPosition $position, array $advice, ?float $profitPercent = null): array
     {
         $previousStop = $position->current_stop !== null ? (float) $position->current_stop : null;
         $previousTarget = $position->current_target !== null ? (float) $position->current_target : null;
@@ -277,6 +280,9 @@ PROMPT;
         $advice['action'] = $action;
         $advice['current_stop'] = $nextStop;
         $advice['current_target'] = $nextTarget;
+        if ($profitPercent !== null) {
+            $advice['profit_percent'] = $profitPercent;
+        }
         $advice['previous_stop'] = $previousStop;
         $advice['previous_target'] = $previousTarget;
         $advice['stop_changed'] = $previousStop !== null && $nextStop !== null && abs($nextStop - $previousStop) >= 0.01;
@@ -284,6 +290,9 @@ PROMPT;
         $advice['adjustment_reason'] = $advice['adjustment_reason'] ?? $advice['reasoning'] ?? null;
         $advice['expected_holding_days'] = $advice['expected_holding_days'] ?? $this->expectedHoldingDays($position);
         $advice['target_eta_days'] = isset($advice['target_eta_days']) ? (int) $advice['target_eta_days'] : null;
+        $entryPlan = $position->candidate?->swing_entry_plan ?? [];
+        $advice['target_price_reasoning'] = $advice['target_price_reasoning'] ?? $entryPlan['target_price_reasoning'] ?? null;
+        $advice['eta_reasoning'] = $advice['eta_reasoning'] ?? $entryPlan['eta_reasoning'] ?? null;
         $advice['time_pressure'] = $advice['time_pressure'] ?? 'normal';
         $advice['thesis_health'] = $advice['thesis_health'] ?? 'unknown';
         $advice['technical_health'] = $advice['technical_health'] ?? 'healthy';

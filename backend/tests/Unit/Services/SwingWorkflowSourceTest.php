@@ -25,6 +25,8 @@ class SwingWorkflowSourceTest extends TestCase
         $this->assertStringContainsString('technical_health', $source);
         $this->assertStringContainsString('thesis_health', $source);
         $this->assertStringContainsString('target_eta_days', $source);
+        $this->assertStringContainsString('target_price_reasoning', $source);
+        $this->assertStringContainsString('eta_reasoning', $source);
         $this->assertStringContainsString('previous_stop', $source);
         $this->assertStringContainsString('max($previousStop, $nextStop)', $source);
     }
@@ -39,6 +41,7 @@ class SwingWorkflowSourceTest extends TestCase
         $this->assertStringContainsString('assertValidAiSelections', $source);
         $this->assertStringContainsString('短線 AI 選股回覆缺少候選', $source);
         $this->assertStringContainsString('短線 AI 選股重試', $source);
+        $this->assertStringContainsString('缺少目標價或 ETA 數字理由', $source);
     }
 
     public function test_swing_screening_backfills_current_day_kline_from_fugle(): void

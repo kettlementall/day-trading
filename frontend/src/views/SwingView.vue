@@ -130,6 +130,14 @@
                 <span>目標 ETA {{ etaLabel(p.latest_advice.target_eta_days) }}</span>
                 <span>時間 {{ timePressureLabel(p.latest_advice.time_pressure) }}</span>
               </div>
+              <div v-if="p.latest_advice.target_price_reasoning || p.latest_advice.eta_reasoning" class="number-reasons">
+                <div v-if="p.latest_advice.target_price_reasoning">
+                  <span>目標理由</span>{{ p.latest_advice.target_price_reasoning }}
+                </div>
+                <div v-if="p.latest_advice.eta_reasoning">
+                  <span>ETA 理由</span>{{ p.latest_advice.eta_reasoning }}
+                </div>
+              </div>
               <div v-if="p.latest_advice.volume_price_signal" class="advice-note">
                 {{ p.latest_advice.volume_price_signal }}
               </div>
@@ -244,6 +252,14 @@
             <div class="stat">
               <div class="stat-label">目標 ETA</div>
               <div class="stat-value">{{ etaLabel(c.swing_entry_plan?.target_eta_days || c.swing_time_horizon_days) }}</div>
+            </div>
+          </div>
+          <div v-if="c.swing_entry_plan?.target_price_reasoning || c.swing_entry_plan?.eta_reasoning" class="number-reasons candidate-reasons">
+            <div v-if="c.swing_entry_plan?.target_price_reasoning">
+              <span>目標理由</span>{{ c.swing_entry_plan.target_price_reasoning }}
+            </div>
+            <div v-if="c.swing_entry_plan?.eta_reasoning">
+              <span>ETA 理由</span>{{ c.swing_entry_plan.eta_reasoning }}
             </div>
           </div>
 
@@ -977,6 +993,33 @@ function isActiveStatus(status) {
   margin-top: 6px;
   font-size: 12px;
   color: var(--c-text-sub);
+}
+
+.number-reasons {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--c-text-sub);
+  line-height: 1.45;
+}
+
+.number-reasons div {
+  padding: 6px 8px;
+  border: 1px solid var(--c-line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.number-reasons span {
+  display: inline-block;
+  margin-right: 6px;
+  font-weight: 700;
+  color: var(--c-text);
+}
+
+.candidate-reasons {
+  margin-top: 8px;
 }
 
 .advice-text {

@@ -106,6 +106,10 @@ class SwingController extends Controller
         }
 
         $entryPlan = $candidate->swing_entry_plan ?? [];
+        $today = now()->toDateString();
+        $entryDate = MarketHoliday::isHoliday($today)
+            ? MarketHoliday::previousTradingDay($today)
+            : $today;
 
         $position = SwingPosition::create([
             'user_id' => $request->user()->id,
@@ -114,7 +118,7 @@ class SwingController extends Controller
             'status' => SwingPosition::STATUS_HOLDING,
             'entry_price' => $validated['entry_price'],
             'shares' => $validated['shares'],
-            'entry_date' => now()->toDateString(),
+            'entry_date' => $entryDate,
             'current_stop' => $candidate->stop_loss,
             'current_target' => $candidate->target_price,
             'max_holding_days' => $candidate->swing_time_horizon_days ?: 20,
@@ -123,8 +127,10 @@ class SwingController extends Controller
                 'reasoning' => '使用者手動建立短線持倉，等待每日盤後追蹤。',
                 'current_stop' => (float) $candidate->stop_loss,
                 'current_target' => (float) $candidate->target_price,
+                'target_price_reasoning' => $entryPlan['target_price_reasoning'] ?? null,
                 'expected_holding_days' => $entryPlan['expected_holding_days'] ?? null,
                 'target_eta_days' => $entryPlan['target_eta_days'] ?? null,
+                'eta_reasoning' => $entryPlan['eta_reasoning'] ?? null,
                 'time_pressure' => 'normal',
                 'thesis_health' => 'unknown',
                 'technical_health' => 'unknown',

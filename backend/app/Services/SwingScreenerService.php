@@ -9,6 +9,7 @@ use App\Models\InvestmentThesis;
 use App\Models\MarginTrade;
 use App\Models\Stock;
 use App\Models\StockValuation;
+use App\Models\SwingPosition;
 use App\Models\ThesisStockLink;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
@@ -62,6 +63,17 @@ class SwingScreenerService
             $entry = (float) ($ai['entry_price'] ?? $row['entry_price']);
             $stop = (float) ($ai['stop_loss'] ?? $row['stop_loss']);
             $target = (float) ($ai['target_price'] ?? $row['target_price']);
+            $entryPlan = $ai['entry_plan'] ?? [];
+            $entryPlan = array_merge([
+                'entry_price' => $entry,
+                'target_price' => $target,
+                'stop_loss' => $stop,
+                'expected_holding_days' => $ai['expected_holding_days'] ?? null,
+                'target_eta_days' => $ai['target_eta_days'] ?? null,
+                'target_price_reasoning' => $ai['target_price_reasoning'] ?? null,
+                'eta_reasoning' => $ai['eta_reasoning'] ?? null,
+                'review_after_days' => $ai['review_after_days'] ?? null,
+            ], $entryPlan);
 
             $candidate = Candidate::create([
                 'stock_id' => $row['stock_id'],
@@ -82,14 +94,7 @@ class SwingScreenerService
                 'swing_reasoning' => $ai['reasoning'],
                 'swing_thesis' => $ai['thesis'] ?? $row['thesis'],
                 'swing_time_horizon_days' => (int) ($ai['time_horizon_days'] ?? $ai['target_eta_days'] ?? 20),
-                'swing_entry_plan' => $ai['entry_plan'] ?? [
-                    'entry_price' => $entry,
-                    'target_price' => $target,
-                    'stop_loss' => $stop,
-                    'expected_holding_days' => $ai['expected_holding_days'] ?? null,
-                    'target_eta_days' => $ai['target_eta_days'] ?? null,
-                    'review_after_days' => $ai['review_after_days'] ?? null,
-                ],
+                'swing_entry_plan' => $entryPlan,
                 'swing_risk_notes' => $ai['risk_notes'] ?? $row['risk_notes'],
             ]);
 
@@ -114,7 +119,28 @@ class SwingScreenerService
                 ]);
             });
 
+        $this->relinkActivePositions($created);
+
         return $created->map->fresh(['stock']);
+    }
+
+    private function relinkActivePositions(Collection $created): void
+    {
+        $candidateIdsByStock = $created->keyBy('stock_id')->map->id;
+        if ($candidateIdsByStock->isEmpty()) {
+            return;
+        }
+
+        SwingPosition::whereIn('status', SwingPosition::ACTIVE_STATUSES)
+            ->whereIn('stock_id', $candidateIdsByStock->keys())
+            ->get()
+            ->each(function (SwingPosition $position) use ($candidateIdsByStock) {
+                $candidateId = $candidateIdsByStock->get($position->stock_id);
+                if ($candidateId && (int) $position->candidate_id !== (int) $candidateId) {
+                    $position->candidate_id = $candidateId;
+                    $position->save();
+                }
+            });
     }
 
     private function buildCandidatePayload(Stock $stock, string $date, Collection $theses): ?array
@@ -312,6 +338,8 @@ class SwingScreenerService
 3. selected=true 僅給予實質想下單的檔次（8–12 檔），其餘設 false。
 4. score 與 selected 必須一致：score < 70 不得 selected=true；score >= 80 應該 selected=true。
 5. 同一個 strategy（trend_pullback/trend_follow/base_breakout）內也應該有分數階梯，不要全部一樣分。
+6. target_price_reasoning 必須說明「目標價為何是該數字」，需引用至少一個具體依據：近期壓力/箱型上緣/均線乖離/ATR 波動/風險報酬/產業催化預期。
+7. eta_reasoning 必須說明「target_eta_days 為何是該天數」，需引用至少一個具體依據：趨勢斜率、波動率、量能推進速度、籌碼累積速度、題材催化時間窗。
 
 請只輸出 JSON 陣列（共 {$totalCount} 筆，與候選清單一一對應）：
 {
@@ -323,12 +351,14 @@ class SwingScreenerService
   "thesis": {"title": "論點", "chain_position": "位置", "relevance_score": 0到100},
   "entry_price": 100,
   "target_price": 110,
+  "target_price_reasoning": "目標價取近期壓力區與 ATR 2.5 倍推估後的保守值，對應約 2:1 風險報酬。",
   "stop_loss": 95,
   "time_horizon_days": 20,
   "expected_holding_days": "10-25",
   "target_eta_days": 12,
+  "eta_reasoning": "以近 20 日趨勢斜率與目前量能推進速度估算，若論點延續約 12 個交易日接近目標區。",
   "review_after_days": 5,
-  "entry_plan": {"expected_holding_days":"10-25","target_eta_days":12,"review_after_days":5},
+  "entry_plan": {"expected_holding_days":"10-25","target_eta_days":12,"target_price_reasoning":"目標價理由","eta_reasoning":"ETA 理由","review_after_days":5},
   "risk_notes": ["風險"]
 }
 PROMPT;
@@ -429,6 +459,13 @@ PROMPT;
             }
             if (trim((string) $item['reasoning']) === '' || trim((string) $item['reasoning']) === '趨勢、籌碼、量能與產業論點綜合評估入選。') {
                 throw new \RuntimeException("短線 AI 選股 {$symbol} reasoning 無效。");
+            }
+            if ((bool) $item['selected']) {
+                $targetReasoning = trim((string) ($item['target_price_reasoning'] ?? data_get($item, 'entry_plan.target_price_reasoning', '')));
+                $etaReasoning = trim((string) ($item['eta_reasoning'] ?? data_get($item, 'entry_plan.eta_reasoning', '')));
+                if ($targetReasoning === '' || $etaReasoning === '') {
+                    throw new \RuntimeException("短線 AI 選股 {$symbol} 缺少目標價或 ETA 數字理由。");
+                }
             }
             if ((bool) $item['selected']) {
                 $selectedCount++;
