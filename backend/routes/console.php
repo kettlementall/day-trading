@@ -78,9 +78,9 @@ scheduledCommand('stock:refresh-swing-universe', '短線股票池重算', selfNo
 
 // 短線配置：盤後研究論點 → 更新既有持倉 → 產生新候選
 scheduledCommand('stock:research-investment-theses', 'AI 產業論點研究', selfNotify: true)
-    ->dailyAt('18:25');
+    ->dailyAt('18:20');
 scheduledCommand('stock:update-swing-positions', '短線持倉更新', selfNotify: true)
-    ->dailyAt('18:30')->weekdays();
+    ->dailyAt('18:50')->weekdays();
 scheduledCommand('stock:ai-screen-swing', '短線 AI 選股', selfNotify: true)
     ->dailyAt('19:00')->weekdays();
 
