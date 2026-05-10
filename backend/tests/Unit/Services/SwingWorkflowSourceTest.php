@@ -54,4 +54,20 @@ class SwingWorkflowSourceTest extends TestCase
         $this->assertStringContainsString('insufficient_kline_after_fugle', $screener);
         $this->assertStringNotContainsString('MIN_QUOTE_DAYS', $universe);
     }
+
+    public function test_investment_theses_support_related_stock_mapping_for_swing(): void
+    {
+        $research = file_get_contents(__DIR__ . '/../../../app/Services/InvestmentThesisResearchService.php');
+        $screener = file_get_contents(__DIR__ . '/../../../app/Services/SwingScreenerService.php');
+        $position = file_get_contents(__DIR__ . '/../../../app/Services/SwingPositionUpdateService.php');
+        $model = file_get_contents(__DIR__ . '/../../../app/Models/InvestmentThesis.php');
+
+        $this->assertStringContainsString('related_stocks', $model);
+        $this->assertStringContainsString('normalizeRelatedStocks', $research);
+        $this->assertStringContainsString('benefit_level', $research);
+        $this->assertStringContainsString('findRelatedStock', $screener);
+        $this->assertStringContainsString("'source' => 'related_stock'", $screener);
+        $this->assertStringContainsString("min(60, \$score)", $screener);
+        $this->assertStringContainsString('related_stock_context', $position);
+    }
 }

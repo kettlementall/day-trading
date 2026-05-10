@@ -25,6 +25,26 @@
           <span>背離：{{ t.sentiment_divergence || 'none' }}</span>
           <span>更新：{{ t.last_evaluated_at ? t.last_evaluated_at.substring(0, 16) : '-' }}</span>
         </div>
+        <div v-if="(t.related_stocks || []).length" class="related-stocks">
+          <div
+            v-for="level in ['core', 'secondary', 'watch']"
+            :key="level"
+            v-show="relatedByLevel(t, level).length"
+            class="related-group"
+          >
+            <div class="related-title">{{ benefitLabel(level) }}</div>
+            <div class="related-list">
+              <div v-for="s in relatedByLevel(t, level)" :key="s.symbol" class="related-item">
+                <div class="related-head">
+                  <strong>{{ s.symbol }} {{ s.name }}</strong>
+                  <span>信心 {{ s.confidence ?? '—' }}</span>
+                </div>
+                <div class="related-role">{{ s.role }}</div>
+                <div class="related-reason">{{ s.reasoning }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="evidence">{{ t.evidence_summary }}</div>
       </div>
     </div>
@@ -108,6 +128,14 @@ async function enable(thesis) {
 function tagType(status) {
   return { active: 'success', inactive: 'warning', disabled: 'danger' }[status] || 'info'
 }
+
+function benefitLabel(level) {
+  return { core: '核心受益', secondary: '次級受益', watch: '觀察' }[level] || '觀察'
+}
+
+function relatedByLevel(thesis, level) {
+  return (thesis.related_stocks || []).filter(s => s.benefit_level === level)
+}
 </script>
 
 <style scoped>
@@ -165,5 +193,54 @@ function tagType(status) {
   margin-top: 8px;
   color: #606266;
   font-size: 13px;
+}
+
+.related-stocks {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.related-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #303133;
+  margin-bottom: 4px;
+}
+
+.related-list {
+  display: grid;
+  gap: 6px;
+}
+
+.related-item {
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  padding: 7px 8px;
+  background: #fafafa;
+}
+
+.related-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.related-head span,
+.related-role,
+.related-reason {
+  color: #606266;
+  font-size: 12px;
+}
+
+.related-role {
+  margin-top: 3px;
+  font-weight: 600;
+}
+
+.related-reason {
+  margin-top: 3px;
+  line-height: 1.45;
 }
 </style>

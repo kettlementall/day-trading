@@ -3,10 +3,13 @@
 namespace App\Services;
 
 use App\Models\InvestmentThesis;
+use App\Models\DailyQuote;
 use App\Models\NewsArticle;
 use App\Models\NewsIndex;
+use App\Models\Stock;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Collection;
 
 class InvestmentThesisResearchService
 {
@@ -52,6 +55,7 @@ class InvestmentThesisResearchService
             if ($existing?->status === InvestmentThesis::STATUS_DISABLED) {
                 continue;
             }
+            $relatedStocks = $this->normalizeRelatedStocks($item['related_stocks'] ?? []);
 
             InvestmentThesis::updateOrCreate(
                 ['title' => $title],
@@ -60,6 +64,7 @@ class InvestmentThesisResearchService
                     'industry_chain' => $item['industry_chain'] ?? [],
                     'beneficiary_industries' => $item['beneficiary_industries'] ?? [],
                     'beneficiary_keywords' => $item['beneficiary_keywords'] ?? [],
+                    'related_stocks' => $relatedStocks,
                     'evidence_summary' => (string) ($item['evidence_summary'] ?? ''),
                     'risk_factors' => $item['risk_factors'] ?? [],
                     'sentiment_divergence' => $item['sentiment_divergence'] ?? null,
@@ -119,6 +124,10 @@ class InvestmentThesisResearchService
         $existingLines = $existingTheses->map(fn ($t) =>
             "- {$t->title} | status={$t->status} | confidence={$t->confidence_score} | {$t->description}"
         )->implode("\n");
+        $stockUniverse = $this->buildStockUniverse($industryBriefs);
+        $stockUniverseText = $stockUniverse->map(fn (Stock $stock) =>
+            "{$stock->symbol} {$stock->name} {$stock->industry}"
+        )->implode("\n");
         $industryJson = json_encode($industryBriefs, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         $prompt = <<<PROMPT
@@ -129,13 +138,15 @@ class InvestmentThesisResearchService
 2. 推導一階受益：直接訂單或報價受益的環節。
 3. 推導二階/三階受益：材料、設備、封測、散熱、PCB、電源、通路、替代供應鏈。
 4. 判斷台股哪些產業或股票名稱關鍵字可能受益。
-5. 寫出論點失效條件：報價反轉、capex 下修、庫存惡化、法人轉賣、技術跌破等。
+5. 點名台股可能受惠個股，並說清楚每檔在產業鏈中的角色。點名不是買進建議，只是供短線配置加權。
+6. 寫出論點失效條件：報價反轉、capex 下修、庫存惡化、法人轉賣、技術跌破等。
 
 禁止事項：
 - 不可以用「半導體 短線題材延續」「AI與雲端 短線題材延續」這種粗分類當 title。
 - 不可以只重述新聞標題。
 - 不可以把同一條供應鏈拆成多個高度重複論點。
 - 不可以產生沒有台股可映射受益環節的空泛總經論點。
+- 不可以根據既有短線候選、持倉、曾經選出的股票去反推產業論點或個股名單；related_stocks 只能來自新聞、產業鏈推理與你對台股供應鏈的判斷。
 
 日期：{$date}
 
@@ -145,6 +156,9 @@ class InvestmentThesisResearchService
 分產業摘要 JSON：
 {$industryJson}
 
+可點名股票 universe（只能從這份清單選 related_stocks；不得使用短線候選、持倉或清單外股票）：
+{$stockUniverseText}
+
 新聞明細：
 {$newsLines}
 
@@ -153,14 +167,15 @@ class InvestmentThesisResearchService
 
 # 輸出規範（嚴格遵守）
 
-只輸出 JSON 陣列，最多 8 筆，不要有任何解釋文字、不要包裹 markdown code block。
+只輸出 JSON 陣列，最多 6 筆，不要有任何解釋文字、不要包裹 markdown code block。
 每筆物件**必須**包含下列所有欄位（欄位名稱完全一致，不可改成 sector/horizon/direction 等別名）：
 
 - `title` (string)：具體論點名稱，必須包含驅動與受益鏈，例：「AI 伺服器升級帶動 HBM/PCB/散熱鏈」
-- `description` (string)：核心敘事（3-5 句），必須包含「驅動因素 → 受益環節 → 台股映射 → 短線催化」
+- `description` (string)：核心敘事（2-3 句），必須包含「驅動因素 → 受益環節 → 台股映射 → 短線催化」
 - `industry_chain` (string[])：至少 4 個上中下游節點，例 ["雲端資本支出", "AI GPU", "HBM/DRAM", "CoWoS/封測", "高階PCB", "散熱"]
 - `beneficiary_industries` (string[])：受惠產業類別（用以對應 stocks.industry 欄位），例 ["半導體", "電子零組件"]
 - `beneficiary_keywords` (string[])：股票名稱/個股關鍵字/供應鏈詞，用以對 Stock.name 或產業字串匹配，至少 8 個，例 ["台積電", "日月光", "華通", "台光電", "雙鴻", "奇鋐", "HBM", "PCB"]
+- `related_stocks` (object[])：此論點明確映射到的台股個股，最多 6 檔；每檔必須有 symbol/name/benefit_level/role/reasoning/confidence/risks。benefit_level 只能是 core、secondary、watch；core 最多 3 檔。只能從「可點名股票 universe」選，且不得只因名稱相似就列入，必須說明供應鏈角色。
 - `evidence_summary` (string)：佐證新聞重點摘要；要指出哪些新聞支持需求、報價、訂單、法人或情緒
 - `risk_factors` (string[])：至少 4 個風險，包含「論點失效條件」
 - `sentiment_divergence` (string)：必須為這三個值之一 — `none` / `bullish_fundamental_bearish_sentiment` / `bearish_fundamental_bullish_sentiment`
@@ -174,6 +189,17 @@ class InvestmentThesisResearchService
     "industry_chain": ["雲端資本支出", "AI GPU", "HBM/DRAM", "CoWoS/封測", "高階PCB/CCL", "散熱/電源"],
     "beneficiary_industries": ["半導體", "電子零組件"],
     "beneficiary_keywords": ["台積電", "TSMC", "日月光", "華通", "台光電", "雙鴻"],
+    "related_stocks": [
+      {
+        "symbol": "2313",
+        "name": "華通",
+        "benefit_level": "core",
+        "role": "高階 PCB 供應鏈",
+        "reasoning": "AI server 規格升級會拉動高階 PCB 層數與單價，華通具 PCB 供應鏈映射。",
+        "confidence": 78,
+        "risks": ["AI server 出貨遞延", "PCB 報價不如預期"]
+      }
+    ],
     "evidence_summary": "10/30 NVDA 法說上修；華通 11/5 公告 N3 PCB 出貨；台光電 CCL 連 5 月成長",
     "risk_factors": ["美中對 AI 晶片出口管制", "下游雲端資本支出放緩", "HBM 報價轉弱", "股價跌破月線且法人轉賣"],
     "sentiment_divergence": "none",
@@ -183,7 +209,7 @@ class InvestmentThesisResearchService
 PROMPT;
 
         try {
-            $response = Http::timeout(90)
+            $response = Http::timeout(240)
                 ->withHeaders([
                     'x-api-key' => $this->apiKey,
                     'anthropic-version' => '2023-06-01',
@@ -191,7 +217,7 @@ PROMPT;
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
-                    'max_tokens' => 6000,
+                    'max_tokens' => 16000,
                     'messages' => [['role' => 'user', 'content' => $prompt]],
                 ]);
 
@@ -244,6 +270,7 @@ PROMPT;
                 'industry_chain' => ['雲端資本支出', 'AI GPU', 'HBM/DRAM', 'CoWoS/封測', '高階PCB/CCL', '散熱/電源'],
                 'beneficiary_industries' => ['半導體', 'AI與雲端', '電子零組件', '電腦及週邊設備業'],
                 'beneficiary_keywords' => ['HBM', 'DRAM', '記憶體', 'CoWoS', '封測', 'PCB', 'CCL', '散熱', '電源', '伺服器', 'AI server'],
+                'related_stocks' => [],
                 'risk_factors' => ['雲端資本支出下修', 'HBM/DRAM 報價轉弱', '美中出口管制升溫', '股價跌破月線且法人轉賣'],
             ],
             [
@@ -253,6 +280,7 @@ PROMPT;
                 'industry_chain' => ['AI server', '高功耗機櫃', '電源供應', '液冷/風冷散熱', '高速連接器/線材'],
                 'beneficiary_industries' => ['電子零組件', '電腦及週邊設備業', 'AI與雲端'],
                 'beneficiary_keywords' => ['散熱', '液冷', '風扇', '電源', '連接器', '線材', '伺服器', '資料中心'],
+                'related_stocks' => [],
                 'risk_factors' => ['客戶認證延後', '毛利率被成本侵蝕', 'AI server 出貨遞延', '短線漲多後量縮跌破支撐'],
             ],
             [
@@ -262,6 +290,7 @@ PROMPT;
                 'industry_chain' => ['通膨/利率', '債券評價', '壽險淨值', '銀行利差', '金融股評價'],
                 'beneficiary_industries' => ['金融', '金融保險'],
                 'beneficiary_keywords' => ['金控', '銀行', '壽險', '殖利率', '配息', '利率', '債券'],
+                'related_stocks' => [],
                 'risk_factors' => ['利率反向急升', '匯損擴大', '金融監理利空', '外資轉賣金融權值'],
             ],
             [
@@ -271,6 +300,7 @@ PROMPT;
                 'industry_chain' => ['原物料報價', '庫存循環', '產品利差', '傳產獲利', '評價修復'],
                 'beneficiary_industries' => ['傳產', '鋼鐵工業', '航運業', '塑膠工業'],
                 'beneficiary_keywords' => ['鋼鐵', '航運', '塑化', '水泥', '報價', '運價', '庫存'],
+                'related_stocks' => [],
                 'risk_factors' => ['報價反彈失敗', '需求復甦不如預期', '庫存去化延後', '跌回整理區間'],
             ],
         ];
@@ -312,6 +342,7 @@ PROMPT;
                 'industry_chain' => ['需求/政策驅動', "{$industry} 訂單或報價", '台股供應鏈', '法人籌碼', '短線技術轉強'],
                 'beneficiary_industries' => [$industry],
                 'beneficiary_keywords' => collect(NewsIndustryMap::INDUSTRIES[$industry] ?? [$industry])->take(8)->values()->all(),
+                'related_stocks' => [],
                 'evidence_summary' => $group->take(5)->pluck('title')->implode('；'),
                 'risk_factors' => ['新聞題材退燒', '股價已提前反映', '法人轉賣', '跌破月線或關鍵支撐'],
                 'sentiment_divergence' => $avg < 0 ? 'bearish_fundamental_bullish_sentiment' : 'none',
@@ -320,6 +351,100 @@ PROMPT;
         }
 
         return array_slice($items, 0, 8);
+    }
+
+    private function buildStockUniverse($industryBriefs): Collection
+    {
+        $industries = collect($industryBriefs)->pluck('industry')->filter()->values();
+        $keywords = $industries
+            ->flatMap(fn ($industry) => NewsIndustryMap::INDUSTRIES[$industry] ?? [$industry])
+            ->merge($industries)
+            ->map(fn ($keyword) => trim((string) $keyword))
+            ->filter(fn ($keyword) => $keyword !== '')
+            ->unique()
+            ->values();
+
+        return Stock::query()
+            ->select('stocks.*')
+            ->leftJoin('daily_quotes as latest_quote', function ($join) {
+                $join->on('latest_quote.stock_id', '=', 'stocks.id')
+                    ->where('latest_quote.date', DailyQuote::max('date'));
+            })
+            ->where(function ($query) use ($industries, $keywords) {
+                foreach ($industries as $industry) {
+                    $query->orWhere('industry', 'like', '%' . $industry . '%');
+                }
+                foreach ($keywords->take(30) as $keyword) {
+                    $query->orWhere('industry', 'like', '%' . $keyword . '%')
+                        ->orWhere('name', 'like', '%' . $keyword . '%');
+                }
+            })
+            ->orderByDesc('stocks.is_swing_eligible')
+            ->orderByDesc('latest_quote.trade_value')
+            ->orderBy('stocks.symbol')
+            ->limit(100)
+            ->get();
+    }
+
+    private function normalizeRelatedStocks(array $items): array
+    {
+        $normalized = collect($items)
+            ->filter(fn ($item) => is_array($item))
+            ->map(function (array $item) {
+                $symbol = trim((string) ($item['symbol'] ?? ''));
+                $name = trim((string) ($item['name'] ?? ''));
+                $stock = $symbol !== ''
+                    ? Stock::where('symbol', $symbol)->first()
+                    : null;
+
+                if (!$stock && $name !== '') {
+                    $stock = Stock::where('name', $name)->first();
+                }
+                if (!$stock) {
+                    return null;
+                }
+
+                $level = (string) ($item['benefit_level'] ?? 'watch');
+                if (!in_array($level, ['core', 'secondary', 'watch'], true)) {
+                    $level = 'watch';
+                }
+
+                $role = trim((string) ($item['role'] ?? ''));
+                $reasoning = trim((string) ($item['reasoning'] ?? ''));
+                if ($role === '' || $reasoning === '') {
+                    return null;
+                }
+
+                return [
+                    'symbol' => $stock->symbol,
+                    'name' => $stock->name,
+                    'benefit_level' => $level,
+                    'role' => $role,
+                    'reasoning' => $reasoning,
+                    'evidence' => array_values(array_slice((array) ($item['evidence'] ?? []), 0, 5)),
+                    'confidence' => max(0, min(100, (int) ($item['confidence'] ?? 50))),
+                    'risks' => array_values(array_slice((array) ($item['risks'] ?? []), 0, 5)),
+                ];
+            })
+            ->filter()
+            ->unique('symbol')
+            ->sortByDesc('confidence')
+            ->values();
+
+        $coreCount = 0;
+        return $normalized
+            ->take(12)
+            ->map(function (array $item) use (&$coreCount) {
+                if ($item['benefit_level'] === 'core') {
+                    $coreCount++;
+                    if ($coreCount > 5) {
+                        $item['benefit_level'] = 'secondary';
+                    }
+                }
+                return $item;
+            })
+            ->values()
+            ->all();
     }
 
     private function decayStaleTheses(): void

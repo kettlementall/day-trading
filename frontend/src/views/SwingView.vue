@@ -75,6 +75,12 @@
 
           <div class="row-divider"></div>
 
+          <div v-if="p.candidate?.swing_thesis?.source === 'related_stock'" class="thesis-role position-thesis-role">
+            <span>{{ benefitLabel(p.candidate.swing_thesis.benefit_level) }}</span>
+            <strong>{{ p.candidate.swing_thesis.role }}</strong>
+            <em>{{ p.candidate.swing_thesis.related_reasoning }}</em>
+          </div>
+
           <div class="row-stats">
             <div class="stat">
               <div class="stat-label">成本</div>
@@ -233,6 +239,11 @@
           <div class="thesis-line">
             <el-icon class="thesis-icon"><Connection /></el-icon>
             <span>{{ c.swing_thesis?.title || '未連結論點' }}</span>
+          </div>
+          <div v-if="c.swing_thesis?.source === 'related_stock'" class="thesis-role">
+            <span>{{ benefitLabel(c.swing_thesis.benefit_level) }}</span>
+            <strong>{{ c.swing_thesis.role }}</strong>
+            <em>{{ c.swing_thesis.related_reasoning }}</em>
           </div>
           <div class="reasoning">{{ c.swing_reasoning || c.ai_reasoning }}</div>
 
@@ -596,6 +607,10 @@ function timePressureLabel(v) {
     delayed: '落後',
     expired: '過期',
   }[v] || v || '-'
+}
+
+function benefitLabel(level) {
+  return { core: '核心受益', secondary: '次級受益', watch: '觀察' }[level] || '觀察'
 }
 
 function etaLabel(v) {
@@ -1143,6 +1158,40 @@ function isActiveStatus(status) {
 .thesis-icon {
   color: var(--c-primary);
   font-size: 14px;
+}
+
+.thesis-role {
+  display: grid;
+  gap: 3px;
+  margin-top: 6px;
+  padding: 7px 8px;
+  border: 1px solid var(--c-primary-line);
+  border-radius: 6px;
+  background: var(--c-primary-soft);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--c-text-sub);
+}
+
+.position-thesis-role {
+  margin-bottom: 10px;
+}
+
+.thesis-role span {
+  width: fit-content;
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: #fff;
+  color: var(--c-primary-strong);
+  font-weight: 700;
+}
+
+.thesis-role strong {
+  color: var(--c-text);
+}
+
+.thesis-role em {
+  font-style: normal;
 }
 
 .reasoning {

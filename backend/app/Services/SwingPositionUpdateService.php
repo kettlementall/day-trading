@@ -224,6 +224,7 @@ class SwingPositionUpdateService
 - expected_holding_days 與 target_eta_days 必須依今日狀態重新估，不要沿用固定 20 天。
 - target_price_reasoning 必須說明「current_target 為何是該數字」，需引用壓力區、均線/通道、ATR 波動、風險報酬或論點催化之一。
 - eta_reasoning 必須說明「target_eta_days 為何是該天數」，需引用趨勢斜率、波動率、量能、籌碼或題材催化時間窗之一。
+- 若論點狀態包含 related_stock_context，必須判斷此股是否仍符合原本 benefit_level 與 role；若角色支撐轉弱，要反映在 thesis_health、risk_pressure、reasoning、目標價或 ETA。
 - thesis_health / technical_health / chip_health / risk_pressure 必須明確反映論點、技術、籌碼與風險。
 
 格式：
@@ -440,7 +441,30 @@ PROMPT;
             'confidence_score' => $thesis->confidence_score,
             'research_date' => $thesis->research_date?->format('Y-m-d'),
             'risk_factors' => $thesis->risk_factors ?? [],
+            'related_stock_context' => $this->resolveRelatedStockContext($thesis, $position),
         ];
+    }
+
+    private function resolveRelatedStockContext(InvestmentThesis $thesis, SwingPosition $position): ?array
+    {
+        foreach (($thesis->related_stocks ?? []) as $related) {
+            if (!is_array($related)) {
+                continue;
+            }
+            if ((string) ($related['symbol'] ?? '') !== (string) $position->stock->symbol) {
+                continue;
+            }
+
+            return [
+                'benefit_level' => $related['benefit_level'] ?? 'watch',
+                'role' => $related['role'] ?? null,
+                'reasoning' => $related['reasoning'] ?? null,
+                'confidence' => $related['confidence'] ?? null,
+                'risks' => $related['risks'] ?? [],
+            ];
+        }
+
+        return null;
     }
 
     private function profitPercent(SwingPosition $position, float $price): float

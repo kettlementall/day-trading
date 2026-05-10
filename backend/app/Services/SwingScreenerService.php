@@ -74,6 +74,10 @@ class SwingScreenerService
                 'eta_reasoning' => $ai['eta_reasoning'] ?? null,
                 'review_after_days' => $ai['review_after_days'] ?? null,
             ], $entryPlan);
+            $swingThesis = array_merge(
+                is_array($row['thesis'] ?? null) ? $row['thesis'] : [],
+                is_array($ai['thesis'] ?? null) ? $ai['thesis'] : []
+            );
 
             $candidate = Candidate::create([
                 'stock_id' => $row['stock_id'],
@@ -92,7 +96,7 @@ class SwingScreenerService
                 'ai_reasoning' => $ai['reasoning'],
                 'swing_strategy' => $ai['strategy'] ?? $row['strategy'],
                 'swing_reasoning' => $ai['reasoning'],
-                'swing_thesis' => $ai['thesis'] ?? $row['thesis'],
+                'swing_thesis' => $swingThesis,
                 'swing_time_horizon_days' => (int) ($ai['time_horizon_days'] ?? $ai['target_eta_days'] ?? 20),
                 'swing_entry_plan' => $entryPlan,
                 'swing_risk_notes' => $ai['risk_notes'] ?? $row['risk_notes'],
@@ -243,6 +247,36 @@ class SwingScreenerService
     {
         $text = mb_strtolower(($stock->industry ?? '') . ' ' . $stock->name . ' ' . $stock->symbol);
         return $theses->map(function (InvestmentThesis $thesis) use ($text, $stock) {
+            $related = $this->findRelatedStock($thesis, $stock);
+            if ($related) {
+                $base = match ($related['benefit_level'] ?? 'watch') {
+                    'core' => 75,
+                    'secondary' => 55,
+                    default => 35,
+                };
+                $score = $base
+                    + min(10, (int) round(($related['confidence'] ?? 50) / 10))
+                    + min(10, (int) round($thesis->confidence_score / 10));
+
+                return [
+                    'thesis_id' => $thesis->id,
+                    'title' => $thesis->title,
+                    'score' => min(100, $score),
+                    'source' => 'related_stock',
+                    'benefit_level' => $related['benefit_level'] ?? 'watch',
+                    'role' => $related['role'] ?? null,
+                    'related_reasoning' => $related['reasoning'] ?? null,
+                    'related_confidence' => $related['confidence'] ?? null,
+                    'risks' => $related['risks'] ?? [],
+                    'evidence' => array_values(array_filter([
+                        'AI 論點點名個股',
+                        ($related['benefit_level'] ?? null) ? '受益層級 ' . $related['benefit_level'] : null,
+                        ($related['role'] ?? null) ? '角色：' . $related['role'] : null,
+                        $related['reasoning'] ?? null,
+                    ])),
+                ];
+            }
+
             $score = 0;
             $evidence = [];
             foreach (($thesis->beneficiary_industries ?? []) as $industry) {
@@ -261,10 +295,25 @@ class SwingScreenerService
             return [
                 'thesis_id' => $thesis->id,
                 'title' => $thesis->title,
-                'score' => min(100, $score),
+                'score' => min(60, $score),
+                'source' => 'keyword_industry',
                 'evidence' => array_slice($evidence, 0, 5),
             ];
         })->filter(fn ($link) => $link['score'] >= 20)->values()->all();
+    }
+
+    private function findRelatedStock(InvestmentThesis $thesis, Stock $stock): ?array
+    {
+        foreach (($thesis->related_stocks ?? []) as $related) {
+            if (!is_array($related)) {
+                continue;
+            }
+            if ((string) ($related['symbol'] ?? '') === (string) $stock->symbol) {
+                return $related;
+            }
+        }
+
+        return null;
     }
 
     private function backfillDailyQuotesFromFugle(Stock $stock, int $days): void
@@ -310,7 +359,15 @@ class SwingScreenerService
 
     private function askAi(string $date, Collection $rows, Collection $theses): array
     {
-        $thesisText = $theses->map(fn ($t) => "- #{$t->id} {$t->title} 信心{$t->confidence_score}: {$t->description}")->implode("\n");
+        $thesisText = $theses->map(function ($t) {
+            $related = collect($t->related_stocks ?? [])
+                ->take(12)
+                ->map(fn ($s) => ($s['symbol'] ?? '') . ($s['name'] ?? '') . '/' . ($s['benefit_level'] ?? 'watch') . '/' . ($s['role'] ?? ''))
+                ->filter()
+                ->implode('；');
+
+            return "- #{$t->id} {$t->title} 信心{$t->confidence_score}: {$t->description}" . ($related ? " | 個股映射：{$related}" : '');
+        })->implode("\n");
         $candidates = $rows->take(30)->values();
         $stockText = $candidates->map(fn ($r) =>
             "{$r['symbol']} {$r['name']} {$r['industry']} pre_score={$r['pre_score']} close={$r['entry_price']} thesis=" . json_encode($r['thesis'], JSON_UNESCAPED_UNICODE)
@@ -340,6 +397,9 @@ class SwingScreenerService
 5. 同一個 strategy（trend_pullback/trend_follow/base_breakout）內也應該有分數階梯，不要全部一樣分。
 6. target_price_reasoning 必須說明「目標價為何是該數字」，需引用至少一個具體依據：近期壓力/箱型上緣/均線乖離/ATR 波動/風險報酬/產業催化預期。
 7. eta_reasoning 必須說明「target_eta_days 為何是該天數」，需引用至少一個具體依據：趨勢斜率、波動率、量能推進速度、籌碼累積速度、題材催化時間窗。
+8. thesis.source=related_stock 代表產業研究明確點名此股，但這不是買進命令；若技術、籌碼、量能或估值不支持，仍應排除。
+9. benefit_level=core 可提高論點權重；secondary 中度加權；watch 只能當輔助，禁止只靠題材選入。
+10. reasoning 必須說明「個股映射角色」與「交易條件」是否一致。
 
 請只輸出 JSON 陣列（共 {$totalCount} 筆，與候選清單一一對應）：
 {
@@ -348,7 +408,7 @@ class SwingScreenerService
   "score": 0到100,
   "strategy": "trend_pullback/trend_follow/base_breakout",
   "reasoning": "理專式判斷一句話 30-60 字（90 分以上必須說明為何優於其他候選）",
-  "thesis": {"title": "論點", "chain_position": "位置", "relevance_score": 0到100},
+  "thesis": {"title": "論點", "chain_position": "位置", "relevance_score": 0到100, "benefit_level": "core/secondary/watch", "role": "產業鏈角色", "related_reasoning": "個股映射理由"},
   "entry_price": 100,
   "target_price": 110,
   "target_price_reasoning": "目標價取近期壓力區與 ATR 2.5 倍推估後的保守值，對應約 2:1 風險報酬。",

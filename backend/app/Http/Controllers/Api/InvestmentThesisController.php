@@ -26,6 +26,7 @@ class InvestmentThesisController extends Controller
             'industry_chain' => 'sometimes|nullable|array',
             'beneficiary_industries' => 'sometimes|nullable|array',
             'beneficiary_keywords' => 'sometimes|nullable|array',
+            'related_stocks' => 'sometimes|nullable|array',
             'evidence_summary' => 'sometimes|nullable|string',
             'risk_factors' => 'sometimes|nullable|array',
             'sentiment_divergence' => 'sometimes|nullable|string|max:40',
