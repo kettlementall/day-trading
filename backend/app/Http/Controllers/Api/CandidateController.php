@@ -41,6 +41,13 @@ class CandidateController extends Controller
             $query->where('ai_reasoning', '!=', '')->whereNotNull('ai_reasoning');
         }
 
+        $reviewedCount = null;
+        $selectedCount = null;
+        if ($mode === 'overnight') {
+            $reviewedCount = (clone $query)->count();
+            $selectedCount = (clone $query)->where('ai_selected', true)->count();
+        }
+
         // viewer 只看 AI 選中的標的（不顯示被排除的卡片）
         if (! $request->user()?->isAdmin()) {
             $query->where('ai_selected', true);
@@ -68,6 +75,8 @@ class CandidateController extends Controller
             'trade_date' => $tradeDate,
             'mode' => $mode,
             'count' => $candidates->count(),
+            'reviewed_count' => $reviewedCount,
+            'selected_count' => $selectedCount,
             'data' => $candidates,
             'last_updated_at' => $lastUpdatedAt,
             'is_holiday' => $isHoliday,

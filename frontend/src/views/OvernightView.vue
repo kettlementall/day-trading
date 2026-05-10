@@ -30,7 +30,7 @@
     </div>
 
     <div v-else-if="store.candidates.length === 0" class="empty-wrap">
-      <el-empty description="此交易日尚無隔日沖候選標的（12:50 後執行選股）" />
+      <el-empty :description="emptyDescription" />
     </div>
 
     <div v-else class="candidate-list">
@@ -252,7 +252,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, reactive } from 'vue'
+import { ref, onMounted, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useOvernightStore } from '../stores/overnight'
 import dayjs from 'dayjs'
@@ -261,6 +261,13 @@ const store = useOvernightStore()
 const router = useRouter()
 
 const expandedIds = reactive(new Set())
+
+const emptyDescription = computed(() => {
+  if ((store.reviewedCount || 0) > 0 && (store.selectedCount || 0) === 0) {
+    return `此交易日 AI 已審核 ${store.reviewedCount} 檔，但沒有選入隔日沖候選標的`
+  }
+  return '此交易日尚無隔日沖候選標的（12:50 後執行選股）'
+})
 
 function isExpanded(id) {
   return expandedIds.has(id)

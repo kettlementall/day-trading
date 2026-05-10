@@ -25,6 +25,8 @@ export const useOvernightStore = defineStore('overnight', () => {
   const lastUpdatedAt = ref('')
   const isHoliday = ref(false)
   const holidayName = ref('')
+  const reviewedCount = ref(null)
+  const selectedCount = ref(null)
 
   // 釘選（存資料庫，跨裝置同步）
   const pinnedIds = ref(new Set())
@@ -89,6 +91,8 @@ export const useOvernightStore = defineStore('overnight', () => {
       currentDate.value = data.date              // 建倉日
       tradeDate.value = data.trade_date || ''    // 出場日（後端依假日表算好）
       lastUpdatedAt.value = data.last_updated_at || ''
+      reviewedCount.value = data.reviewed_count ?? null
+      selectedCount.value = data.selected_count ?? null
       await fetchPins(data.date)
       isHoliday.value = data.is_holiday || false
       holidayName.value = data.holiday_name || ''
@@ -205,6 +209,7 @@ export const useOvernightStore = defineStore('overnight', () => {
 
   return {
     candidates, sortedCandidates, currentDate, tradeDate, loading, lastUpdatedAt, isHoliday, holidayName,
+    reviewedCount, selectedCount,
     pinnedIds, togglePin, isPinned,
     stats,
     reviewing, reviewLogs, reviewResult, reviewStreamText, reviewDates,
