@@ -129,27 +129,48 @@ class SwingPositionUpdateService
             ], $profitPct);
         }
 
-        if ($thesisStatus['status'] === InvestmentThesis::STATUS_INACTIVE || ($thesisStatus['confidence_score'] ?? 100) < 35) {
-            return $this->normalizeAdvice($position, [
-                'action' => 'exit',
-                'reasoning' => '核心產業論點信心轉弱或失效，建議檢討出場。',
-                'current_stop' => $stop,
-                'current_target' => $target,
-                'profit_percent' => $profitPct,
-                'thesis_invalidated' => true,
-                'thesis_health' => 'invalidated',
-                'technical_health' => $technicalContext['health'],
-                'chip_health' => $chipContext['health'],
-                'risk_pressure' => 'high',
-                'time_pressure' => $this->timePressure($holdingDays, $position),
-            ], $profitPct);
-        }
-
+        // 注意：論點 invalidation_signal 已經包進 $thesisStatus，
+        // 不再在這裡硬 exit，改由 AI 結合技術/籌碼/ETA 仲裁（避免 AI 改 title 導致衰退就誤觸出場）。
         if ($this->apiKey) {
             $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext);
             if ($ai) {
                 return $this->normalizeAdvice($position, $ai, $profitPct);
             }
+        }
+
+        // AI 失敗的保守退路：論點 invalidation_signal + 技術 broken 才強制 exit；
+        // 否則就算論點轉弱，只要技術仍 healthy，先標 exit_suggested 等使用者人工確認。
+        $invalidationSignal = !empty($thesisStatus['invalidation_signal']);
+        $techBroken = ($technicalContext['health'] ?? null) === 'broken';
+        if ($invalidationSignal && $techBroken) {
+            return $this->normalizeAdvice($position, [
+                'action' => 'exit',
+                'reasoning' => '論點失效且技術跌破月線/季線，建議出場。',
+                'current_stop' => $stop,
+                'current_target' => $target,
+                'profit_percent' => $profitPct,
+                'thesis_invalidated' => true,
+                'thesis_health' => 'invalidated',
+                'technical_health' => 'broken',
+                'chip_health' => $chipContext['health'],
+                'risk_pressure' => 'high',
+                'time_pressure' => $this->timePressure($holdingDays, $position),
+            ], $profitPct);
+        }
+        if ($invalidationSignal) {
+            // 論點轉弱但技術未破，給 trim 訊號讓使用者注意；不強迫立刻出場
+            return $this->normalizeAdvice($position, [
+                'action' => 'trim',
+                'reasoning' => '論點信心轉弱（' . ($thesisStatus['invalidation_reason'] ?? 'unknown') . '）但技術尚未破壞，建議部分減倉並上移停損保護獲利。',
+                'current_stop' => max($stop, round($close * 0.95, 2)),
+                'current_target' => $target,
+                'profit_percent' => $profitPct,
+                'thesis_health' => 'invalidated',
+                'technical_health' => $technicalContext['health'],
+                'chip_health' => $chipContext['health'],
+                'risk_pressure' => 'medium',
+                'time_pressure' => $this->timePressure($holdingDays, $position),
+            ], $profitPct);
         }
 
         if ($close >= $target) {
@@ -237,6 +258,12 @@ class SwingPositionUpdateService
 - target_price_reasoning 必須說明「current_target 為何是該數字」，需引用壓力區、均線/通道、ATR 波動、風險報酬或論點催化之一。
 - eta_reasoning 必須說明「target_eta_days 為何是該天數」，需引用趨勢斜率、波動率、量能、籌碼或題材催化時間窗之一。
 - 若論點狀態包含 related_stock_context，必須判斷此股是否仍符合原本 benefit_level 與 role；若角色支撐轉弱，要反映在 thesis_health、risk_pressure、reasoning、目標價或 ETA。
+- 若 thesis_status.invalidation_signal=true，**不可僅憑此一條件就建議 exit**。請結合下列要素綜合判斷：
+  1. invalidation_reason 是什麼（title_not_found_in_db 可能只是 AI 改 title 命名，不代表基本面壞）。
+  2. 技術面（technical_health）是否仍 healthy。
+  3. 籌碼面（chip_health）是否仍 healthy。
+  4. 距離 target 是否還近、ETA 還剩多久。
+  只有當「論點失效 + 技術 weak/broken」或「論點失效 + 距離 stop 已很近」雙重條件成立才建議 exit；否則優先 trim / adjust 並上移停損保護獲利，給標的更多時間驗證。
 - thesis_health / technical_health / chip_health / risk_pressure 必須明確反映論點、技術、籌碼與風險。
 
 格式：
@@ -521,21 +548,40 @@ PROMPT;
     {
         $title = $position->candidate?->swing_thesis['title'] ?? null;
         if (!$title) {
-            return ['status' => 'unknown', 'confidence_score' => null];
+            return ['status' => 'unknown', 'confidence_score' => null, 'invalidation_signal' => false];
         }
 
         $thesis = InvestmentThesis::where('title', $title)->first();
         if (!$thesis) {
-            return ['title' => $title, 'status' => 'missing', 'confidence_score' => null];
+            // title 不見 = 命名飄移或被人工刪除；標 signal 但不直接 exit，讓 AI 仲裁
+            return [
+                'title' => $title,
+                'status' => 'missing',
+                'confidence_score' => null,
+                'invalidation_signal' => true,
+                'invalidation_reason' => 'title_not_found_in_db',
+            ];
+        }
+
+        $confidence = (int) $thesis->confidence_score;
+        $invalid = $thesis->status === InvestmentThesis::STATUS_INACTIVE || $confidence < 35;
+        $reason = null;
+        if ($invalid) {
+            $reason = $thesis->status === InvestmentThesis::STATUS_INACTIVE
+                ? 'status_inactive'
+                : 'confidence_below_35';
         }
 
         return [
             'title' => $thesis->title,
             'status' => $thesis->status,
-            'confidence_score' => $thesis->confidence_score,
+            'confidence_score' => $confidence,
             'research_date' => $thesis->research_date?->format('Y-m-d'),
+            'last_evaluated_at' => $thesis->last_evaluated_at?->format('Y-m-d H:i'),
             'risk_factors' => $thesis->risk_factors ?? [],
             'related_stock_context' => $this->resolveRelatedStockContext($thesis, $position),
+            'invalidation_signal' => $invalid,
+            'invalidation_reason' => $reason,
         ];
     }
 

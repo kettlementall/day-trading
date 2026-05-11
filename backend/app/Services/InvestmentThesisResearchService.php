@@ -57,6 +57,12 @@ class InvestmentThesisResearchService
             }
             $relatedStocks = $this->normalizeRelatedStocks($item['related_stocks'] ?? []);
 
+            // 防止 fallback 或 AI schema 殘缺把既有 core 股清空：
+            // 新值為空但既有非空 → 沿用既有，避免使用者持倉的 related_stock_context 突然消失。
+            if (empty($relatedStocks) && $existing && !empty($existing->related_stocks)) {
+                $relatedStocks = $existing->related_stocks;
+            }
+
             InvestmentThesis::updateOrCreate(
                 ['title' => $title],
                 [
@@ -147,6 +153,11 @@ class InvestmentThesisResearchService
 - 不可以把同一條供應鏈拆成多個高度重複論點。
 - 不可以產生沒有台股可映射受益環節的空泛總經論點。
 - 不可以根據既有短線候選、持倉、曾經選出的股票去反推產業論點或個股名單；related_stocks 只能來自新聞、產業鏈推理與你對台股供應鏈的判斷。
+
+論點命名穩定性（重要）：
+- 既有論點清單已列在下方。若你今天要發表的論點與其中**任何一筆本質相同**（核心驅動因素與受益鏈大致相符），**必須完整沿用該筆 title**，**不可改動任何一個字、不可加減冗詞**（例如不要把「AI 算力鏈」改成「AI 算力供應鏈」或「AI 算力短線題材」）。
+- 只在你確定是**全新**的論點軸時才創新 title。命名飄移會讓使用者持倉與舊論點失去連結，3 天後被誤判為失效。
+- 若你想淘汰既有論點，請在新論點 description 內明確說明取代理由，並讓舊論點自然衰退即可，不需特別處理。
 
 日期：{$date}
 
