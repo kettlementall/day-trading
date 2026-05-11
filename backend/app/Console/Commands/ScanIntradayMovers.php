@@ -26,6 +26,11 @@ class ScanIntradayMovers extends Command
         HaikuPreFilterService $haiku,
         TelegramService $tg
     ): int {
+        if (!\App\Models\FormulaSetting::isFeatureEnabled('intraday_monitor')) {
+            $this->info('盤中監控系統總開關已關閉，跳過盤中動態加入');
+            return self::SUCCESS;
+        }
+
         $tradeDate = $this->option('date') ?? now()->format('Y-m-d');
 
         if (!$this->option('date') && MarketHoliday::isHoliday($tradeDate)) {

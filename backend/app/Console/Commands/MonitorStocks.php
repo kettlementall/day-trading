@@ -36,6 +36,11 @@ class MonitorStocks extends Command
 
     public function handle(): int
     {
+        if (!\App\Models\FormulaSetting::isFeatureEnabled('intraday_monitor')) {
+            $this->line('盤中監控系統總開關已關閉，跳過');
+            return self::SUCCESS;
+        }
+
         $date = $this->argument('date') ?? now()->format('Y-m-d');
 
         if (MarketHoliday::isHoliday($date)) {

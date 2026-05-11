@@ -21,8 +21,10 @@ class FormulaSettingController extends Controller
             'config' => 'required|array',
         ]);
 
-        $setting = FormulaSetting::where('type', $type)->firstOrFail();
-        $setting->update(['config' => $validated['config']]);
+        $setting = FormulaSetting::updateOrCreate(
+            ['type' => $type],
+            ['config' => $validated['config']],
+        );
 
         return response()->json($setting);
     }

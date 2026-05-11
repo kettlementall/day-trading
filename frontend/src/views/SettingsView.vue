@@ -217,6 +217,33 @@
         </el-tab-pane>
 
         <!-- ==================== Tab 4: 資料同步 ==================== -->
+        <!-- ==================== Tab: 系統開關 ==================== -->
+        <el-tab-pane label="系統開關" name="toggles">
+          <div class="tab-section">
+            <div class="stock-card">
+              <div class="formula-title">當沖盤中監控</div>
+              <div class="toggle-desc">
+                關閉後將停用：每分鐘盤中監控（<code>monitor-intraday</code>）、09:35 盤中加入（<code>scan-intraday-movers</code>）、09:05/09:30 盤中行情抓取（<code>fetch-intraday</code>）。<br>
+                <strong>影響：</strong>當沖選股（08:00 ai-screen）仍會跑、候選頁仍會看到 AI 選股清單；只是不再每分鐘觸發 AI rolling advice、不發送相關 Telegram 通知。<br>
+                <strong>用途：</strong>當你決定以短線/隔日沖為主、不再操作當沖時用此開關省 AI 成本。
+              </div>
+              <div class="toggle-row">
+                <el-switch
+                  v-model="intradayMonitorEnabled"
+                  :loading="toggleSaving === 'intraday_monitor'"
+                  active-text="啟用中"
+                  inactive-text="已停用"
+                  inline-prompt
+                  @change="saveToggle('intraday_monitor', $event)"
+                />
+                <span class="toggle-status" :class="intradayMonitorEnabled ? 'on' : 'off'">
+                  {{ intradayMonitorEnabled ? '系統運作中' : '系統已停用' }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
         <el-tab-pane label="資料同步" name="sync">
           <div class="tab-section">
             <div class="stock-card">
@@ -285,6 +312,10 @@ const formulas = ref({})
 const formulaLoading = ref(false)
 const formulaSaving = ref(null)
 
+// 系統開關
+const intradayMonitorEnabled = ref(true)
+const toggleSaving = ref(null)
+
 // 資料同步
 const syncDate = ref(new Date().toISOString().slice(0, 10))
 const syncTasks = ref(['daily', 'institutional', 'margin'])
@@ -296,10 +327,36 @@ onMounted(async () => {
   try {
     const { data } = await getFormulaSettings()
     formulas.value = data
+    const sysToggles = data?.system_toggles?.config || {}
+    intradayMonitorEnabled.value = sysToggles.intraday_monitor_enabled ?? true
   } finally {
     formulaLoading.value = false
   }
 })
+
+async function saveToggle(key, value) {
+  toggleSaving.value = key
+  try {
+    const current = formulas.value?.system_toggles?.config || {}
+    const next = { ...current, [`${key}_enabled`]: value }
+    await updateFormulaSetting('system_toggles', next)
+    // 同步本地快取
+    if (!formulas.value.system_toggles) {
+      formulas.value.system_toggles = { type: 'system_toggles', config: next }
+    } else {
+      formulas.value.system_toggles.config = next
+    }
+    ElMessage.success(value ? '已啟用' : '已停用，相關排程將立即跳過')
+  } catch (e) {
+    // 回退 UI
+    if (key === 'intraday_monitor') {
+      intradayMonitorEnabled.value = !value
+    }
+    ElMessage.error(e?.response?.data?.message || '儲存失敗')
+  } finally {
+    toggleSaving.value = null
+  }
+}
 
 async function saveFormula(type) {
   formulaSaving.value = type
@@ -343,6 +400,43 @@ async function runSync() {
 }
 
 /* 公式卡片 */
+.toggle-desc {
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.6;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border-left: 3px solid #1d4ed8;
+  border-radius: 4px;
+}
+
+.toggle-desc code {
+  background: #e2e8f0;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.toggle-status {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.toggle-status.on {
+  color: #67c23a;
+}
+
+.toggle-status.off {
+  color: #909399;
+}
+
 .formula-title {
   font-weight: 600;
   font-size: 15px;

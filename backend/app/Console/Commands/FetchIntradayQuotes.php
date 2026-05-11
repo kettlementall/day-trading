@@ -24,6 +24,11 @@ class FetchIntradayQuotes extends Command
 
     public function handle(): int
     {
+        if (!\App\Models\FormulaSetting::isFeatureEnabled('intraday_monitor')) {
+            $this->info('盤中監控系統總開關已關閉，跳過盤中行情抓取');
+            return self::SUCCESS;
+        }
+
         $date = $this->argument('date') ?? now()->format('Y-m-d');
 
         if (MarketHoliday::isHoliday($date)) {
