@@ -393,14 +393,21 @@ import {
   updateSwingPosition,
 } from '../api'
 
-function lastWeekday() {
-  let d = dayjs()
-  while (d.day() === 0 || d.day() === 6) {
+function defaultSwingDate() {
+  // 短線選股 19:00 排程跑，18:50 前還是看前一個交易日；之後才切到當日。
+  // 週六/日不論時間都是上週五（或更前一個工作日）。
+  const now = dayjs()
+  const afterCutoff = now.hour() > 18 || (now.hour() === 18 && now.minute() >= 50)
+  let d = now
+  if (d.day() === 0 || d.day() === 6 || !afterCutoff) {
     d = d.subtract(1, 'day')
+    while (d.day() === 0 || d.day() === 6) {
+      d = d.subtract(1, 'day')
+    }
   }
   return d.format('YYYY-MM-DD')
 }
-const currentDate = ref(lastWeekday())
+const currentDate = ref(defaultSwingDate())
 const router = useRouter()
 
 function goQuote(item) {
