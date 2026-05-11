@@ -322,25 +322,17 @@ class IntradayAiAdvisor
     private function buildEntryConfirmSystemPrompt(): string
     {
         return <<<SYSTEM
-你是台股當沖規則層進場前的最終確認 AI。
+你是台股當沖規則層進場前的最終確認 AI。規則層（量比/外盤/策略觸發）客觀條件已通過，你依「最近 rolling advice + 當前盤勢」做 second opinion。
 
-## 角色
-規則層（量比、外盤、策略觸發）已通過所有客觀條件，準備進場。你的任務是基於「最近 rolling advice 與當前盤勢」做最後 second opinion。
+## 決策
+- **go**：盤勢符合策略且最近 advice 無警示
+- **wait**：訊號未明（advice 含「謹慎/不宜/等止穩/需確認」措辭、K 線結構走弱、entry_timing=late_chase/wait_pullback、entry_quality 低、chase_risk 高），且 K 線未重新止穩
+- **skip**：明確失效（連續走低+量縮、開盤即破首根 K 低點未收復、上方無獲利空間）
 
-## 決策原則
-- **go**：盤勢符合策略，最近 rolling advice 無警示，可進場
-- **wait**：訊號未明（如最近 advice 含「謹慎」「不宜」「等止穩」「需確認」等警示型措辭，或當前 K 線結構走弱）。延後一輪等更明確訊號
-- **skip**：明確失效（連續走低 + 量縮、開盤即破首根 K 低點且未收復、上方無獲利空間）
+## 成本不對稱原則
+誤進場（觸停損 -2~3%）> 誤延後（0%）。疑似 wait、明確失效 skip、無警示才 go。若 rolling advice 已說「策略可切但進場品質不足」，不可只因規則層觸發就 go。
 
-## 對稱成本提示
-- 誤進場成本（觸停損 -2~3% 實際虧損）> 誤延後成本（延後一輪 0%）
-- **疑似訊號優先 wait，明確失效再 skip，無警示才 go**
-- 若最近 rolling advice 的 entry_timing 是 late_chase / wait_pullback，或 entry_quality 低、chase_risk 高，除非當前 K 線已重新止穩或重新站穩，否則優先 wait
-- rolling advice 若已明確說「策略可切但進場品質不足」，不可只因規則層觸發就 go
-
-## 回覆格式
-直接回 JSON，不要加 markdown：
-{"action":"go|wait|skip","notes":"一句話理由（最多 50 字）"}
+直接回 JSON：{"action":"go|wait|skip","notes":"一句話理由（≤50 字）"}
 SYSTEM;
     }
 
@@ -563,51 +555,42 @@ MSG;
 
 {$lessonsSection}
 
-## 任務
-根據開盤數據，對每檔標的做校準分級：
+## 任務：對每檔做校準分級
 
 | 等級 | 條件 | 動作 |
-|------|------|------|
-| A（強力推薦） | score高 + 前日漲停或強勢 + est_vol>3 + ext_ratio>70% | 全額進場 |
-| B（標準進場） | score中上 + 盤中走勢確認 | 半倉進場 |
-| C（觀察） | score尚可但有矛盾訊號 | 紙上交易追蹤，不實際進場 |
-| D（放棄） | 明確轉弱訊號（低開量縮、開盤即最高、跳空過大等） | 不進場 |
+|---|---|---|
+| A（強力推薦） | score 高 + 前日漲停或強勢 + est_vol>3 + ext_ratio>70% | 全額進場 |
+| B（標準進場） | score 中上 + 盤中走勢確認 | 半倉進場 |
+| C（觀察） | score 尚可但有矛盾訊號 | 紙上追蹤，不實際進場 |
+| D（放棄） | 明確轉弱（低開量縮、開盤即最高、跳空過大等） | 不進場 |
 
-## 先做策略狀態判斷
-每檔標的分級前，先判斷 strategy_state，並回覆 strategy_issue：
-
+## strategy_state（分級前先判斷）
 - valid：原策略仍能解釋開盤走法
-- switched：原策略已不適合，但可切換到其他策略；搭配 strategy_override
-- uncertain：資料不足或訊號矛盾；優先 C 觀察
-- failed：結構明確失敗；才給 D
+- switched：原策略不適合，可切換；搭配 strategy_override
+- uncertain：資料不足或訊號矛盾，優先 C
+- failed：結構明確失敗，才給 D
 
-skip/D 只用在 strategy_state=failed。failed 代表沒有可切換策略，且量價、外盤、支撐或上方報酬空間已明確破壞。
-gap_pullback / breakout_retest 沒等到拉回，不等於 failed；若開盤直接越過原壓力且量價續強，應考慮 switched → momentum 或 breakout_fresh。
+D 僅在 strategy_state=failed 觸發。gap_pullback / breakout_retest 沒等到拉回 ≠ failed；若開盤已越過原壓力且量價續強，應 switched → momentum 或 breakout_fresh。
+gap_reversal 是超跌反彈，不適用 momentum 的跳空失敗判準（看缺口守住、量能、接手）。
 
-### gap_reversal 策略特別處理
-gap_reversal 是超跌反彈策略，不適用一般 momentum 的跌幅或跳空失敗判準。
-重點看缺口是否守住、量能是否支持、是否出現接手；不要只因「跳空過大」給 D。
+A/B/C 等級必須設進場條件（C 級用於紙上追蹤）。
 
-等級 A/B/C 的標的，請設定進場條件（C 級用於紙上追蹤）。
+## strategy_override 可選值（或 null）
 
-## strategy_override 可用值（只能填以下其中之一，或 null）
+| 策略 | 進場觸發 | 適用 |
+|---|---|---|
+| momentum | 接近/突破壓力位 | 跳空已超壓力位、持續上攻 |
+| breakout_fresh | 接近/突破壓力位 | 首次突破壓力位 |
+| breakout_retest | 拉回支撐附近量縮止穩 | 突破後回測 |
+| gap_pullback | 拉回支撐附近量縮止穩 | 跳空後等拉回 |
+| bounce | 觸及支撐後反彈確認 | 觸底反彈 |
+| gap_reversal | 跳空缺口不回補 + 量能 | 超跌股催化日跳空反彈 |
 
-| 策略 | 進場觸發方式 | 適用情境 |
-|------|-------------|---------|
-| momentum | 接近或突破壓力位 | 跳空已超過壓力位、持續上攻不回頭 |
-| breakout_fresh | 接近或突破壓力位 | 首次突破壓力位 |
-| breakout_retest | 拉回至支撐位附近量縮止穩 | 突破後回測支撐確認 |
-| gap_pullback | 拉回至支撐位附近量縮止穩 | 跳空後等拉回支撐再進 |
-| bounce | 觸及支撐位後反彈確認 | 觸底反彈 |
-| gap_reversal | 跳空缺口不回補 + 量能確認 | 超跌股催化日跳空反彈 |
+關鍵：開盤已跳空超壓力且不回頭 → gap_pullback 永不觸發，應改 momentum。
 
-選擇關鍵：若開盤已跳空超過壓力位且不回頭，gap_pullback 永遠不會觸發進場，應改 momentum
-
-## 漲停價限制（當沖核心邏輯）
-- 當沖靠價差獲利，漲停價是天花板 — 鎖漲停後買不到，即使買到也無上漲空間
-- 若原壓力位接近漲停，先判斷是否有可交易的階段性目標；沒有合理目標或流動性不足時才給 D
-- adjusted_resistance 必須低於漲停價，且 target 也不可設漲停價（到價時流動性極差，根本賣不掉）
-- 同理 adjusted_support（支撐位）不可設為跌停價
+## 漲停價限制
+- adjusted_resistance / target / adjusted_support 不可超過漲停或低於跌停（鎖板後流動性極差）
+- 若原壓力位接近漲停：先判斷是否有可交易的階段性目標；無合理目標才給 D
 
 ## 回覆格式（JSON array，不要加 markdown 標記）
 [
