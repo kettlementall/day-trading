@@ -68,6 +68,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/swing/positions', [SwingController::class, 'storePosition']);
     Route::patch('/swing/positions/{position}', [SwingController::class, 'updatePosition']);
     Route::delete('/swing/positions/{position}', [SwingController::class, 'destroyPosition']);
+    Route::post('/swing/positions/{position}/add-shares', [SwingController::class, 'addShares']);
+    Route::post('/swing/positions/{position}/reduce-shares', [SwingController::class, 'reduceShares']);
     Route::post('/swing/sizing', [SwingController::class, 'sizing']);
 
     // ── Admin only ───────────────────────────────────────────────────────────

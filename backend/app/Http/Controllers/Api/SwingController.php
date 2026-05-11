@@ -172,6 +172,60 @@ class SwingController extends Controller
         return response()->json(['message' => 'deleted']);
     }
 
+    public function addShares(Request $request, SwingPosition $position): JsonResponse
+    {
+        abort_unless($position->user_id === $request->user()->id, 403);
+        abort_unless(in_array($position->status, SwingPosition::ACTIVE_STATUSES, true), 422, '已結束的持倉不能加倉');
+
+        $validated = $request->validate([
+            'price' => 'required|numeric|min:0.01',
+            'shares' => 'required|integer|min:1',
+        ]);
+
+        $oldShares = (int) $position->shares;
+        $oldEntry = (float) $position->entry_price;
+        $newShares = $oldShares + (int) $validated['shares'];
+        $newEntry = ($oldEntry * $oldShares + (float) $validated['price'] * (int) $validated['shares']) / $newShares;
+
+        $position->update([
+            'entry_price' => round($newEntry, 2),
+            'shares' => $newShares,
+        ]);
+
+        return response()->json($position->fresh(['stock', 'candidate']));
+    }
+
+    public function reduceShares(Request $request, SwingPosition $position): JsonResponse
+    {
+        abort_unless($position->user_id === $request->user()->id, 403);
+        abort_unless(in_array($position->status, SwingPosition::ACTIVE_STATUSES, true), 422, '已結束的持倉不能減倉');
+
+        $validated = $request->validate([
+            'price' => 'required|numeric|min:0.01',
+            'shares' => 'required|integer|min:1',
+        ]);
+
+        $oldShares = (int) $position->shares;
+        $sellShares = (int) $validated['shares'];
+        abort_if($sellShares > $oldShares, 422, "減倉股數 {$sellShares} 超過目前持有 {$oldShares}");
+
+        if ($sellShares === $oldShares) {
+            // 全部出清 → 視同平倉
+            $position->update([
+                'status' => SwingPosition::STATUS_CLOSED,
+                'exit_price' => $validated['price'],
+                'exit_date' => now()->toDateString(),
+            ]);
+        } else {
+            // 部分減倉：股數減少，平均成本不變（剩餘部位的成本基準不變）
+            $position->update([
+                'shares' => $oldShares - $sellShares,
+            ]);
+        }
+
+        return response()->json($position->fresh(['stock', 'candidate']));
+    }
+
     public function sizing(Request $request): JsonResponse
     {
         $validated = $request->validate([

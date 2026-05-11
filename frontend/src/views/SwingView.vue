@@ -176,6 +176,24 @@
             <span class="row-actions-spacer"></span>
             <el-button
               size="small"
+              type="primary"
+              plain
+              :disabled="!isActiveStatus(p.status)"
+              @click="openAdd(p)"
+            >
+              加倉
+            </el-button>
+            <el-button
+              size="small"
+              type="warning"
+              plain
+              :disabled="!isActiveStatus(p.status)"
+              @click="openReduce(p)"
+            >
+              減倉
+            </el-button>
+            <el-button
+              size="small"
               :disabled="!isActiveStatus(p.status)"
               @click="openAdjust(p)"
             >
@@ -341,6 +359,115 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="addDialog" title="加倉" width="400px">
+      <el-form label-width="88px">
+        <el-form-item label="股票">
+          <span class="dialog-symbol">
+            {{ transactingPosition?.stock?.symbol }} {{ transactingPosition?.stock?.name }}
+          </span>
+        </el-form-item>
+        <el-form-item label="原成本/股數">
+          <span class="dialog-symbol">
+            {{ transactingPosition?.entry_price }} / {{ transactingPosition?.shares }} 股
+          </span>
+        </el-form-item>
+        <el-form-item label="本次成本">
+          <el-input-number
+            v-model="addForm.price"
+            :min="0.01"
+            :step="0.05"
+            :precision="2"
+            style="width: 220px"
+          />
+        </el-form-item>
+        <el-form-item label="本次股數">
+          <el-input-number
+            v-model="addForm.shares"
+            :min="1"
+            :step="1000"
+            style="width: 220px"
+          />
+        </el-form-item>
+      </el-form>
+      <div v-if="addPreview" class="txn-preview">
+        <div class="txn-item">
+          <div class="txn-label">加倉後平均成本</div>
+          <div class="txn-value highlight">{{ addPreview.avgCost }}</div>
+        </div>
+        <div class="txn-item">
+          <div class="txn-label">加倉後總股數</div>
+          <div class="txn-value">{{ addPreview.totalShares }}</div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="addDialog = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitAdd">確認加倉</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="reduceDialog" title="減倉" width="420px">
+      <el-form label-width="88px">
+        <el-form-item label="股票">
+          <span class="dialog-symbol">
+            {{ transactingPosition?.stock?.symbol }} {{ transactingPosition?.stock?.name }}
+          </span>
+        </el-form-item>
+        <el-form-item label="原成本/股數">
+          <span class="dialog-symbol">
+            {{ transactingPosition?.entry_price }} / {{ transactingPosition?.shares }} 股
+          </span>
+        </el-form-item>
+        <el-form-item label="本次賣價">
+          <el-input-number
+            v-model="reduceForm.price"
+            :min="0.01"
+            :step="0.05"
+            :precision="2"
+            style="width: 220px"
+          />
+        </el-form-item>
+        <el-form-item label="本次股數">
+          <el-input-number
+            v-model="reduceForm.shares"
+            :min="1"
+            :max="transactingPosition?.shares || 1"
+            :step="1000"
+            style="width: 220px"
+          />
+        </el-form-item>
+      </el-form>
+      <div v-if="reducePreview" class="txn-preview">
+        <div class="txn-item">
+          <div class="txn-label">減倉後剩餘股數</div>
+          <div class="txn-value">{{ reducePreview.remaining }}</div>
+        </div>
+        <div class="txn-item">
+          <div class="txn-label">此筆已實現損益</div>
+          <div
+            class="txn-value"
+            :class="reducePreview.realizedPct >= 0 ? 'price-up' : 'price-down'"
+          >
+            {{ reducePreview.realizedPct >= 0 ? '+' : '' }}{{ reducePreview.realizedPct }}%
+            （{{ reducePreview.realizedAmount >= 0 ? '+' : '' }}{{ reducePreview.realizedAmount.toLocaleString() }}）
+          </div>
+        </div>
+        <div v-if="reducePreview.willCloseAll" class="txn-warn">
+          ⚠️ 全部出清後將自動標記為「已平倉」
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="reduceDialog = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="saving"
+          :disabled="reducePreview?.overSell"
+          @click="submitReduce"
+        >
+          {{ reducePreview?.willCloseAll ? '全部出清' : '確認減倉' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="sizingDialog" title="ATR 風險試算" width="400px">
       <el-form label-width="88px">
         <el-form-item label="總資金">
@@ -380,16 +507,18 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
+  addSwingShares,
   calculateSwingSizing,
   createSwingPosition,
   deleteSwingPosition,
   getSwingCandidates,
   getSwingPositions,
+  reduceSwingShares,
   updateSwingPosition,
 } from '../api'
 
@@ -423,13 +552,18 @@ const swingMeta = ref(null)
 const buyDialog = ref(false)
 const sizingDialog = ref(false)
 const adjustDialog = ref(false)
+const addDialog = ref(false)
+const reduceDialog = ref(false)
 const selected = ref(null)
 const adjustingPosition = ref(null)
+const transactingPosition = ref(null)
 const positionActionId = ref(null)
 const sizingResult = ref(null)
 const buyForm = reactive({ entry_price: 0, shares: 1000 })
 const sizingForm = reactive({ capital: 1000000, risk_percent: 1 })
 const adjustForm = reactive({ current_stop: null, current_target: null })
+const addForm = reactive({ price: 0, shares: 1000 })
+const reduceForm = reactive({ price: 0, shares: 1000 })
 
 onMounted(fetchAll)
 
@@ -512,6 +646,57 @@ async function submitAdjust() {
   }
 }
 
+function openAdd(position) {
+  transactingPosition.value = position
+  addForm.price = Number(position.current_price || position.entry_price || 0)
+  addForm.shares = 1000
+  addDialog.value = true
+}
+
+async function submitAdd() {
+  if (!transactingPosition.value) return
+  saving.value = true
+  try {
+    await addSwingShares(transactingPosition.value.id, {
+      price: addForm.price,
+      shares: addForm.shares,
+    })
+    ElMessage.success('已加倉')
+    addDialog.value = false
+    await fetchAll()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '加倉失敗，請稍後再試')
+  } finally {
+    saving.value = false
+  }
+}
+
+function openReduce(position) {
+  transactingPosition.value = position
+  reduceForm.price = Number(position.current_price || position.entry_price || 0)
+  reduceForm.shares = Math.min(1000, Number(position.shares || 0))
+  reduceDialog.value = true
+}
+
+async function submitReduce() {
+  if (!transactingPosition.value) return
+  saving.value = true
+  try {
+    await reduceSwingShares(transactingPosition.value.id, {
+      price: reduceForm.price,
+      shares: reduceForm.shares,
+    })
+    const wasAllOut = reduceForm.shares >= transactingPosition.value.shares
+    ElMessage.success(wasAllOut ? '已全部出清（自動平倉）' : '已減倉')
+    reduceDialog.value = false
+    await fetchAll()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || '減倉失敗，請稍後再試')
+  } finally {
+    saving.value = false
+  }
+}
+
 async function cancelPosition(position) {
   try {
     await ElMessageBox.confirm(
@@ -538,6 +723,38 @@ async function cancelPosition(position) {
     positionActionId.value = null
   }
 }
+
+const addPreview = computed(() => {
+  const p = transactingPosition.value
+  if (!p) return null
+  const oldShares = Number(p.shares || 0)
+  const oldEntry = Number(p.entry_price || 0)
+  const newShares = Number(addForm.shares || 0)
+  const newPrice = Number(addForm.price || 0)
+  if (newShares <= 0 || newPrice <= 0) return null
+  const total = oldShares + newShares
+  const avg = (oldEntry * oldShares + newPrice * newShares) / total
+  return { totalShares: total, avgCost: Number(avg.toFixed(2)) }
+})
+
+const reducePreview = computed(() => {
+  const p = transactingPosition.value
+  if (!p) return null
+  const oldShares = Number(p.shares || 0)
+  const oldEntry = Number(p.entry_price || 0)
+  const sellShares = Number(reduceForm.shares || 0)
+  const sellPrice = Number(reduceForm.price || 0)
+  if (sellShares <= 0 || sellPrice <= 0) return null
+  const remaining = oldShares - sellShares
+  const realized = oldEntry > 0 ? ((sellPrice - oldEntry) / oldEntry) * 100 : 0
+  return {
+    remaining: Math.max(0, remaining),
+    realizedPct: Number(realized.toFixed(2)),
+    realizedAmount: Math.round((sellPrice - oldEntry) * sellShares),
+    willCloseAll: sellShares >= oldShares,
+    overSell: sellShares > oldShares,
+  }
+})
 
 async function markClosed(position, status) {
   const isClose = status === 'closed'
@@ -1228,6 +1445,48 @@ function isActiveStatus(status) {
   background: #f8fafc;
   border: 1px solid var(--c-border);
   border-radius: var(--r-card);
+}
+
+.txn-preview {
+  margin-top: 4px;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-card);
+  display: grid;
+  gap: 10px;
+}
+
+.txn-item {
+  min-width: 0;
+}
+
+.txn-label {
+  font-size: 11px;
+  color: var(--c-text-muted);
+  letter-spacing: 0.4px;
+  margin-bottom: 3px;
+}
+
+.txn-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.txn-value.highlight {
+  color: var(--c-primary-strong);
+}
+
+.txn-warn {
+  margin-top: 4px;
+  padding: 6px 10px;
+  background: #fef3c7;
+  border-left: 3px solid #d97706;
+  border-radius: var(--r-card);
+  font-size: 12px;
+  color: #92400e;
 }
 
 .sizing-item {

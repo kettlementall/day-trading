@@ -171,6 +171,12 @@ export const updateSwingPosition = (id, data) =>
 export const deleteSwingPosition = (id) =>
   api.delete(`/swing/positions/${id}`)
 
+export const addSwingShares = (id, data) =>
+  api.post(`/swing/positions/${id}/add-shares`, data)
+
+export const reduceSwingShares = (id, data) =>
+  api.post(`/swing/positions/${id}/reduce-shares`, data)
+
 export const calculateSwingSizing = (data) =>
   api.post('/swing/sizing', data)
 
