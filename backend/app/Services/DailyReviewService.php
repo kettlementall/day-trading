@@ -394,66 +394,50 @@ MONITOR;
         $totalCount = $candidates->count();
 
         return <<<PROMPT
-你是台股隔日沖交易檢討分析師。請針對 {$date} 隔日沖候選標的做全面檢討分析。
+你是台股隔日沖檢討分析師，針對 {$date} 隔日沖候選做全面檢討。
 
-## 重要背景
-本系統經三階段篩選：寬篩 → Haiku 預篩 → Opus 深度審核。
-以下 {$totalCount} 檔候選標的中，只有 {$selectedCount} 檔被 AI 最終選入（ai_selected=Y），其餘為被排除的標的。
-**請以 ai_selected=Y 的標的為主要評估對象**，被排除的標的僅作為對照參考（驗證排除決策是否正確）。
+# 背景
+三階段篩選（規則寬篩 → Haiku 預篩 → Opus 精審）。{$totalCount} 檔候選中 {$selectedCount} 檔 ai_selected=Y。**以 ai_selected=Y 為主要評估對象**，排除標的僅作對照（驗證排除決策）。
 
-## 分析目標
-1. AI 選入的標的表現如何：成功率、跳空預測準確度、價格設定合理性
-2. AI 排除的標的是否確實表現較差（排除決策是否正確）
-3. 跳空預測是否準確（gap_potential% 是否與實際 open_gap% 相符）
-4. 進場策略（entry_type）與實際開盤表現的匹配度
-5. 找出共通的成功/失敗模式
+# 分析目標
+1. 選入標的表現（成功率、跳空預測準確度、價格設定合理性）
+2. 排除決策是否正確
+3. 跳空預測準確度（gap_potential% vs 實際 open_gap%）
+4. entry_type 與實際開盤表現匹配度
+5. 共通成功/失敗模式
 
-## 重要：理論盤後結果與監控結果必須分開解讀
-- theoretical_outcome/theoretical_profit% 來自 T+1 日 K 與原始 planned buy/target/stop，用於評估選股與原始價格設定。
-- monitor_status/monitor_exit/monitor_profit% 來自盤中監控系統，可能使用 final_target/final_stop（AI 調整後價格），用於評估監控執行。
-- monitor_status=target_hit 不代表原始 planned_target 達標；必須同時看 monitor_exit、final_target、planned_target。
-- result outcome 與 monitor_status 若不一致，不可說成資料錯誤；請明確寫成「理論盤後結果」與「監控執行結果」差異。
-- 若 monitor_entry 為空，代表監控未記錄實際買入成交價；monitor_profit% 是以 suggested_buy 推估，請勿描述為真實成交報酬。
+# 重要：理論結果與監控結果必須分開
+- theoretical_*：來自 T+1 日 K 與原始 planned buy/target/stop，評估選股與原始價格設定
+- monitor_*：來自盤中監控（可能用 final_target/final_stop 即 AI 調整後價格），評估監控執行
+- monitor_status=target_hit 不代表 planned_target 達標——需同時看 monitor_exit、final_target、planned_target
+- 兩者不一致時，明確寫成「理論盤後結果」與「監控執行結果」差異，不可說資料錯誤
+- monitor_entry 空 = 監控未記錄實際成交價，monitor_profit% 以 suggested_buy 推估，**不可說是真實成交報酬**
 
-## 候選標的明細
+# 候選標的明細
 {$candidatesTsv}
 
-### 欄位說明
-symbol=股票代號, name=名稱, ind=產業, ai_selected=AI最終選入(Y/N), entry_type=進場策略(gap_up_open/pullback_entry/open_follow_through/limit_up_chase), haiku_conf=Haiku信度, buy=建議買入價, plan_target/plan_stop=原始計畫目標/停損, final_target/final_stop=監控最後使用目標/停損, rr=風報比, gap_potential%=預測跳空幅度, open/high/low/close=實際T+1 OHLC, open_gap%=實際開盤跳空%, gap_ok?=跳空方向預測正確(Y/N), theoretical_outcome/theoretical_profit%=依日K與原始計畫價格計算的理論結果, monitor_status/monitor_entry/monitor_exit/monitor_profit%=盤中監控結果, monitor_note=理論與監控差異提示
+欄位：symbol/name/ind/ai_selected(Y/N)/entry_type(gap_up_open|pullback_entry|open_follow_through|limit_up_chase)/haiku_conf/buy/plan_target/plan_stop/final_target/final_stop(監控最後用)/rr/gap_potential%(預測)/open/high/low/close(T+1 OHLC)/open_gap%(實際)/gap_ok?(方向預測對 Y/N)/theoretical_outcome/theoretical_profit%/monitor_status/monitor_entry/monitor_exit/monitor_profit%/monitor_note
 
-## 近 5 日 K 線（含今日）
+# 近 5 日 K 線（含今日）
 {$klineTsv}
 {$monitorSection}
 
-## 輸出格式
-請用繁體中文輸出，Markdown 格式：
+# 輸出（繁體中文 + Markdown）
 
 ### 一、整體表現
-分別統計 AI 選入（ai_selected=Y）和排除（ai_selected=N）標的的表現：
-- AI 選入標的：成功率、平均報酬率、跳空預測準確率
-- AI 排除標的：假如也進場的成功率（驗證排除決策品質）
-- 整體策略有效性評估
-- 請分開列「理論盤後結果」與「監控執行結果」，不要混用 hit_target/hit_stop 與 monitor_status
+分開統計 ai_selected=Y/N：選入組（成功率、平均報酬、跳空預測準確率）、排除組（假如也進場的成功率）、整體策略有效性。**理論盤後結果**與**監控執行結果**分列，不可混用 hit_target/hit_stop 與 monitor_status。
 
-### 二、AI 選入標的逐檔分析
-針對 ai_selected=Y 的標的，逐檔詳細分析：
-- 選股邏輯是否合理（為何前一日選擇建倉？）
-- 明日實際走勢是否符合預期？
-- 三個價格設定（買入/目標/停損）是否合理？
-- 監控系統的進出場決策是否恰當？請同時比較 planned_target/planned_stop 與 final_target/final_stop，若 monitor_status 與 theoretical_outcome 不一致，需明確說明差異來源
+### 二、選入標的逐檔分析（ai_selected=Y）
+逐檔：選股邏輯合理性（為何前一日建倉）、明日實際走勢是否符合預期、三個價格設定合理性、監控進出場決策（比較 planned vs final target/stop；monitor_status 與 theoretical_outcome 不一致時明確說明差異來源）。
 
 ### 三、排除決策檢討
-挑出被排除但事後表現好的標的（最多 5 檔），分析：
-- AI 為何排除？排除理由是否合理？
-- 是否有遺漏的選股訊號？
+挑被排除但事後表現好的（最多 5 檔），分析排除理由是否合理、是否遺漏選股訊號。
 
 ### 四、跳空分析
-- 跳空方向預測準確率（gap_ok? = Y 的比例，分 ai_selected Y/N 統計）
-- 哪類型的標的跳空預測較準確？
-- 跳空預測有什麼系統性偏差？
+跳空方向預測準確率（gap_ok?=Y 比例，分 Y/N 組）、哪類標的較準、系統性偏差。
 
 ### 五、策略改善建議
-具體可改善的選股條件或進場策略調整。
+具體可改的選股條件或進場策略。
 PROMPT;
     }
 
@@ -781,83 +765,59 @@ MONITOR;
         $totalCount = $candidates->count();
 
         return <<<PROMPT
-你是台股當沖交易檢討分析師。請針對 {$date} 這一天的候選標的做全面檢討分析。
+你是台股當沖檢討分析師，針對 {$date} 候選做全面檢討。
 
-## 重要背景
-本系統有兩條選股路徑：
-1. **盤前三階段**（source=morning）：規則式寬篩 → Haiku 批量預篩 → Opus 精審
-2. **盤中動態加入**（source=intraday_mover）：09:35 掃描盤中強勢股 → 規則過濾 → Haiku 快評（跳過 Opus）
+# 背景
+兩條選股路徑：
+- source=morning：盤前三階段（規則寬篩 → Haiku 預篩 → Opus 精審）
+- source=intraday_mover：09:35 掃描盤中強勢股（規則過濾 → Haiku 快評，跳過 Opus）
 
-以下 {$totalCount} 檔候選標的中，{$selectedCount} 檔為最終選入（ai_selected=Y）。
-**請以 ai_selected=Y 的標的為主要評估對象**，被排除的標的僅作為對照參考。
-若有 source=intraday_mover 的標的，請單獨評估其表現（這些是盤中才加入的，選股邏輯不同）。
+{$totalCount} 檔候選中 {$selectedCount} 檔 ai_selected=Y。**以 ai_selected=Y 為主要評估對象**，排除標的僅作對照。若有 source=intraday_mover，請**單獨**評估（盤中才加入，邏輯不同）。
 
-## 分析目標
-1. 盤前選入標的（source=morning）表現如何：成功率、買入可達率、目標可達率
-2. 被排除的標的是否確實表現較差（排除決策是否正確）
-3. 盤中監控系統（校準、進出場、AI 滾動建議）的決策品質
-4. 從盤後走勢反推，建議買入價和目標價的設定是否合理
-5. 當天大盤和消息面對結果的影響
+# 分析目標
+1. morning 選入表現（成功率/買入可達率/目標可達率）
+2. 排除決策是否正確
+3. 盤中監控系統（校準 + 進出場 + AI 滾動建議）的決策品質
+4. 從盤後走勢反推：建議買入價/目標價設定是否合理
+5. 大盤與消息面對結果的影響
 
-## 候選標的明細
+# 候選標的明細
 {$candidatesTsv}
 
-### 欄位說明
-symbol=股票代號, name=名稱, ind=產業, source=來源(morning=盤前三階段/intraday_mover=盤中動態加入), ai_selected=最終選入(Y/N), strat=策略, haiku_reason=Haiku預篩理由, tags=選股標籤(|分隔), buy/target/stop=建議價, rr=風報比, open/high/low/close=實際OHLC, buy?=買入可達(Y/N), tgt?=目標可達(Y/N), stop?=觸停損(Y/N), profit%=報酬率(-=未買到), morning_grade=校準等級(A/B/C/D), morning_score=盤前分數
+欄位：symbol/name/ind/source(morning|intraday_mover)/ai_selected(Y/N)/strat/haiku_reason/tags(| 分隔)/buy/target/stop/rr/open/high/low/close/buy?(達買入)/tgt?(達目標)/stop?(觸停損)/profit%(-=未買到)/morning_grade(A-D)/morning_score
 
-## 盤中行情（開盤 30 分鐘時的快照）
+# 盤中快照（開盤 30 分鐘）
 {$intradayTsv}
 
-### 欄位說明
-est_vol_ratio=預估量倍數, open_chg%=開盤漲幅, current=快照時現價, 5min_high/low=第一根5分K高低點, ext_ratio%=外盤比
+欄位：est_vol_ratio(預估量倍)/open_chg%/current(快照時現價)/5min_high/low(首根 5 分 K)/ext_ratio%(外盤比)
 
-## 近 5 日 K 線
+# 近 5 日 K 線
 {$klineTsv}
 
-## 消息面
+# 消息面
 {$newsSection}
 
 {$monitorSection}
 
-## 輸出格式
-
-請用繁體中文輸出，用 Markdown 格式，包含以下段落：
+# 輸出（繁體中文 + Markdown）
 
 ### 一、當日總覽
-簡述當天大盤氛圍、消息面影響，並分別統計選入（ai_selected=Y）和排除（ai_selected=N）標的的整體表現：
-- 盤前選入標的（source=morning）：成功率、買入可達率、目標可達率、平均報酬率
-- 盤中加入標的（source=intraday_mover，若有）：同上（這些是 09:35 才加入的，單獨統計）
-- 排除標的：假如也進場的成功率（驗證排除決策品質）
+大盤氛圍 + 消息面 + 分別統計 morning/intraday_mover/排除三組（成功率、買入可達率、目標可達率、平均報酬率），排除組以「假如也進場的成功率」驗證決策。
 
-### 二、選入標的逐檔分析
-針對 ai_selected=Y 的標的，先用摘要表格列出（代號、來源、策略、結果、一句話評語），然後逐檔分析：
-- 選股邏輯是否合理（盤前標的看 Opus 選入理由；盤中標的看 Haiku 快評是否抓到真突破）
-- 盤前設定是否合理（買入價、目標價、停損）
-- 盤中表現如何（開盤位置、量能、走勢）
-- 為什麼達標/未達標
-- 如果重來，最佳進場時機在哪裡
+### 二、選入標的逐檔分析（ai_selected=Y）
+先用表格列代號/來源/策略/結果/一句話評語，再逐檔分析：選股邏輯是否合理（morning 看 Opus 理由，intraday 看 Haiku 是否抓到真突破）、價格設定合理性、盤中表現、為何達標/未達標、最佳進場時機。
 
-### 三、盤中監控效果
-針對有 AI 監控軌跡的標的：
-- 開盤校準（morning_grade）是否準確？校準結果與盤中實際走勢的吻合度
-- AI 滾動建議的品質：hold/adjust/exit 決策是否恰當？
-- 目標/停損的動態調整是否合理（鎖利、移動停損）
-- MFE vs 實際出場：有多少利潤留在桌上？
-- 整體監控系統對當日損益的貢獻（正面或負面）
+### 三、盤中監控效果（有 AI 監控軌跡的）
+morning_grade 校準準確度、AI 滾動建議品質（hold/adjust/exit 是否恰當）、目標/停損動態調整是否合理（鎖利/移動停損）、MFE vs 實際出場（多少利潤留在桌上）、監控系統對當日損益貢獻。
 
 ### 四、排除決策檢討
-挑出被排除但事後表現好的標的（最多 5 檔），分析：
-- 排除理由是否合理？
-- 是否有遺漏的選股訊號？
+挑被排除但事後表現好的（最多 5 檔），分析排除理由是否合理、是否遺漏選股訊號。
 
 ### 五、共通問題
-找出系統性的模式問題，例如：
-- 買入價是否系統性設太低/太高
-- 特定策略類型（突破/反彈）是否有明顯偏差
-- 評分高但虧損的標的有什麼共通點
+系統性模式（買入價是否系統性偏高/偏低、特定策略類型偏差、評分高但虧損的共通點）。
 
 ### 六、改善建議
-根據今天的觀察，分別針對選股、監控、出場三個環節，列出具體可改善的方向。
+分選股 / 監控 / 出場三環節列具體可改方向。
 PROMPT;
     }
 
