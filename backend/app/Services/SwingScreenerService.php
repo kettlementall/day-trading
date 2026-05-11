@@ -148,6 +148,17 @@ class SwingScreenerService
             });
     }
 
+    private function isLikelyEtf(Stock $stock): bool
+    {
+        if (str_starts_with($stock->symbol ?? '', '00')) {
+            return true;
+        }
+        $name = $stock->name ?? '';
+        return mb_stripos($name, 'ETF') !== false
+            || mb_stripos($name, '指數') !== false
+            || mb_stripos($name, '基金') !== false;
+    }
+
     private function buildCandidatePayload(Stock $stock, string $date, Collection $theses): ?array
     {
         $quotes = DailyQuote::where('stock_id', $stock->id)
@@ -191,8 +202,10 @@ class SwingScreenerService
         $inst = InstitutionalTrade::where('stock_id', $stock->id)->where('date', '<=', $date)->orderByDesc('date')->limit(5)->get();
         $margin = MarginTrade::where('stock_id', $stock->id)->where('date', '<=', $date)->orderByDesc('date')->limit(5)->get();
         $valuation = StockValuation::where('stock_id', $stock->id)->where('date', '<=', $date)->orderByDesc('date')->first();
-        $sectorChange = $stock->industry ? SectorIndex::getChangeForIndustry($date, $stock->industry) : null;
-        $sectorRank = $stock->industry ? SectorIndex::getRankForIndustry($date, $stock->industry) : null;
+        $isEtf = $this->isLikelyEtf($stock);
+        // ETF 的 industry 欄位資料品質差（部分舊 ETF 被誤填成塑膠/紡織等），不對應單一類股
+        $sectorChange = ($isEtf || !$stock->industry) ? null : SectorIndex::getChangeForIndustry($date, $stock->industry);
+        $sectorRank = ($isEtf || !$stock->industry) ? null : SectorIndex::getRankForIndustry($date, $stock->industry);
 
         $trendScore = ($ma20 && $ma60 && $close > $ma20 && $ma20 >= $ma60) ? 25 : 0;
         $pullbackScore = ($ma20 && abs($close - $ma20) / $ma20 < 0.05) ? 15 : 0;

@@ -354,6 +354,12 @@ PROMPT;
 
     private function buildSectorContext(SwingPosition $position, string $date): array
     {
+        // ETF 沒有對應的單一類股，且 DB 內舊 ETF 的 industry 欄位被誤填成塑膠/紡織等
+        // 避免對錯誤的類股強弱餵給 AI 造成誤導
+        if ($this->isLikelyEtf($position->stock)) {
+            return ['available' => false, 'reason' => 'etf_no_single_sector'];
+        }
+
         $industry = $position->stock->industry;
         if (!$industry) {
             return ['available' => false];
@@ -380,6 +386,17 @@ PROMPT;
             'rank' => $rank,
             'strength' => $strength,
         ];
+    }
+
+    private function isLikelyEtf(\App\Models\Stock $stock): bool
+    {
+        if (str_starts_with($stock->symbol ?? '', '00')) {
+            return true;
+        }
+        $name = $stock->name ?? '';
+        return mb_stripos($name, 'ETF') !== false
+            || mb_stripos($name, '指數') !== false
+            || mb_stripos($name, '基金') !== false;
     }
 
     private function buildTechnicalContext(SwingPosition $position, string $date): array
