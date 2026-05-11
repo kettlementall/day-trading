@@ -430,38 +430,40 @@ class SwingScreenerService
 評分規則（嚴格遵守，違反此規則的回應將被視為無效）：
 1. **必須對全部 {$totalCount} 檔候選逐一輸出**，順序不限，但每一檔都要有獨立 score + reasoning。
 2. score 必須在候選之間呈現顯著差異，禁止集中給滿分。建議分布：
-   - 90 分以上：最多 2 檔，且 reasoning 必須具體說明為何優於其他候選。
+   - 90 分以上：最多 2 檔。
    - 80–89 分：最多 4 檔。
    - 70–79 分：5–8 檔（次選擔當，可作為備援）。
    - 70 分以下：其餘候選依下檔風險、論點關聯度、技術位置高低排序。
 3. selected=true 僅給予實質想下單的檔次（8–12 檔），其餘設 false。
 4. score 與 selected 必須一致：score < 70 不得 selected=true；score >= 80 應該 selected=true。
-5. 同一個 strategy（trend_pullback/trend_follow/base_breakout）內也應該有分數階梯，不要全部一樣分。
-6. target_price_reasoning 必須說明「目標價為何是該數字」，需引用至少一個具體依據：近期壓力/箱型上緣/均線乖離/ATR 波動/風險報酬/產業催化預期。
-7. eta_reasoning 必須說明「target_eta_days 為何是該天數」，需引用至少一個具體依據：趨勢斜率、波動率、量能推進速度、籌碼累積速度、題材催化時間窗。
-8. thesis.source=related_stock 代表產業研究明確點名此股，但這不是買進命令；若技術、籌碼、量能或估值不支持，仍應排除。
-9. benefit_level=core 可提高論點權重；secondary 中度加權；watch 只能當輔助，禁止只靠題材選入。
-10. reasoning 必須說明「個股映射角色」與「交易條件」是否一致。
+5. 同一個 strategy 內也應該有分數階梯，不要全部一樣分。
+6. benefit_level=core 可提高論點權重；secondary 中度加權；watch 只能當輔助。
+7. **字數紀律（嚴格控制 output 長度以免被截斷）**：
+   - reasoning：**最多 50 字**，一句話帶出「策略 + 個股映射角色 + 關鍵風險」。
+   - target_price_reasoning：**最多 35 字**，必含一個依據（壓力/均線/ATR/R:R 之一）。
+   - eta_reasoning：**最多 30 字**，必含一個依據（趨勢斜率/波動/量能/題材催化窗之一）。
+   - risk_notes：**最多 3 條，每條 15 字內**。
+   - selected=false 的檔次，reasoning 可更短（20-30 字），不需展開細節。
+8. **禁止輸出 entry_plan 物件**——系統會自動從 top-level 欄位組合，重複輸出會被視為違規。
 
-請只輸出 JSON 陣列（共 {$totalCount} 筆，與候選清單一一對應）：
+請只輸出 JSON 陣列（共 {$totalCount} 筆，與候選清單一一對應），不要包 markdown：
 {
   "symbol": "2330",
   "selected": true,
   "score": 0到100,
   "strategy": "trend_pullback/trend_follow/base_breakout",
-  "reasoning": "理專式判斷一句話 30-60 字（90 分以上必須說明為何優於其他候選）",
-  "thesis": {"title": "論點", "chain_position": "位置", "relevance_score": 0到100, "benefit_level": "core/secondary/watch", "role": "產業鏈角色", "related_reasoning": "個股映射理由"},
+  "reasoning": "≤50字一句話判斷",
+  "thesis": {"title": "論點", "benefit_level": "core/secondary/watch", "role": "產業鏈角色"},
   "entry_price": 100,
   "target_price": 110,
-  "target_price_reasoning": "目標價取近期壓力區與 ATR 2.5 倍推估後的保守值，對應約 2:1 風險報酬。",
+  "target_price_reasoning": "≤35字目標價依據",
   "stop_loss": 95,
   "time_horizon_days": 20,
   "expected_holding_days": "10-25",
   "target_eta_days": 12,
-  "eta_reasoning": "以近 20 日趨勢斜率與目前量能推進速度估算，若論點延續約 12 個交易日接近目標區。",
+  "eta_reasoning": "≤30字ETA依據",
   "review_after_days": 5,
-  "entry_plan": {"expected_holding_days":"10-25","target_eta_days":12,"target_price_reasoning":"目標價理由","eta_reasoning":"ETA 理由","review_after_days":5},
-  "risk_notes": ["風險"]
+  "risk_notes": ["風險1","風險2","風險3"]
 }
 PROMPT;
 
