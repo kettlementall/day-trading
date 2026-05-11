@@ -417,59 +417,43 @@ class SwingScreenerService
         $totalCount = $candidates->count();
 
         $prompt = <<<PROMPT
-你是穩健型台股理財專員，請從候選股票中挑選適合 1-4 週短線配置的標的。避免追高，重視下檔風險、產業論點、籌碼、技術位置與估值。
+你是穩健派台股短線理財專員，挑 1-4 週配置標的。避免追高，重視下檔風險／論點／籌碼／技術／估值。
 
 日期：{$date}
 
-產業論點：
+# 產業論點
 {$thesisText}
 
-股票候選：
+# 股票候選
 {$stockText}
 
-評分規則（嚴格遵守，違反此規則的回應將被視為無效）：
-1. **必須對全部 {$totalCount} 檔候選逐一輸出**，順序不限，但每一檔都要有獨立 score + reasoning。
-2. score 必須在候選之間呈現顯著差異，禁止集中給滿分。建議分布：
-   - 90 分以上：最多 2 檔。
-   - 80–89 分：最多 4 檔。
-   - 70–79 分：5–8 檔（次選擔當，可作為備援）。
-   - 70 分以下：其餘候選依下檔風險、論點關聯度、技術位置高低排序。
-3. selected=true 僅給予實質想下單的檔次（8–12 檔），其餘設 false。
-4. score 與 selected 必須一致：score < 70 不得 selected=true；score >= 80 應該 selected=true。
-5. 同一個 strategy 內也應該有分數階梯，不要全部一樣分。
-6. benefit_level=core 可提高論點權重；secondary 中度加權；watch 只能當輔助。
-7. **估值是輔助訊號，不可單獨主導選股**：
-   - 純估值股（PE 偏低或殖利率高、但「找不到具體題材催化、技術也沒明確驅動」）最高 65 分，不該 selected=true。
-   - 殖利率型存股（典型如官股金控、防禦傳產）不適合 4 週短線——這類股票的修正期通常以季為單位，會卡住資金且少波動。
-   - 想推上 80+ 分必須三要素齊全：論點關聯實在、技術位置有驅動、短期內有可驗證的催化窗（法說、訂單、季報、產業會議、政策、報價變動）。
-   - 不同產業的「合理估值」由你判斷（半導體跟金融基準不同），不要一視同仁。
-8. **字數紀律（嚴格控制 output 長度以免被截斷）**：
-   - reasoning：**最多 50 字**，一句話帶出「策略 + 個股映射角色 + 關鍵風險」。
-   - target_price_reasoning：**最多 35 字**，必含一個依據（壓力/均線/ATR/R:R 之一）。
-   - eta_reasoning：**最多 30 字**，必含一個依據（趨勢斜率/波動/量能/題材催化窗之一）。
-   - risk_notes：**最多 3 條，每條 15 字內**。
-   - selected=false 的檔次，reasoning 可更短（20-30 字），不需展開細節。
-9. **禁止輸出 entry_plan 物件**——系統會自動從 top-level 欄位組合，重複輸出會被視為違規。
+# 評分規則（違反視為無效）
+1. **必須對全部 {$totalCount} 檔逐一輸出**，每檔獨立 score + reasoning。
+2. score 分布：≥90 最多 2 檔｜80-89 最多 4 檔｜70-79 約 5-8 檔｜其餘 <70 依下檔風險/論點/技術排序。
+3. selected=true 僅給實質想下單的檔次（8-12 檔）；score<70 不得 selected=true；score≥80 應 selected=true。
+4. 同 strategy 內必須有分數階梯，不可全同分。
+5. benefit_level=core 提高論點權重；secondary 中度；watch 僅輔助。
+6. **估值僅為輔助**：純估值股（PE 低／殖利率高但無題材催化、無技術驅動）≤65 分且不得 selected。殖利率型存股（官股金控、防禦傳產）不適合 4 週短線（修正期以季計）。80+ 必須三要素齊全：論點關聯 + 技術驅動 + 可驗證催化窗（法說/訂單/季報/產業會議/政策/報價）。不同產業估值基準（半導體 vs 金融）由你判斷。
+7. **字數紀律**：reasoning ≤50 字（策略 + 個股角色 + 風險）｜target_price_reasoning ≤35 字（含壓力/均線/ATR/R:R 之一）｜eta_reasoning ≤30 字（含趨勢/波動/量能/催化窗之一）｜risk_notes ≤3 條每條 ≤15 字｜selected=false 可更短 20-30 字。
+8. **禁止輸出 entry_plan 物件**（系統會自動從 top-level 欄位組合）。
 
-請只輸出 JSON 陣列（共 {$totalCount} 筆，與候選清單一一對應），不要包 markdown：
-{
+# 輸出格式（JSON 陣列共 {$totalCount} 筆，不包 markdown）
+[{
   "symbol": "2330",
   "selected": true,
-  "score": 0到100,
-  "strategy": "trend_pullback/trend_follow/base_breakout",
-  "reasoning": "≤50字一句話判斷",
-  "thesis": {"title": "論點", "benefit_level": "core/secondary/watch", "role": "產業鏈角色"},
-  "entry_price": 100,
-  "target_price": 110,
-  "target_price_reasoning": "≤35字目標價依據",
-  "stop_loss": 95,
-  "time_horizon_days": 20,
-  "expected_holding_days": "10-25",
-  "target_eta_days": 12,
-  "eta_reasoning": "≤30字ETA依據",
-  "review_after_days": 5,
-  "risk_notes": ["風險1","風險2","風險3"]
-}
+  "score": <0-100>,
+  "strategy": "<trend_pullback|trend_follow|base_breakout>",
+  "reasoning": "<≤50字>",
+  "thesis": {"title": "<論點>", "benefit_level": "<core|secondary|watch>", "role": "<產業鏈角色>"},
+  "entry_price": <num>, "target_price": <num>, "stop_loss": <num>,
+  "target_price_reasoning": "<≤35字依據>",
+  "time_horizon_days": <int>,
+  "expected_holding_days": "<range, e.g. 10-25>",
+  "target_eta_days": <int>,
+  "eta_reasoning": "<≤30字依據>",
+  "review_after_days": <int>,
+  "risk_notes": ["<≤15字>", "<≤15字>", "<≤15字>"]
+}]
 PROMPT;
 
         try {
