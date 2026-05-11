@@ -833,10 +833,9 @@ SYSTEM;
             $taskSection = <<<TASK
 ## 任務（持有中 — {$profitContext}）
 1. 走勢是否仍支持持有到目標？是否建議調整目標或收緊停損？
-2. 是否出現出場訊號？（明確建議 hold 或 exit）
-3. 日K趨勢排列是否仍支持持有方向？
-4. 先判斷 strategy_state（valid/switched/uncertain/failed），回覆 strategy_issue。
-5. 若盤勢特徵已從原策略轉變（如 momentum 轉盤整、breakout 失敗轉 bounce），可在回覆加入 "strategy" 欄位切換策略標籤，並用 adjustments 同步更新 target/stop。
+2. 是否出現出場訊號？（明確 hold 或 exit）
+3. 日 K 趨勢排列是否仍支持持有方向？
+4. 判斷 strategy_state；若盤勢特徵已從原策略轉變（momentum→盤整、breakout 失敗→bounce），可加 "strategy" 欄位切換並用 adjustments 同步 target/stop。
 TASK;
         } else {
             // WATCHING
@@ -866,44 +865,28 @@ TASK;
             $statusLines[] = sprintf("昨收 %.2f | 漲停 %.2f | 跌停 %.2f", $prevClose, $limitUpPrice, $limitDownPrice);
 
             $taskSection = <<<TASK
-## 任務（觀望中）— 依優先順序判斷
+## 任務（觀望中）— 依順序判斷
 
-### 1. 策略適配檢查（最先做）
-當前盤勢與原策略 {$strategy} 是否仍匹配？
+### 1. 策略適配檢查
+原策略 {$strategy} 是否仍匹配？依 strategy_state 回 valid / switched / uncertain / failed；strategy_issue 寫清楚是「策略型態切換」「資料不足」還是「結構性失敗」。
 
-- strategy_state=valid：原策略仍有效，進入步驟 2
-- strategy_state=switched：原策略已不適合，但可切換策略；在 "strategy" 欄位填新策略 + adjustments 更新 target/stop（限 A/B 級才會生效）
-- strategy_state=uncertain：資料不足或訊號矛盾，優先 hold 等下一輪確認
-- strategy_state=failed：沒有可切換策略且結構已破壞，才 skip
-- strategy_issue 要寫清楚是「策略型態切換」、「資料不足」還是「結構性失敗」
+若價格已走過原本低接/回測區，不可只因「沒到原買點」就 skip——判斷是否變成 momentum / breakout_fresh / breakout_retest。但策略可切換 ≠ 可立刻進場：若新策略成立但位置偏追高，應 hold 等回測/止穩。
 
-若價格已經走過原本低接/回測區，不可只因「沒到原買點」就 skip；要判斷是否變成 momentum / breakout_fresh / breakout_retest。
-但策略可切換不代表可以立刻進場；若新策略成立但目前位置偏追高，應 hold 並等待回測、止穩或重新站穩確認。
+策略切換對照（原策略失效改用其他策略）：
 
-策略切換對照表（只列「原策略失效，改用其他策略」場景；若原策略仍生效，無需切換）：
-
-| 盤中觀察到 | 切換為 |
+| 盤中觀察 | 切換為 |
 |---|---|
-| 開盤跳空已超壓力位且不回頭（gap_pullback / breakout_retest 永不觸發） | 可切 momentum，但仍需判斷進場品質 |
-| 突破壓力後回測支撐附近止穩（原 momentum / breakout_fresh 已過時點） | breakout_retest |
-| 突破失敗破支撐後在更低支撐反彈（原突破型策略失效） | bounce |
-| 超跌反彈日跳空缺口不回補 + 量能放大（原一般策略不適用） | gap_reversal |
-| 連續跌破多個支撐 + 量縮無撐 | failed（skip，不切換） |
+| 開盤跳空已超壓力位且不回頭（gap_pullback / breakout_retest 永不觸發） | momentum（仍需判斷進場品質） |
+| 突破壓力後回測支撐附近止穩 | breakout_retest |
+| 突破失敗破支撐後在更低支撐反彈 | bounce |
+| 超跌反彈日跳空缺口不回補 + 量能放大 | gap_reversal |
+| 連續跌破多個支撐 + 量縮無撐 | failed（skip） |
 
-### 2. 進場品質評估（strategy_state 之後必做）
-策略條件是否成立，不等於現在可以買。請先輸出 entry_timing / entry_quality / chase_risk：
-- 策略成立 + 進場品質足夠 → entry_timing=good，可 entry
-- 策略成立但像追高、靠近日高、停損太遠、上方空間不足 → entry_timing=late_chase，action=hold
-- 策略仍可交易但需要回測或止穩 → entry_timing=wait_pullback，action=hold + 視需要 adjustments 更新 target/stop
-- 策略未明 → entry_timing=early 或 no_trade，action=hold
+### 2. 進場品質與 skip
+依 system prompt 的進場品質規則輸出 entry_timing / entry_quality / chase_risk，並判斷是否 skip（僅 strategy_state=failed 才 skip）。
 
-### 3. 是否該 skip
-只有 strategy_state=failed 才 skip。
-failed 代表：沒有可切換策略，且走勢已破壞可用策略前提、上方沒有合理交易目標，或走勢分類為 weakness。
-壓力位接近漲停、量比暫時下降、短線回落但未破支撐、原策略不符但其他策略可用，都不是 failed；優先 hold 或 switched。
-
-### 4. 日 K 趨勢檢核
-日K趨勢是否支持當前操作方向？若明確不支持，將此納入決策。
+### 3. 日 K 趨勢檢核
+日 K 趨勢是否支持當前方向？若明確不支持，納入決策。
 TASK;
         }
 
