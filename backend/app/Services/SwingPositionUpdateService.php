@@ -55,7 +55,8 @@ class SwingPositionUpdateService
             $chipContext = $this->buildChipContext($position, $date);
             $valuationContext = $this->buildValuationContext($position, $date);
             $sectorContext = $this->buildSectorContext($position, $date);
-            $advice = $this->buildAdvice($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext);
+            $recentExitSignal = $this->hasRecentExitSignal($position, $quote);
+            $advice = $this->buildAdvice($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $recentExitSignal);
             $action = $advice['action'] ?? 'hold';
 
             if ($action === 'exit') {
@@ -106,7 +107,8 @@ class SwingPositionUpdateService
         array $technicalContext,
         array $chipContext,
         array $valuationContext = [],
-        array $sectorContext = []
+        array $sectorContext = [],
+        bool $recentExitSignal = false
     ): array {
         $close = (float) $quote->close;
         $entry = (float) $position->entry_price;
@@ -132,7 +134,7 @@ class SwingPositionUpdateService
         // 注意：論點 invalidation_signal 已經包進 $thesisStatus，
         // 不再在這裡硬 exit，改由 AI 結合技術/籌碼/ETA 仲裁（避免 AI 改 title 導致衰退就誤觸出場）。
         if ($this->apiKey) {
-            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext);
+            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $recentExitSignal);
             if ($ai) {
                 return $this->normalizeAdvice($position, $ai, $profitPct);
             }
@@ -225,7 +227,8 @@ class SwingPositionUpdateService
         array $technicalContext,
         array $chipContext,
         array $valuationContext = [],
-        array $sectorContext = []
+        array $sectorContext = [],
+        bool $recentExitSignal = false
     ): ?array {
         $candidate = $position->candidate;
         $thesisJson = json_encode($thesisStatus, JSON_UNESCAPED_UNICODE);
@@ -249,6 +252,7 @@ class SwingPositionUpdateService
 籌碼狀態：{$chipJson}
 估值狀態：{$valuationJson}
 類股狀態：{$sectorJson}
+近期是否觸發過 exit 訊號（過去 7 個自然日內）：{$this->describeRecentExit($recentExitSignal)}
 
 規則：
 - action 只能是 hold / adjust / trim / exit。
@@ -258,6 +262,7 @@ class SwingPositionUpdateService
 - target_price_reasoning 必須說明「current_target 為何是該數字」，需引用壓力區、均線/通道、ATR 波動、風險報酬或論點催化之一。
 - eta_reasoning 必須說明「target_eta_days 為何是該天數」，需引用趨勢斜率、波動率、量能、籌碼或題材催化時間窗之一。
 - 若論點狀態包含 related_stock_context，必須判斷此股是否仍符合原本 benefit_level 與 role；若角色支撐轉弱，要反映在 thesis_health、risk_pressure、reasoning、目標價或 ETA。
+- **若「近期是否觸發過 exit 訊號」為 true**：代表此持倉近 7 日內曾跌破停損或論點失效過、但今日尚未再次觸發。即便目前 close > stop，也屬於「**已被市場測試過的支撐**」，**不可簡單給 hold**——優先選 trim 並上移 current_stop 保護獲利，或選 adjust 縮小目標 ETA；只有當技術明顯轉強（突破前高、量能顯著放大、籌碼明確回流）才可回到 hold。
 - 若 thesis_status.invalidation_signal=true，**不可僅憑此一條件就建議 exit**。請結合下列要素綜合判斷：
   1. invalidation_reason 是什麼（title_not_found_in_db 可能只是 AI 改 title 命名，不代表基本面壞）。
   2. 技術面（technical_health）是否仍 healthy。
@@ -413,6 +418,29 @@ PROMPT;
             'rank' => $rank,
             'strength' => $strength,
         ];
+    }
+
+    /**
+     * 偵測此持倉近 7 個自然日內（不含今日）是否曾觸發 exit 訊號。
+     * 用於提醒 AI「已被測試過的停損」這個重要脈絡，避免 V 反後簡單給 hold 而忽略再測風險。
+     */
+    private function hasRecentExitSignal(SwingPosition $position, DailyQuote $quote): bool
+    {
+        $todayDate = $quote->date->toDateString();
+        $sevenDaysAgo = $quote->date->copy()->subDays(7)->toDateString();
+
+        return SwingPositionSnapshot::where('swing_position_id', $position->id)
+            ->where('date', '>=', $sevenDaysAgo)
+            ->where('date', '<', $todayDate)
+            ->get()
+            ->contains(fn ($s) => is_array($s->advice ?? null) && ($s->advice['action'] ?? null) === 'exit');
+    }
+
+    private function describeRecentExit(bool $recentExitSignal): string
+    {
+        return $recentExitSignal
+            ? 'true（過去 7 日內曾觸發 exit，請偏向 trim 保護而非簡單 hold）'
+            : 'false';
     }
 
     private function isLikelyEtf(\App\Models\Stock $stock): bool
