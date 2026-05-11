@@ -236,43 +236,56 @@ class SwingPositionUpdateService
         $chipJson = json_encode($chipContext, JSON_UNESCAPED_UNICODE);
         $valuationJson = json_encode($valuationContext, JSON_UNESCAPED_UNICODE);
         $sectorJson = json_encode($sectorContext, JSON_UNESCAPED_UNICODE);
+        $recentExitText = $recentExitSignal ? 'true（近 7 日測過 stop 或論點失效）' : 'false';
         $prompt = <<<PROMPT
-你是穩健型理財專員，請根據短線持倉狀態給每日盤後建議，只輸出 JSON。
+你是穩健派短線交易顧問，盤後針對單筆持倉給日建議，僅輸出 JSON。
 
+# 持倉
 股票：{$position->stock->symbol} {$position->stock->name}
-收盤：{$quote->close}
-成本：{$position->entry_price}
-股數：{$position->shares}
-持有交易日：{$holdingDays}
-目前停損：{$position->current_stop}
-目前目標：{$position->current_target}
-原始短線理由：{$candidate?->swing_reasoning}
-論點狀態：{$thesisJson}
-技術/量價狀態：{$technicalJson}
-籌碼狀態：{$chipJson}
-估值狀態：{$valuationJson}
-類股狀態：{$sectorJson}
-近期是否觸發過 exit 訊號（過去 7 個自然日內）：{$this->describeRecentExit($recentExitSignal)}
+收盤 {$quote->close} | 成本 {$position->entry_price} | 股數 {$position->shares} | 持有 {$holdingDays} 日
+stop {$position->current_stop} | target {$position->current_target}
+原由：{$candidate?->swing_reasoning}
 
-規則：
-- action 只能是 hold / adjust / trim / exit。
-- current_stop 不可低於目前停損，除非 action=exit；停損只能上移或維持。
-- current_target 可以上修或下修，但 reasoning 必須說明原因。
-- expected_holding_days 與 target_eta_days 必須依今日狀態重新估，不要沿用固定 20 天。
-- target_price_reasoning 必須說明「current_target 為何是該數字」，需引用壓力區、均線/通道、ATR 波動、風險報酬或論點催化之一。
-- eta_reasoning 必須說明「target_eta_days 為何是該天數」，需引用趨勢斜率、波動率、量能、籌碼或題材催化時間窗之一。
-- 若論點狀態包含 related_stock_context，必須判斷此股是否仍符合原本 benefit_level 與 role；若角色支撐轉弱，要反映在 thesis_health、risk_pressure、reasoning、目標價或 ETA。
-- **若「近期是否觸發過 exit 訊號」為 true**：代表此持倉近 7 日內曾跌破停損或論點失效過、但今日尚未再次觸發。即便目前 close > stop，也屬於「**已被市場測試過的支撐**」，**不可簡單給 hold**——優先選 trim 並上移 current_stop 保護獲利，或選 adjust 縮小目標 ETA；只有當技術明顯轉強（突破前高、量能顯著放大、籌碼明確回流）才可回到 hold。
-- 若 thesis_status.invalidation_signal=true，**不可僅憑此一條件就建議 exit**。請結合下列要素綜合判斷：
-  1. invalidation_reason 是什麼（title_not_found_in_db 可能只是 AI 改 title 命名，不代表基本面壞）。
-  2. 技術面（technical_health）是否仍 healthy。
-  3. 籌碼面（chip_health）是否仍 healthy。
-  4. 距離 target 是否還近、ETA 還剩多久。
-  只有當「論點失效 + 技術 weak/broken」或「論點失效 + 距離 stop 已很近」雙重條件成立才建議 exit；否則優先 trim / adjust 並上移停損保護獲利，給標的更多時間驗證。
-- thesis_health / technical_health / chip_health / risk_pressure 必須明確反映論點、技術、籌碼與風險。
+# Context
+論點：{$thesisJson}
+技術：{$technicalJson}
+籌碼：{$chipJson}
+估值：{$valuationJson}
+類股：{$sectorJson}
+近 7 日 exit 訊號：{$recentExitText}
 
-格式：
-{"action":"hold/adjust/trim/exit","reasoning":"原因","current_stop":數字,"current_target":數字,"target_price_reasoning":"目標價數字理由","profit_percent":數字,"expected_holding_days":"8-15","target_eta_days":8,"eta_reasoning":"ETA 數字理由","time_pressure":"normal/delayed/expired","thesis_health":"healthy/weak/invalidated/unknown","technical_health":"healthy/weak/broken","chip_health":"healthy/neutral/weak","risk_pressure":"low/medium/high","chip_risk_notes":["原因"],"volume_price_signal":"量價描述"}
+# 基礎約束
+- action ∈ {hold, adjust, trim, exit}
+- current_stop 只能上移或維持（action=exit 例外）
+- current_target 可調，但 reasoning 必須說明
+- expected_holding_days 與 target_eta_days 必須依今日狀態重估，不可沿用 20 天
+- target_price_reasoning 必須引用：壓力區 / 均線通道 / ATR / R:R / 題材催化 其一
+- eta_reasoning 必須引用：趨勢斜率 / 波動 / 量能 / 籌碼 / 題材催化窗 其一
+- thesis_health、technical_health、chip_health、risk_pressure 必須真實反映 context
+
+# 進階仲裁
+- related_stock_context 存在時：判斷此股是否仍符合 benefit_level 與 role，若角色弱化要反映在 thesis_health/risk_pressure/reasoning/target/ETA。
+- thesis_status.invalidation_signal=true：不可單獨 exit。只有「論點失效＋技術 weak/broken」或「論點失效＋瀕臨 stop」雙條件成立才 exit；否則 trim/adjust 上移 stop，給時間驗證。invalidation_reason=title_not_found_in_db 多半只是命名飄移，非基本面壞。
+- 近 7 日 exit 訊號=true：即便 close 已收回，預設 trim 上移 stop 或 adjust 縮 ETA，禁止簡單 hold；只有「突破前高＋量能放大＋籌碼回流」三者齊備才可 hold。
+
+# 輸出 schema
+{
+  "action": "<hold|adjust|trim|exit>",
+  "reasoning": "<理由>",
+  "current_stop": <num>, "current_target": <num>,
+  "target_price_reasoning": "<引用至少一個依據>",
+  "profit_percent": <num>,
+  "expected_holding_days": "<range, e.g. 8-15>",
+  "target_eta_days": <int>,
+  "eta_reasoning": "<引用至少一個依據>",
+  "time_pressure": "<normal|delayed|expired>",
+  "thesis_health": "<healthy|weak|invalidated|unknown>",
+  "technical_health": "<healthy|weak|broken>",
+  "chip_health": "<healthy|neutral|weak>",
+  "risk_pressure": "<low|medium|high>",
+  "chip_risk_notes": ["<原因>"],
+  "volume_price_signal": "<量價描述>"
+}
 PROMPT;
 
         try {
