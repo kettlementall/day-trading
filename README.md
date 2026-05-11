@@ -150,6 +150,9 @@ docker compose exec php php artisan stock:ai-screen-swing [date]
 # 重算短線股票池（is_swing_eligible，由每週一 17:30 排程自動執行；新部署或調整規則後可手動補跑）
 docker compose exec php php artisan stock:refresh-swing-universe
 
+# 從 TWSE 拉 ETF 名單寫進 stocks 並用 Fugle 補 80 天歷史日 K（新部署或月度補新上市 ETF）
+docker compose exec php php artisan stock:import-etfs [yyyymmdd]
+
 # 回測指標查看
 docker compose exec php php artisan stock:backtest --from=2026-03-01 --to=2026-04-10
 ```
