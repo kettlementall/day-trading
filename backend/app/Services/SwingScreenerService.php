@@ -8,6 +8,7 @@ use App\Models\InstitutionalTrade;
 use App\Models\InvestmentThesis;
 use App\Models\MarginTrade;
 use App\Models\Stock;
+use App\Models\SectorIndex;
 use App\Models\StockValuation;
 use App\Models\SwingPosition;
 use App\Models\ThesisStockLink;
@@ -190,6 +191,8 @@ class SwingScreenerService
         $inst = InstitutionalTrade::where('stock_id', $stock->id)->where('date', '<=', $date)->orderByDesc('date')->limit(5)->get();
         $margin = MarginTrade::where('stock_id', $stock->id)->where('date', '<=', $date)->orderByDesc('date')->limit(5)->get();
         $valuation = StockValuation::where('stock_id', $stock->id)->where('date', '<=', $date)->orderByDesc('date')->first();
+        $sectorChange = $stock->industry ? SectorIndex::getChangeForIndustry($date, $stock->industry) : null;
+        $sectorRank = $stock->industry ? SectorIndex::getRankForIndustry($date, $stock->industry) : null;
 
         $trendScore = ($ma20 && $ma60 && $close > $ma20 && $ma20 >= $ma60) ? 25 : 0;
         $pullbackScore = ($ma20 && abs($close - $ma20) / $ma20 < 0.05) ? 15 : 0;
@@ -234,6 +237,11 @@ class SwingScreenerService
                 'dividend_yield' => $valuation->dividend_yield,
                 'eps_ttm' => $valuation->eps_ttm,
             ] : null,
+            'sector' => [
+                'name' => $stock->industry,
+                'change_percent' => $sectorChange,
+                'rank' => $sectorRank,
+            ],
             'chips' => [
                 'institutional_5d' => $inst->sum('total_net'),
                 'margin_5d' => $margin->sum('margin_change'),
@@ -369,9 +377,30 @@ class SwingScreenerService
             return "- #{$t->id} {$t->title} 信心{$t->confidence_score}: {$t->description}" . ($related ? " | 個股映射：{$related}" : '');
         })->implode("\n");
         $candidates = $rows->take(30)->values();
-        $stockText = $candidates->map(fn ($r) =>
-            "{$r['symbol']} {$r['name']} {$r['industry']} pre_score={$r['pre_score']} close={$r['entry_price']} thesis=" . json_encode($r['thesis'], JSON_UNESCAPED_UNICODE)
-        )->implode("\n");
+        $stockText = $candidates->map(function ($r) {
+            $val = $r['valuation'] ?? null;
+            $valText = $val
+                ? sprintf('PE=%s PB=%s 殖利率=%s%% EPS=%s',
+                    $val['pe_ratio'] ?? '—',
+                    $val['pb_ratio'] ?? '—',
+                    $val['dividend_yield'] ?? '—',
+                    $val['eps_ttm'] ?? '—',
+                )
+                : '估值=—';
+
+            $sec = $r['sector'] ?? null;
+            $secChange = $sec['change_percent'] ?? null;
+            $secRank = $sec['rank'] ?? null;
+            $secText = $secChange !== null
+                ? sprintf('類股%s%s%%%s',
+                    $secChange >= 0 ? '+' : '',
+                    $secChange,
+                    $secRank ? "(排名#{$secRank})" : '',
+                )
+                : '類股=—';
+
+            return "{$r['symbol']} {$r['name']} {$r['industry']} pre_score={$r['pre_score']} close={$r['entry_price']} | {$valText} | {$secText} | thesis=" . json_encode($r['thesis'], JSON_UNESCAPED_UNICODE);
+        })->implode("\n");
         $totalCount = $candidates->count();
 
         $prompt = <<<PROMPT

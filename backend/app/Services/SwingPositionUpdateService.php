@@ -6,6 +6,8 @@ use App\Models\DailyQuote;
 use App\Models\InstitutionalTrade;
 use App\Models\InvestmentThesis;
 use App\Models\MarginTrade;
+use App\Models\SectorIndex;
+use App\Models\StockValuation;
 use App\Models\SwingPosition;
 use App\Models\SwingPositionSnapshot;
 use Illuminate\Support\Facades\Http;
@@ -51,7 +53,9 @@ class SwingPositionUpdateService
             $thesisStatus = $this->resolveThesisStatus($position);
             $technicalContext = $this->buildTechnicalContext($position, $date);
             $chipContext = $this->buildChipContext($position, $date);
-            $advice = $this->buildAdvice($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext);
+            $valuationContext = $this->buildValuationContext($position, $date);
+            $sectorContext = $this->buildSectorContext($position, $date);
+            $advice = $this->buildAdvice($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext);
             $action = $advice['action'] ?? 'hold';
 
             if ($action === 'exit') {
@@ -100,7 +104,9 @@ class SwingPositionUpdateService
         int $holdingDays,
         array $thesisStatus,
         array $technicalContext,
-        array $chipContext
+        array $chipContext,
+        array $valuationContext = [],
+        array $sectorContext = []
     ): array {
         $close = (float) $quote->close;
         $entry = (float) $position->entry_price;
@@ -140,7 +146,7 @@ class SwingPositionUpdateService
         }
 
         if ($this->apiKey) {
-            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext);
+            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext);
             if ($ai) {
                 return $this->normalizeAdvice($position, $ai, $profitPct);
             }
@@ -196,12 +202,16 @@ class SwingPositionUpdateService
         int $holdingDays,
         array $thesisStatus,
         array $technicalContext,
-        array $chipContext
+        array $chipContext,
+        array $valuationContext = [],
+        array $sectorContext = []
     ): ?array {
         $candidate = $position->candidate;
         $thesisJson = json_encode($thesisStatus, JSON_UNESCAPED_UNICODE);
         $technicalJson = json_encode($technicalContext, JSON_UNESCAPED_UNICODE);
         $chipJson = json_encode($chipContext, JSON_UNESCAPED_UNICODE);
+        $valuationJson = json_encode($valuationContext, JSON_UNESCAPED_UNICODE);
+        $sectorJson = json_encode($sectorContext, JSON_UNESCAPED_UNICODE);
         $prompt = <<<PROMPT
 你是穩健型理財專員，請根據短線持倉狀態給每日盤後建議，只輸出 JSON。
 
@@ -216,6 +226,8 @@ class SwingPositionUpdateService
 論點狀態：{$thesisJson}
 技術/量價狀態：{$technicalJson}
 籌碼狀態：{$chipJson}
+估值狀態：{$valuationJson}
+類股狀態：{$sectorJson}
 
 規則：
 - action 只能是 hold / adjust / trim / exit。
@@ -303,6 +315,71 @@ PROMPT;
         $advice['volume_price_signal'] = $advice['volume_price_signal'] ?? null;
 
         return $advice;
+    }
+
+    private function buildValuationContext(SwingPosition $position, string $date): array
+    {
+        $v = StockValuation::where('stock_id', $position->stock_id)
+            ->where('date', '<=', $date)
+            ->orderByDesc('date')
+            ->first();
+
+        if (!$v) {
+            return ['available' => false];
+        }
+
+        $pe = $v->pe_ratio !== null ? (float) $v->pe_ratio : null;
+        $yield = $v->dividend_yield !== null ? (float) $v->dividend_yield : null;
+
+        // 粗略的估值健康度（無歷史標準，僅供 AI 參考）
+        $level = 'normal';
+        if ($pe !== null) {
+            if ($pe >= 40) {
+                $level = 'expensive';
+            } elseif ($pe > 0 && $pe < 12) {
+                $level = 'cheap';
+            }
+        }
+
+        return [
+            'available' => true,
+            'pe_ratio' => $pe,
+            'pb_ratio' => $v->pb_ratio !== null ? (float) $v->pb_ratio : null,
+            'dividend_yield' => $yield,
+            'eps_ttm' => $v->eps_ttm !== null ? (float) $v->eps_ttm : null,
+            'as_of' => $v->date?->format('Y-m-d'),
+            'level' => $level,
+        ];
+    }
+
+    private function buildSectorContext(SwingPosition $position, string $date): array
+    {
+        $industry = $position->stock->industry;
+        if (!$industry) {
+            return ['available' => false];
+        }
+
+        $change = SectorIndex::getChangeForIndustry($date, $industry);
+        $rank = SectorIndex::getRankForIndustry($date, $industry);
+
+        if ($change === null) {
+            return ['available' => false, 'industry' => $industry];
+        }
+
+        $strength = 'neutral';
+        if ($change >= 1.5) {
+            $strength = 'strong';
+        } elseif ($change <= -1.5) {
+            $strength = 'weak';
+        }
+
+        return [
+            'available' => true,
+            'industry' => $industry,
+            'change_percent' => $change,
+            'rank' => $rank,
+            'strength' => $strength,
+        ];
     }
 
     private function buildTechnicalContext(SwingPosition $position, string $date): array
