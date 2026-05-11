@@ -137,86 +137,85 @@ class InvestmentThesisResearchService
         $industryJson = json_encode($industryBriefs, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         $prompt = <<<PROMPT
-你是台股「理專型」短線產業研究員。你的任務不是整理新聞分類，而是提出 1-4 週可交易的**產業鏈投資論點**。
+你是台股「理專型」短線產業研究員，提出 1-4 週可交易的**產業鏈投資論點**（不是新聞分類整理）。
 
-你必須做深層推理：
-1. 找出需求來源或政策/總經驅動：例如 AI capex、資料中心、記憶體週期、匯率、庫存循環、政策補助。
-2. 推導一階受益：直接訂單或報價受益的環節。
-3. 推導二階/三階受益：材料、設備、封測、散熱、PCB、電源、通路、替代供應鏈。
-4. 判斷台股哪些產業或股票名稱關鍵字可能受益。
-5. 點名台股可能受惠個股，並說清楚每檔在產業鏈中的角色。點名不是買進建議，只是供短線配置加權。
-6. 寫出論點失效條件：報價反轉、capex 下修、庫存惡化、法人轉賣、技術跌破等。
+# 深層推理要求
+1. 找驅動：需求來源或政策/總經因子（AI capex、記憶體週期、匯率、庫存、政策補助等）
+2. 推一階受益（直接訂單/報價）→ 二階/三階受益（材料、設備、封測、散熱、PCB、電源、通路、替代鏈）
+3. 點名台股受惠個股 + 產業鏈角色（不是買進建議，供短線配置加權）
+4. 寫論點失效條件（報價反轉/capex 下修/庫存惡化/法人轉賣/技術跌破）
 
-禁止事項：
-- 不可以用「半導體 短線題材延續」「AI與雲端 短線題材延續」這種粗分類當 title。
-- 不可以只重述新聞標題。
-- 不可以把同一條供應鏈拆成多個高度重複論點。
-- 不可以產生沒有台股可映射受益環節的空泛總經論點。
-- 不可以根據既有短線候選、持倉、曾經選出的股票去反推產業論點或個股名單；related_stocks 只能來自新聞、產業鏈推理與你對台股供應鏈的判斷。
+# 禁止
+- 粗分類 title 如「半導體 短線題材延續」「AI與雲端 短線題材延續」
+- 只重述新聞、把同條供應鏈拆多個重複論點、無台股可映射的總經空論
+- 用「既有候選/持倉/曾選過的股」反推 related_stocks——只能來自新聞 + 產業鏈推理 + 你對台股供應鏈的判斷
 
-論點命名穩定性（重要）：
-- 既有論點清單已列在下方。若你今天要發表的論點與其中**任何一筆本質相同**（核心驅動因素與受益鏈大致相符），**必須完整沿用該筆 title**，**不可改動任何一個字、不可加減冗詞**（例如不要把「AI 算力鏈」改成「AI 算力供應鏈」或「AI 算力短線題材」）。
-- 只在你確定是**全新**的論點軸時才創新 title。命名飄移會讓使用者持倉與舊論點失去連結，3 天後被誤判為失效。
-- 若你想淘汰既有論點，請在新論點 description 內明確說明取代理由，並讓舊論點自然衰退即可，不需特別處理。
+# 論點命名穩定性（極重要）
+若新論點與既有任一筆**本質相同**（驅動因子 + 受益鏈大致相符），**必須完整沿用既有 title**，不可改任何一字。命名飄移會讓持倉與舊論點脫鉤、3 天後被誤判失效。淘汰舊論點：在新論點 description 說明取代理由，讓舊論點自然衰退即可。
 
 日期：{$date}
 
-既有論點（請更新、合併或淘汰；不要無意義重複）：
+# 既有論點（請更新/合併/淘汰，不要無意義重複）
 {$existingLines}
 
-分產業摘要 JSON：
+# 分產業摘要 JSON
 {$industryJson}
 
-可點名股票 universe（只能從這份清單選 related_stocks；不得使用短線候選、持倉或清單外股票）：
+# 可點名股票 universe（related_stocks 只能從此選）
 {$stockUniverseText}
 
-新聞明細：
+# 新聞明細
 {$newsLines}
 
-產業/新聞指數：
+# 產業/新聞指數
 {$indexLines}
 
-# 輸出規範（嚴格遵守）
+# 輸出規範
+- 直接輸出 JSON 陣列，最多 6 筆，禁止 markdown code block
+- 欄位名稱完全一致，不可改成 sector/horizon/direction 等別名
+- confidence_score 建議分布：>80 最多 2 筆｜60-80 主流 4-5 筆｜<60 列觀察
 
-只輸出 JSON 陣列，最多 6 筆，不要有任何解釋文字、不要包裹 markdown code block。
-每筆物件**必須**包含下列所有欄位（欄位名稱完全一致，不可改成 sector/horizon/direction 等別名）：
+# Schema
+[{
+  "title": "<具體論點，含驅動+受益鏈>",
+  "description": "<2-3 句，含『驅動 → 受益環節 → 台股映射 → 短線催化』>",
+  "industry_chain": ["<上游>", "<中游>", "<下游>", "..."],           // ≥4 節點
+  "beneficiary_industries": ["<產業類別對應 stocks.industry>"],
+  "beneficiary_keywords": ["<股名/關鍵字/供應鏈詞>"],                  // ≥8 個
+  "related_stocks": [{                                                  // ≤6 檔，core ≤3 檔
+    "symbol": "<必須來自 universe>",
+    "name": "<>",
+    "benefit_level": "<core|secondary|watch>",
+    "role": "<產業鏈角色>",
+    "reasoning": "<為何此股映射此論點>",
+    "confidence": <0-100>,
+    "risks": ["<>", "<>"]
+  }],
+  "evidence_summary": "<指出哪些新聞支持需求/報價/訂單/法人/情緒>",
+  "risk_factors": ["<>", "<>", "<>", "<>"],                            // ≥4 條，含失效條件
+  "sentiment_divergence": "<none|bullish_fundamental_bearish_sentiment|bearish_fundamental_bullish_sentiment>",
+  "confidence_score": <整數 0-100>
+}]
 
-- `title` (string)：具體論點名稱，必須包含驅動與受益鏈，例：「AI 伺服器升級帶動 HBM/PCB/散熱鏈」
-- `description` (string)：核心敘事（2-3 句），必須包含「驅動因素 → 受益環節 → 台股映射 → 短線催化」
-- `industry_chain` (string[])：至少 4 個上中下游節點，例 ["雲端資本支出", "AI GPU", "HBM/DRAM", "CoWoS/封測", "高階PCB", "散熱"]
-- `beneficiary_industries` (string[])：受惠產業類別（用以對應 stocks.industry 欄位），例 ["半導體", "電子零組件"]
-- `beneficiary_keywords` (string[])：股票名稱/個股關鍵字/供應鏈詞，用以對 Stock.name 或產業字串匹配，至少 8 個，例 ["台積電", "日月光", "華通", "台光電", "雙鴻", "奇鋐", "HBM", "PCB"]
-- `related_stocks` (object[])：此論點明確映射到的台股個股，最多 6 檔；每檔必須有 symbol/name/benefit_level/role/reasoning/confidence/risks。benefit_level 只能是 core、secondary、watch；core 最多 3 檔。只能從「可點名股票 universe」選，且不得只因名稱相似就列入，必須說明供應鏈角色。
-- `evidence_summary` (string)：佐證新聞重點摘要；要指出哪些新聞支持需求、報價、訂單、法人或情緒
-- `risk_factors` (string[])：至少 4 個風險，包含「論點失效條件」
-- `sentiment_divergence` (string)：必須為這三個值之一 — `none` / `bullish_fundamental_bearish_sentiment` / `bearish_fundamental_bullish_sentiment`
-- `confidence_score` (整數，0-100)：信心分。建議分布：> 80 信心極強的最多 2 筆；60-80 主流 4-5 筆；< 60 列觀察。
-
-範例（僅示範格式，請依新聞實際內容產生）：
-[
-  {
-    "title": "AI 伺服器升級帶動 HBM/PCB/散熱鏈",
-    "description": "雲端業者資本支出與 AI 推論需求推升 AI server 出貨，先拉動 GPU/HBM 與先進封裝，再外溢到高階 PCB、CCL、散熱與電源。台股可映射到記憶體、封測、PCB、散熱模組與伺服器零組件。短線催化來自新聞熱度、法人買超與技術面突破。",
-    "industry_chain": ["雲端資本支出", "AI GPU", "HBM/DRAM", "CoWoS/封測", "高階PCB/CCL", "散熱/電源"],
-    "beneficiary_industries": ["半導體", "電子零組件"],
-    "beneficiary_keywords": ["台積電", "TSMC", "日月光", "華通", "台光電", "雙鴻"],
-    "related_stocks": [
-      {
-        "symbol": "2313",
-        "name": "華通",
-        "benefit_level": "core",
-        "role": "高階 PCB 供應鏈",
-        "reasoning": "AI server 規格升級會拉動高階 PCB 層數與單價，華通具 PCB 供應鏈映射。",
-        "confidence": 78,
-        "risks": ["AI server 出貨遞延", "PCB 報價不如預期"]
-      }
-    ],
-    "evidence_summary": "10/30 NVDA 法說上修；華通 11/5 公告 N3 PCB 出貨；台光電 CCL 連 5 月成長",
-    "risk_factors": ["美中對 AI 晶片出口管制", "下游雲端資本支出放緩", "HBM 報價轉弱", "股價跌破月線且法人轉賣"],
-    "sentiment_divergence": "none",
-    "confidence_score": 85
-  }
-]
+# 完整範例（僅示意格式）
+[{
+  "title": "AI 伺服器升級帶動 HBM/PCB/散熱鏈",
+  "description": "雲端 capex 與 AI 推論推升 AI server 出貨，先拉動 GPU/HBM 與先進封裝，再外溢到高階 PCB/CCL、散熱、電源。台股可映射記憶體、封測、PCB、散熱模組與伺服器零組件。短線催化來自新聞熱度、法人買超與技術突破。",
+  "industry_chain": ["雲端 capex", "AI GPU", "HBM/DRAM", "CoWoS/封測", "高階PCB/CCL", "散熱/電源"],
+  "beneficiary_industries": ["半導體", "電子零組件"],
+  "beneficiary_keywords": ["台積電", "TSMC", "日月光", "華通", "台光電", "雙鴻", "HBM", "PCB"],
+  "related_stocks": [{
+    "symbol": "2313", "name": "華通", "benefit_level": "core",
+    "role": "高階 PCB 供應鏈",
+    "reasoning": "AI server 規格升級拉動高階 PCB 層數與單價，華通直接受惠。",
+    "confidence": 78,
+    "risks": ["AI server 出貨遞延", "PCB 報價不如預期"]
+  }],
+  "evidence_summary": "10/30 NVDA 法說上修；華通 11/5 公告 N3 PCB 出貨；台光電 CCL 連 5 月成長",
+  "risk_factors": ["美中對 AI 晶片出口管制", "雲端 capex 放緩", "HBM 報價轉弱", "股價跌破月線且法人轉賣"],
+  "sentiment_divergence": "none",
+  "confidence_score": 85
+}]
 PROMPT;
 
         try {
