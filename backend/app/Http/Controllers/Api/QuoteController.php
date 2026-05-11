@@ -4,9 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\DailyQuote;
+use App\Models\InstitutionalTrade;
 use App\Models\IntradaySnapshot;
+use App\Models\InvestmentThesis;
 use App\Models\SectorIndex;
 use App\Models\Stock;
+use App\Models\StockValuation;
 use App\Services\FugleRealtimeClient;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Http;
@@ -420,6 +423,90 @@ class QuoteController extends Controller
             }
         }
 
+        // AI 產業論點：找出該股對應到的 active 論點（取 confidence 最高 2 筆）
+        $thesisSection = '';
+        if ($stock) {
+            $matched = InvestmentThesis::where('status', InvestmentThesis::STATUS_ACTIVE)
+                ->where('confidence_score', '>=', 35)
+                ->orderByDesc('confidence_score')
+                ->limit(20)
+                ->get()
+                ->map(function (InvestmentThesis $t) use ($symbol) {
+                    foreach (($t->related_stocks ?? []) as $r) {
+                        if (!is_array($r)) continue;
+                        if ((string) ($r['symbol'] ?? '') === $symbol) {
+                            return ['thesis' => $t, 'related' => $r];
+                        }
+                    }
+                    return null;
+                })
+                ->filter()
+                ->take(2)
+                ->values();
+            if ($matched->isNotEmpty()) {
+                $lines = ['AI 產業論點（波段參考為主，短線不可被論點主導）：'];
+                foreach ($matched as $m) {
+                    $t = $m['thesis'];
+                    $r = $m['related'];
+                    $risks = is_array($r['risks'] ?? null) ? implode('、', array_slice($r['risks'], 0, 3)) : '';
+                    $lines[] = sprintf(
+                        '- 【%s】信心 %d | 此股角色：%s（%s）confidence=%d | 受惠理由：%s%s',
+                        $t->title,
+                        (int) $t->confidence_score,
+                        $r['benefit_level'] ?? 'watch',
+                        $r['role'] ?? '-',
+                        (int) ($r['confidence'] ?? 0),
+                        mb_substr((string) ($r['reasoning'] ?? ''), 0, 80),
+                        $risks ? "｜風險：{$risks}" : ''
+                    );
+                }
+                $thesisSection = implode("\n", $lines);
+            }
+        }
+
+        // 估值（PE/PB/殖利率/EPS）
+        $valuationLine = '';
+        if ($stock) {
+            $v = StockValuation::where('stock_id', $stock->id)
+                ->where('date', '<=', $tradeDate)
+                ->orderByDesc('date')
+                ->first();
+            if ($v) {
+                $valuationLine = sprintf(
+                    '估值：PE=%s　PB=%s　殖利率=%s%%　EPS(TTM)=%s（資料日 %s）',
+                    $v->pe_ratio ?? '—',
+                    $v->pb_ratio ?? '—',
+                    $v->dividend_yield ?? '—',
+                    $v->eps_ttm ?? '—',
+                    $v->date?->format('Y-m-d') ?? '—'
+                );
+            }
+        }
+
+        // 法人 5 日
+        $instLine = '';
+        if ($stock) {
+            $inst5 = InstitutionalTrade::where('stock_id', $stock->id)
+                ->where('date', '<=', $tradeDate)
+                ->orderByDesc('date')
+                ->limit(5)
+                ->get();
+            if ($inst5->isNotEmpty()) {
+                $total = (int) $inst5->sum('total_net');
+                $foreign = (int) $inst5->sum('foreign_net');
+                $trust = (int) $inst5->sum('trust_net');
+                $dealer = (int) $inst5->sum('dealer_net');
+                $fmt = fn ($n) => ($n >= 0 ? '+' : '') . number_format($n / 1000) . '張';
+                $instLine = sprintf(
+                    '法人 5 日：合計 %s（外資 %s／投信 %s／自營 %s）',
+                    $fmt($total),
+                    $fmt($foreign),
+                    $fmt($trust),
+                    $fmt($dealer)
+                );
+            }
+        }
+
         $limitUpPrice = $prevClose > 0 ? round($prevClose * 1.10, 2) : 0;
         $limitDownPrice = $prevClose > 0 ? round($prevClose * 0.90, 2) : 0;
 
@@ -430,7 +517,10 @@ class QuoteController extends Controller
             "昨收：{$prevClose}　開：{$open}　高：{$high}　低：{$low}　現價：{$close}　漲停：{$limitUpPrice}　跌停：{$limitDownPrice}",
             "漲跌：{$changePct}%　成交量：{$volume}張　20日均量：{$avgVolume}張　外盤比：{$extRatio}%",
             $sectorLine ?: null,
+            $valuationLine ?: null,
+            $instLine ?: null,
             "持倉方向：" . ($direction === 'short' ? '做空' : '做多') . ($shares > 0 ? "　張數：{$shares}張" : '') . "　成本價：{$cost}　帳面損益：{$pnlPct}%",
+            $thesisSection ?: null,
             "",
             "五檔：",
             implode("\n", $askLines),
@@ -456,7 +546,10 @@ class QuoteController extends Controller
 6. 外盤比：>55%偏多、<45%偏空
 7. 類股背景：個股漲跌幅 vs 所屬類股漲跌幅，判斷是個股因素還是類股連動。類股排名靠前代表族群強勢
 8. 持倉方向：做多時價漲有利、做空時價跌有利，所有建議必須配合持倉方向
-8. 部位大小：若有提供張數，評估風險時考量部位規模
+9. 部位大小：若有提供張數，評估風險時考量部位規模
+10. 估值水準：PE、PB、殖利率主要供波段判斷使用——PE 偏高 + 殖利率偏低 → 波段風險高、上檔壓力大；殖利率高 + PE 合理 → 波段下檔有支撐
+11. 法人 5 日：合計買超/賣超是中期支撐/壓力指標；外資、投信、自營分項可看誰是主力。法人連續買超是波段加碼依據之一，連續賣超則是減碼警訊
+12. AI 產業論點：若該股對應到 active 論點，請判斷其 benefit_level（core/secondary/watch）、角色與信心；**論點主要用於波段建議**，短線可參考但不要被論點主導（短線決策應以技術面、量價為主）
 
 ## 短線建議
 ### 盤中（距收盤 > 0 分鐘）
@@ -470,9 +563,10 @@ class QuoteController extends Controller
 - 注意：若為週五盤後，下一交易日為週一，期間有週末風險（國際盤變化），建議應更保守
 
 ## 波段建議（可持有數天到數週）
-- 重點：日K趨勢、量價結構、關鍵支撐壓力位
+- 重點：日K趨勢、量價結構、關鍵支撐壓力位、**估值合理性、法人 5 日動向、AI 產業論點**
 - 動作：續抱 / 加碼 / 減碼 / 止損 / 觀望
 - 加碼條件：中期趨勢未破且回測支撐（做多）或壓力（做空）時，必須給出加碼價位
+- 論點權重：若該股對應到 active 論點且 benefit_level=core、信心 ≥ 60，視為「波段題材有效」，續抱或加碼門檻可放寬；若論點為 watch 或 confidence < 50，波段判斷以技術面為主、不要被論點背書誤導
 
 ## 回覆格式（嚴格遵守 JSON，不要加 markdown 標記）
 {
