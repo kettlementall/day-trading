@@ -115,11 +115,29 @@ class SwingPositionUpdateService
         $stop = (float) ($position->current_stop ?: $entry * 0.92);
         $target = (float) ($position->current_target ?: $entry * 1.12);
         $profitPct = $this->profitPercent($position, $close);
+        $stopHit = $close <= $stop;
 
-        if ($close <= $stop) {
+        // 停損觸發、論點 invalidation 仍交給 AI 給完整分析；只有 AI 失敗才走 fallback 規則。
+        // stop_hit=true 時 askAi 會把 action 鎖死 exit，但要求 reasoning / volume_price_signal /
+        // chip_risk_notes / eta_reasoning 寫完整出場分析（取代以前只有一句話「跌破停損建議出場」）。
+        if ($this->apiKey) {
+            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $recentExitSignal, $stopHit);
+            if ($ai) {
+                if ($stopHit) {
+                    // 安全網：機械停損觸發，無論 AI 怎麼判都強制 exit
+                    $ai['action'] = 'exit';
+                    $ai['technical_health'] = $ai['technical_health'] ?? 'broken';
+                    $ai['risk_pressure'] = 'high';
+                }
+                return $this->normalizeAdvice($position, $ai, $profitPct);
+            }
+        }
+
+        // AI 失敗時的保守退路：停損觸發優先（最高風險）
+        if ($stopHit) {
             return $this->normalizeAdvice($position, [
                 'action' => 'exit',
-                'reasoning' => "收盤 {$close} 跌破停損 {$stop}，建議出場。",
+                'reasoning' => "收盤 {$close} 跌破停損 {$stop}，建議出場。(AI 分析失敗未取得完整理由，請人工檢視技術破位與論點狀態)",
                 'current_stop' => $stop,
                 'current_target' => $target,
                 'profit_percent' => $profitPct,
@@ -129,15 +147,6 @@ class SwingPositionUpdateService
                 'risk_pressure' => 'high',
                 'time_pressure' => $this->timePressure($holdingDays, $position),
             ], $profitPct);
-        }
-
-        // 注意：論點 invalidation_signal 已經包進 $thesisStatus，
-        // 不再在這裡硬 exit，改由 AI 結合技術/籌碼/ETA 仲裁（避免 AI 改 title 導致衰退就誤觸出場）。
-        if ($this->apiKey) {
-            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $recentExitSignal);
-            if ($ai) {
-                return $this->normalizeAdvice($position, $ai, $profitPct);
-            }
         }
 
         // AI 失敗的保守退路：論點 invalidation_signal + 技術 broken 才強制 exit；
@@ -228,7 +237,8 @@ class SwingPositionUpdateService
         array $chipContext,
         array $valuationContext = [],
         array $sectorContext = [],
-        bool $recentExitSignal = false
+        bool $recentExitSignal = false,
+        bool $stopHit = false
     ): ?array {
         $candidate = $position->candidate;
         $thesisJson = json_encode($thesisStatus, JSON_UNESCAPED_UNICODE);
@@ -239,6 +249,27 @@ class SwingPositionUpdateService
         $recentExitText = $recentExitSignal ? 'true（近 7 日測過 stop 或論點失效）' : 'false';
         $lessonsSection = \App\Models\AiLesson::getSwingAdviceLessons();
         $lessonsBlock = $lessonsSection !== '' ? $lessonsSection . "\n\n" : '';
+
+        $stopHitBlock = '';
+        if ($stopHit) {
+            $stopHitBlock = <<<STOPHIT
+
+# ⚠ 機械停損已觸發（最高優先，覆蓋下方所有規則）
+今日收盤 {$quote->close} ≤ 停損 {$position->current_stop}，action **必須**輸出 exit，禁止改為 hold/trim/adjust（系統會強制 override 為 exit，但仍以你的判斷為主）。
+你的任務從「給日建議」改為「完整出場分析」，輸出時請確保：
+1. **reasoning 至少 80 字**：明確描述
+   - 技術破位細節（跌破哪些均線/支撐位、收盤跌幅、量能型態如爆量收黑/量縮破底/跌停鎖死）
+   - 論點是否同步失效（具體說明哪部分被打破，若論點仍存活但價格破位，要說明可能的解讀）
+   - 籌碼面今日狀態（外資 / 投信 / 自營賣超張數，融資增減）
+2. **chip_risk_notes**：列 2-3 條近期出場訊號的具體數字（例：「外資連 3 日賣超 8500 張」「融資使用率達 92%」）
+3. **volume_price_signal**：今日量價型態的簡短描述（≤ 25 字）
+4. **eta_reasoning**：若認為未來有回補機會，明確列出觸發條件（例：「站回月線且法人轉買連續 5 日」）；若認為論點完全壞掉，寫「不建議回補」
+5. **target_price_reasoning**：仍要寫，但描述為「原訂目標已失效」並補充「若未來重啟，新目標應參考 X」
+6. technical_health 應為 broken，risk_pressure 應為 high
+
+
+STOPHIT;
+        }
         $prompt = <<<PROMPT
 你是穩健派短線交易顧問，盤後針對單筆持倉給日建議，僅輸出 JSON。
 
@@ -255,7 +286,7 @@ stop {$position->current_stop} | target {$position->current_target}
 估值：{$valuationJson}
 類股：{$sectorJson}
 近 7 日 exit 訊號：{$recentExitText}
-
+{$stopHitBlock}
 {$lessonsBlock}# 基礎約束
 - action ∈ {hold, adjust, trim, exit}
 - current_stop 只能上移或維持（action=exit 例外）
