@@ -65,12 +65,14 @@ Route::middleware('auth:sanctum')->group(function () {
     // 短線配置（viewer + admin）
     Route::get('/swing/candidates', [SwingController::class, 'candidates']);
     Route::get('/swing/positions', [SwingController::class, 'positions']);
+    Route::get('/swing/positions/live-prices', [SwingController::class, 'livePrices']);
     Route::post('/swing/positions', [SwingController::class, 'storePosition']);
     Route::patch('/swing/positions/{position}', [SwingController::class, 'updatePosition']);
     Route::delete('/swing/positions/{position}', [SwingController::class, 'destroyPosition']);
     Route::post('/swing/positions/{position}/add-shares', [SwingController::class, 'addShares']);
     Route::post('/swing/positions/{position}/reduce-shares', [SwingController::class, 'reduceShares']);
     Route::post('/swing/sizing', [SwingController::class, 'sizing']);
+    Route::get('/swing/lessons', [SwingController::class, 'lessons']);
 
     // ── Admin only ───────────────────────────────────────────────────────────
     Route::middleware('admin')->group(function () {

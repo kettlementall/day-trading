@@ -68,8 +68,25 @@
               </el-tag>
               <button class="quote-btn" title="即時報價" @click.stop="goQuote(p)">💹</button>
             </div>
-            <div class="pnl" :class="p.unrealized_profit_percent >= 0 ? 'price-up' : 'price-down'">
-              {{ signed(p.unrealized_profit_percent) }}%
+            <div
+              class="live-price-block"
+              :class="[
+                priceColor(p.change_pct ?? p.unrealized_profit_percent),
+                { flash: flashIds.has(p.id) },
+              ]"
+            >
+              <div class="live-price-row">
+                <span class="live-price">{{ p.current_price ?? '—' }}</span>
+                <span class="live-change">{{ signed(p.change_pct) }}%</span>
+              </div>
+              <div class="live-meta-row">
+                <span class="live-pnl" :class="priceColor(p.unrealized_profit_percent)">
+                  浮盈 {{ signed(p.unrealized_profit_percent) }}%
+                </span>
+                <span v-if="p.price_fetched_at" class="live-time">
+                  ⏱ {{ formatClock(p.price_fetched_at) }}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -85,10 +102,6 @@
             <div class="stat">
               <div class="stat-label">成本</div>
               <div class="stat-value">{{ p.entry_price }}</div>
-            </div>
-            <div class="stat">
-              <div class="stat-label">現價</div>
-              <div class="stat-value">{{ p.current_price || '—' }}</div>
             </div>
             <div class="stat">
               <div class="stat-label">股數</div>
@@ -320,6 +333,58 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="closeDialog" :title="closeForm.status === 'closed' ? '平倉確認' : '停損結束確認'" width="440px">
+      <el-form label-width="88px">
+        <el-form-item label="股票">
+          <span class="dialog-symbol">
+            {{ closingPosition?.stock?.symbol }} {{ closingPosition?.stock?.name }}
+          </span>
+        </el-form-item>
+        <el-form-item label="成本 / 現價">
+          <span class="dialog-symbol">
+            {{ closingPosition?.entry_price }} / {{ closingPosition?.current_price ?? '—' }}
+          </span>
+        </el-form-item>
+        <el-form-item label="出場價">
+          <el-input-number
+            v-model="closeForm.exit_price"
+            :min="0"
+            :step="0.05"
+            :precision="2"
+            style="width: 220px"
+          />
+        </el-form-item>
+        <el-form-item label="出場原因">
+          <el-radio-group v-model="closeForm.exit_reason" class="exit-reason-radios">
+            <el-radio value="take_profit_manual">主動停利</el-radio>
+            <el-radio value="cut_loss_manual">主動停損</el-radio>
+            <el-radio value="target_hit">觸及目標</el-radio>
+            <el-radio value="stop_hit">觸及停損</el-radio>
+            <el-radio value="thesis_broken">論點失效</el-radio>
+            <el-radio value="time_stop">時間到期</el-radio>
+            <el-radio value="switch_position">換倉</el-radio>
+            <el-radio value="other">其他</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="補充說明">
+          <el-input
+            v-model="closeForm.exit_note"
+            type="textarea"
+            :rows="2"
+            maxlength="200"
+            show-word-limit
+            placeholder="選填：一句話描述決策依據（≤200 字）"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="closeDialog = false">取消</el-button>
+        <el-button type="primary" :loading="positionActionId === closingPosition?.id" @click="submitClose">
+          確認{{ closeForm.status === 'closed' ? '平倉' : '停損結束' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="adjustDialog" title="調整停損 / 目標" width="400px">
       <el-form label-width="88px">
         <el-form-item label="股票">
@@ -507,7 +572,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -517,6 +582,7 @@ import {
   createSwingPosition,
   deleteSwingPosition,
   getSwingCandidates,
+  getSwingLivePrices,
   getSwingPositions,
   reduceSwingShares,
   updateSwingPosition,
@@ -562,10 +628,80 @@ const sizingResult = ref(null)
 const buyForm = reactive({ entry_price: 0, shares: 1000 })
 const sizingForm = reactive({ capital: 1000000, risk_percent: 1 })
 const adjustForm = reactive({ current_stop: null, current_target: null })
+const closeDialog = ref(false)
+const closingPosition = ref(null)
+const closeForm = reactive({ status: 'closed', exit_price: 0, exit_reason: 'take_profit_manual', exit_note: '' })
 const addForm = reactive({ price: 0, shares: 1000 })
 const reduceForm = reactive({ price: 0, shares: 1000 })
 
-onMounted(fetchAll)
+const livePriceUpdatedAt = ref(null)
+const flashIds = ref(new Set())
+let livePollTimer = null
+
+onMounted(async () => {
+  await fetchAll()
+  startLivePolling()
+})
+
+onUnmounted(() => {
+  stopLivePolling()
+})
+
+function isMarketHours() {
+  const now = dayjs()
+  const day = now.day()
+  if (day === 0 || day === 6) return false
+  const minutes = now.hour() * 60 + now.minute()
+  // 盤中 09:00-13:30，盤後再給 15 分鐘讓收盤價穩定
+  return minutes >= 9 * 60 && minutes <= 13 * 60 + 45
+}
+
+function startLivePolling() {
+  stopLivePolling()
+  livePollTimer = setInterval(() => {
+    if (!isMarketHours()) return
+    if (!positions.value.some((p) => isActiveStatus(p.status))) return
+    refreshLivePrices()
+  }, 60_000)
+}
+
+function stopLivePolling() {
+  if (livePollTimer) {
+    clearInterval(livePollTimer)
+    livePollTimer = null
+  }
+}
+
+async function refreshLivePrices() {
+  try {
+    const { data } = await getSwingLivePrices()
+    const map = new Map((data.data || []).map((r) => [r.id, r]))
+    const flashed = new Set()
+    positions.value = positions.value.map((p) => {
+      const next = map.get(p.id)
+      if (!next) return p
+      const changed = next.current_price != null && Number(next.current_price) !== Number(p.current_price)
+      if (changed) flashed.add(p.id)
+      return {
+        ...p,
+        current_price: next.current_price,
+        prev_close: next.prev_close,
+        change_pct: next.change_pct,
+        unrealized_profit_percent: next.unrealized_profit_percent,
+        market_value: next.market_value,
+        price_source: next.source,
+        price_fetched_at: next.fetched_at,
+      }
+    })
+    livePriceUpdatedAt.value = data.server_time || dayjs().format('YYYY-MM-DD HH:mm:ss')
+    if (flashed.size) {
+      flashIds.value = flashed
+      setTimeout(() => { flashIds.value = new Set() }, 800)
+    }
+  } catch {
+    // 報價輪詢失敗不打斷頁面，下一個 tick 再試
+  }
+}
 
 async function fetchAll() {
   loading.value = true
@@ -578,6 +714,7 @@ async function fetchAll() {
     swingMeta.value = cRes.data || null
     positions.value = pRes.data.data || []
     exposure.value = pRes.data.total_risk_exposure || null
+    livePriceUpdatedAt.value = positions.value[0]?.price_fetched_at || dayjs().format('YYYY-MM-DD HH:mm:ss')
   } finally {
     loading.value = false
   }
@@ -756,24 +893,43 @@ const reducePreview = computed(() => {
   }
 })
 
-async function markClosed(position, status) {
-  const isClose = status === 'closed'
-  try {
-    await ElMessageBox.confirm(
-      isClose ? '確定要平倉這筆短線持倉？' : '確定要將這筆持倉標記為停損結束？',
-      isClose ? '平倉確認' : '停損結束確認',
-      { type: 'warning', confirmButtonText: '確定', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
+function markClosed(position, status) {
+  closingPosition.value = position
+  closeForm.status = status
+  closeForm.exit_price = Number(position.current_price || position.entry_price || 0)
+  closeForm.exit_note = ''
+  // 預設出場原因：依現價對 target/stop 自動判斷，使用者可改
+  const exitPrice = closeForm.exit_price
+  const target = Number(position.current_target || 0)
+  const stop = Number(position.current_stop || 0)
+  const entry = Number(position.entry_price || 0)
+  if (stop > 0 && exitPrice > 0 && exitPrice <= stop) {
+    closeForm.exit_reason = 'stop_hit'
+  } else if (target > 0 && exitPrice >= target) {
+    closeForm.exit_reason = 'target_hit'
+  } else if (status === 'stopped') {
+    closeForm.exit_reason = 'cut_loss_manual'
+  } else if (entry > 0 && exitPrice > 0) {
+    closeForm.exit_reason = exitPrice > entry ? 'take_profit_manual' : 'cut_loss_manual'
+  } else {
+    closeForm.exit_reason = 'take_profit_manual'
   }
+  closeDialog.value = true
+}
+
+async function submitClose() {
+  const position = closingPosition.value
+  if (!position) return
   positionActionId.value = position.id
   try {
     await updateSwingPosition(position.id, {
-      status,
-      exit_price: position.current_price || position.entry_price,
+      status: closeForm.status,
+      exit_price: closeForm.exit_price,
+      exit_reason: closeForm.exit_reason,
+      exit_note: closeForm.exit_note || null,
     })
-    ElMessage.success(isClose ? '已平倉' : '已標記停損結束')
+    ElMessage.success(closeForm.status === 'closed' ? '已平倉' : '已標記停損結束')
+    closeDialog.value = false
     await fetchAll()
   } catch (e) {
     ElMessage.error(e?.response?.data?.message || '操作失敗，請稍後再試')
@@ -792,9 +948,27 @@ function signed(v) {
   return `${v >= 0 ? '+' : ''}${v}`
 }
 
+function priceColor(v) {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return 'price-flat'
+  return Number(v) >= 0 ? 'price-up' : 'price-down'
+}
+
 function formatDateTime(v) {
   if (!v) return '-'
   return dayjs(v).format('MM/DD HH:mm')
+}
+
+function formatClock(v) {
+  if (!v) return ''
+  const d = dayjs(v)
+  return d.isValid() ? d.format('HH:mm:ss') : ''
+}
+
+function priceSourceLabel(s) {
+  if (s === 'snapshot') return '盤中即時'
+  if (s === 'fugle') return '盤中即時'
+  if (s === 'daily_close') return '收盤'
+  return ''
 }
 
 function adviceActionLabel(v) {
@@ -1100,13 +1274,73 @@ function isActiveStatus(status) {
   transform: scale(1.1);
 }
 
-/* PnL */
-.pnl {
-  font-size: 22px;
-  font-weight: 800;
+/* 持倉卡：醒目的即時現價區塊（右上） */
+.live-price-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: var(--c-surface-soft, rgba(0, 0, 0, 0.02));
+  border: 1px solid var(--c-border);
+  min-width: 140px;
+  transition: background-color 0.5s ease, box-shadow 0.5s ease;
   font-variant-numeric: tabular-nums;
+}
+
+.live-price-block.price-up {
+  border-color: color-mix(in srgb, var(--c-up) 35%, transparent);
+}
+
+.live-price-block.price-down {
+  border-color: color-mix(in srgb, var(--c-down) 35%, transparent);
+}
+
+.live-price-block.flash {
+  animation: livePulse 0.8s ease-out;
+}
+
+@keyframes livePulse {
+  0%   { box-shadow: 0 0 0 0 currentColor; }
+  40%  { box-shadow: 0 0 0 6px color-mix(in srgb, currentColor 20%, transparent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+.live-price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   line-height: 1;
-  white-space: nowrap;
+}
+
+.live-price {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+
+.live-change {
+  font-size: 14px;
+  font-weight: 700;
+  opacity: 0.9;
+}
+
+.live-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.live-pnl {
+  font-weight: 700;
+}
+
+.live-time {
+  color: var(--c-text-muted);
+  font-feature-settings: 'tnum';
 }
 
 .price-up {
@@ -1115,6 +1349,10 @@ function isActiveStatus(status) {
 
 .price-down {
   color: var(--c-down);
+}
+
+.price-flat {
+  color: var(--c-text-sub);
 }
 
 /* Divider inside card */
@@ -1429,6 +1667,19 @@ function isActiveStatus(status) {
   overflow: hidden;
 }
 
+/* 出場原因 radio 群組，雙欄排版避免過長 */
+.exit-reason-radios {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+  width: 100%;
+}
+
+.exit-reason-radios .el-radio {
+  margin-right: 0;
+  white-space: nowrap;
+}
+
 /* Sizing dialog result */
 .dialog-symbol {
   font-size: 14px;
@@ -1537,6 +1788,13 @@ function isActiveStatus(status) {
   }
   .row-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .live-price-block {
+    min-width: 110px;
+    padding: 4px 8px;
+  }
+  .live-price {
+    font-size: 22px;
   }
 }
 </style>

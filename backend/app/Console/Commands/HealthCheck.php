@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\DailyQuote;
@@ -13,6 +14,8 @@ use App\Models\NewsArticle;
 use App\Models\NewsIndex;
 use App\Models\SectorIndex;
 use App\Models\StockValuation;
+use App\Models\SwingPosition;
+use App\Models\SwingPositionSnapshot;
 use App\Models\UsMarketIndex;
 use App\Services\IntradayMarketRegimeService;
 use App\Services\TelegramService;
@@ -228,6 +231,63 @@ class HealthCheck extends Command
             } elseif ($hasOvernightReview) {
                 $checks[] = ['name' => '隔日沖 AI 檢討', 'status' => 'ok', 'detail' => '已產出'];
             }
+        }
+
+        // 5c3. 短線（swing）AI 檢討 — 工作日 19:30 跑
+        if (!$isHoliday) {
+            $hasSwingReview = DailyReview::where('trade_date', $date)->where('mode', 'swing')->exists();
+            if ($hasSwingReview) {
+                $checks[] = ['name' => '短線 AI 檢討', 'status' => 'ok', 'detail' => '已產出'];
+            } elseif (now()->hour >= 20) {
+                // 健康檢查 22:00 跑，到這時候沒檢討就是漏跑
+                $checks[] = ['name' => '短線 AI 檢討', 'status' => 'warn', 'detail' => '當日未產出（19:30 排程可能漏跑）'];
+            }
+        }
+
+        // 5c4. 短線候選 — 工作日 19:00 跑
+        if (!$isHoliday) {
+            $swingToday = Candidate::where('trade_date', $date)->where('mode', 'swing')->count();
+            $swingSelected = Candidate::where('trade_date', $date)->where('mode', 'swing')->where('ai_selected', true)->count();
+            if ($swingToday > 0) {
+                $checks[] = ['name' => '短線候選', 'status' => 'ok',
+                    'detail' => "{$swingToday} 檔（AI 選入 {$swingSelected}）"];
+            } elseif (now()->hour >= 20) {
+                $checks[] = ['name' => '短線候選', 'status' => 'warn', 'detail' => '當日未產出（19:00 ai-screen-swing 可能失敗）'];
+            }
+        }
+
+        // 5c5. 短線持倉狀態（資訊用）
+        $activeSwingPositions = SwingPosition::whereIn('status', SwingPosition::ACTIVE_STATUSES)->count();
+        if ($activeSwingPositions > 0) {
+            $todaySwingSnapshots = SwingPositionSnapshot::where('date', $date)
+                ->whereHas('position', fn ($q) => $q->whereIn('status', SwingPosition::ACTIVE_STATUSES))
+                ->count();
+            if (!$isHoliday && now()->hour >= 20 && $todaySwingSnapshots < $activeSwingPositions) {
+                $checks[] = ['name' => '短線持倉快照', 'status' => 'warn',
+                    'detail' => "active 持倉 {$activeSwingPositions} 檔，今日 snapshot 僅 {$todaySwingSnapshots} 筆（update-swing-positions 可能漏跑）"];
+            } else {
+                $checks[] = ['name' => '短線持倉', 'status' => 'info', 'detail' => "active {$activeSwingPositions} 檔"];
+            }
+        }
+
+        // 5c6. 短線教訓新鮮度 — extract-swing-lessons 每週日 17:00 跑
+        $latestSwingLesson = AiLesson::where('mode', 'swing')
+            ->where('source', '!=', 'tip')
+            ->orderByDesc('trade_date')
+            ->first();
+        if ($latestSwingLesson) {
+            $ageDays = (int) now()->startOfDay()->diffInDays($latestSwingLesson->trade_date, false) * -1;
+            $activeCount = AiLesson::active()->where('mode', 'swing')->count();
+            if ($ageDays > 14) {
+                $checks[] = ['name' => '短線教訓', 'status' => 'warn',
+                    'detail' => "最新教訓 {$ageDays} 天前（>14 天，可能 extract-swing-lessons 連續失敗），active {$activeCount} 條"];
+            } else {
+                $checks[] = ['name' => '短線教訓', 'status' => 'ok',
+                    'detail' => "最新 {$ageDays} 天前，active {$activeCount} 條"];
+            }
+        } else {
+            // 第一次部署或從未跑成功；info 等級不警報
+            $checks[] = ['name' => '短線教訓', 'status' => 'info', 'detail' => '尚無萃取紀錄（首次部署或 extractor 從未成功）'];
         }
 
         // 5d. 美股指數檢查

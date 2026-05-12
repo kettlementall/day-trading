@@ -33,8 +33,21 @@ class SwingPosition extends Model
         'max_holding_days',
         'exit_price',
         'exit_date',
+        'exit_reason',
+        'exit_note',
         'latest_advice',
         'advice_log',
+    ];
+
+    public const EXIT_REASONS = [
+        'target_hit',
+        'stop_hit',
+        'take_profit_manual',
+        'cut_loss_manual',
+        'thesis_broken',
+        'time_stop',
+        'switch_position',
+        'other',
     ];
 
     protected $casts = [

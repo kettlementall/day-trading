@@ -39,7 +39,7 @@
 | **18:30** | **`stock:update-swing-positions`** | **每日盤後更新使用者短線持倉與損益快照** |
 | **19:00** | **`stock:ai-screen-swing`** | **AI 理專型短線選股（產業論點 + 技術/籌碼/估值）** |
 | **19:30** | **`stock:daily-review --mode=swing`** | **短線 AI 檢討報告** |
-| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + API 連通性 + Log 大小警告） |
+| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + 短線檢討/候選/持倉快照/教訓新鮮度 + API 連通性 + Log 大小警告） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
 | 週一 06:00 | `stock:fill-industry`       | 從 TWSE/TPEX 公司基本資料補上 `stocks.industry`（產業別），供類股強弱、新聞題材配對使用 |
 | **週一 17:30** | **`stock:refresh-swing-universe`** | **依流動性／價格／資料完整度／ETF 類型重算 `stocks.is_swing_eligible`，把短線選股池跟當沖名單解耦** |
@@ -1466,3 +1466,177 @@ DB 有資料？──── 是 ──→ 用 DB 快照回傳主報價
 各自回傳：建議動作、分析內容（100字內）、停利/停損價位（如適用）。AI 回應格式為 JSON，包含 `short` 和 `long` 兩個區塊。
 
 AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`）。
+
+---
+
+## 9. 短線配置頁（`/swing`）
+
+### 9.1 持倉現價分鐘級即時更新
+
+短線持倉卡（`SwingView.vue` → 「我的短線持倉」）的現價來源不再用 `DailyQuote`（昨收盤），改為三段 fallback：
+
+1. **當日 `intraday_snapshots` 最新一筆**（持有檔同時是當沖 AI 選入時最便宜）
+2. **Fugle realtime quote**（`fetchRawQuote` 取 `closePrice` + `referencePrice`）
+3. **DailyQuote 最近一筆**（盤前 / API 失敗保底）
+
+實作於 `SwingController::resolveLivePrice(stockId, symbol)`，回傳 `{current_price, prev_close, change_pct, source, fetched_at}`。結果以 `swing:live-price:{symbol}` 為 key Cache 30 秒（前端輪詢 60 秒，多帳號持同檔股票共用一份，避免 Fugle rate limit）。
+
+### 9.2 API：`GET /api/swing/positions/live-prices`
+
+輕量端點，只回 active 持倉的即時報價。前端用 `setInterval(60_000)` 在盤中時段（週一至五 09:00–13:45）輪詢；非市場時段或沒有 active 持倉時暫停。
+
+回傳：
+```json
+{
+  "server_time": "2026-05-12 09:37:22",
+  "data": [
+    {
+      "id": 22,
+      "symbol": "2313",
+      "current_price": 258.5,
+      "prev_close": 242,
+      "change_pct": 6.82,
+      "unrealized_profit_percent": 5.1,
+      "market_value": 517000,
+      "source": "fugle",
+      "fetched_at": "2026-05-12 09:37:22"
+    }
+  ]
+}
+```
+
+`source` 三種值：`snapshot` / `fugle` / `daily_close`（或 `none` 無法取得時）。
+
+`SwingController::positions()` 也改用同一個 `resolveLivePrice`，所以手動「刷新」按鈕也會拿到即時。
+
+### 9.3 UI
+
+每張持倉卡片右上角為「即時現價區塊」（取代原本只顯示 PnL 的位置）：
+
+- 大字體現價（30px）+ 漲跌幅 %
+- 下方一行：浮盈 % + 更新時間（`HH:mm:ss`）
+- 上漲紅 / 下跌綠（沿用 `--c-up` / `--c-down`）
+- 報價變動時 800ms `livePulse` 動畫高亮邊框
+- 卡片下方 5 欄 stats 改為「成本 / 股數 / 停損 / 目標 / 市值」（現價已拉到右上不再重複）
+
+### 9.4 AI 短線教訓回流系統（AiLesson mode=swing）
+
+當沖 / 隔日沖已有 `AiLesson` 教訓系統（每週五 16:00 從 `daily_reviews` 萃取），短線（swing）原本沒有對應機制 — 使用者按平倉的瞬間，那筆持倉就從 AI 視野裡完全消失：`SwingPositionUpdateService` 與 `DailyReviewService::buildSwingReview()` 都只看 `ACTIVE_STATUSES`，`SwingScreenerService::askAi()` 與 `SwingPositionUpdateService::askAi()` 兩支 AI prompt 也沒有教訓注入點。導致使用者好決策（提前停利避過拉回）與壞決策（過早殺低錯失反彈）都無法回流到 AI。
+
+短線教訓系統補上這條迴路。
+
+#### 9.4.1 資料模型
+
+`ai_lessons` 表沿用，新增 `mode='swing'` 值。
+
+`swing_positions` 新增兩欄（migration `2026_05_12_000001_add_exit_reason_to_swing_positions`）：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `exit_reason` | VARCHAR(32) NULL INDEX | enum 白名單（PHP 端驗證） |
+| `exit_note` | TEXT NULL | 使用者選填補充說明，≤200 字 |
+
+`exit_reason` 合法值：
+
+| 值 | 語意 |
+|---|---|
+| `target_hit` | 觸及 current_target 自動出場 |
+| `stop_hit` | 觸及 current_stop |
+| `take_profit_manual` | 主動停利（中間區間獲利出場） |
+| `cut_loss_manual` | 主動停損（中間區間虧損出場） |
+| `thesis_broken` | 論點失效 |
+| `time_stop` | 持有時間到期 |
+| `switch_position` | 換倉 |
+| `other` | 其他 |
+
+`SwingController::updatePosition()` 接受 `exit_reason` + `exit_note`；若未傳，依 `exit_price vs current_target / current_stop / entry_price` 自動推算預設值（觸目標/觸停損優先，否則以 entry 為基準分主動停利/停損）。前端 `markClosed()` 開啟 dialog（radio 8 選項 + textarea 補充說明），預設值由前端做相同推算。
+
+#### 9.4.2 萃取流程
+
+排程：每週日 17:00 `stock:extract-swing-lessons`（`routes/console.php`），避開週五 16:00 `stock:extract-weekly-lessons`，並確保前一交易週已完整收盤、5 日 forward window 有資料。
+
+實作於 `App\Services\SwingLessonExtractor::extract($weekEnd, $dryRun, $log)`。
+
+**輸入窗口**：`endOfWeek(SUNDAY)` 回推 7 天，**只納入 `exit_date <= sunday - 5`** 的持倉，確保每筆都有完整 5 日 forward 報價。
+
+**讀的資料**：
+- `swing_positions` (status closed/stopped + exit_date 落於窗口) join `candidates`+`stocks`
+- 每筆 `advice_log` 取最後 3 筆（last_ai_action 軌跡）
+- `daily_quotes` 每檔出場後 5 個交易日的 high/low/close
+- 該週 `daily_reviews` mode=swing 最多 2 筆（補組合上下文）
+
+**PHP 端預聚合**（先算好再餵 AI，省 token 也防幻覺）：
+- per-position：`realized_pct`、`forward_5d_pct`、`forward_max_pct`、`forward_min_pct`、`last_ai_actions[]`、`user_vs_ai_divergence`（最後 AI action ∈ [hold, trim] AND status=closed）
+- 整週彙總：總筆數、勝率、平均持有日、平均報酬、exit_reason 分布、divergence 數
+
+**Prompt 結構**（送 Opus 4.6）：
+1. Role：「台股短線策略檢討顧問」
+2. `# 本週統計` — 彙總數字
+3. `# 個別持倉` — 每筆一行，**個股代號脫敏**為 `[產業-序號]`
+4. `# 本週短線檢討報告` — 最多 2 筆，每筆截 1200 字
+5. `# 重點分析角度` — 鎖死思考方向（take_profit_manual 後續走勢、cut_loss_manual 後續走勢、user_vs_ai_divergence、strategy / benefit_level 命中率）
+6. 萃取規則（嚴格）：最多 5 條、跨多檔重複才算、禁具體代號/日期、type 限定 `[screening, entry, exit, market]`、category 白名單
+
+**寫入規則**：
+- 先 `delete()` 同週 `mode=swing AND source != 'tip'` 舊資料（保留人工 tip）
+- 新筆 `mode='swing'`, `source='weekly'`, `trade_date=$sunday`, `expires_at=now + 14 days`
+- 寫入前正則 `\b\d{4}\b` 掃 content，命中即丟棄該條（防代號洩漏）
+- type 不在白名單即丟棄
+
+**樣本不足策略**：
+- 0 筆 → 跳過、不污染（不寫 placeholder）
+- 1-2 筆 → prompt 加註「樣本極少」，要求只輸出 type=market 大方向最多 2 條
+
+#### 9.4.3 注入點
+
+兩支 AI 取教訓方法（`AiLesson` model）：
+
+| Method | 過濾條件 | 上限 | 用於 |
+|---|---|---|---|
+| `getSwingScreeningLessons($limit=15)` | mode∈[swing,both] + type∈[screening,market,entry] | 15 | 選股 prompt |
+| `getSwingAdviceLessons($limit=12)` | mode∈[swing,both] + type∈[entry,exit,market] | 12 | 滾動建議 prompt |
+
+兩者皆按 `priority DESC, trade_date DESC` 排序，DB 空時回空字串（prompt 不會出現空標題）。
+
+**Prompt 插入位置**：
+- `SwingScreenerService::askAi()`：插在 `# 產業論點` 之前（讓 AI 思考論點時就帶教訓）
+- `SwingPositionUpdateService::askAi()`：插在 `# 基礎約束` 之前（context 之後、規則之前）
+
+#### 9.4.4 讀 API + 前端展示
+
+`GET /api/swing/lessons`（viewer + admin）：
+
+```json
+{
+  "count": 4,
+  "data": [
+    {
+      "id": 123,
+      "trade_date": "2026-05-10",
+      "type": "exit",
+      "category": "divergence_from_ai",
+      "mode": "swing",
+      "source": "weekly",
+      "priority": 0,
+      "content": "...",
+      "expires_at": "2026-05-24",
+      "days_left": 12
+    }
+  ]
+}
+```
+
+短線績效頁 (`SwingStatsView.vue`) 新增「AI 教訓」section，放在「實現績效」之後、「走勢趨勢」之前。每條卡片顯示：type tag（選股/進場/出場/大盤）+ category + 來源（每週萃取 / ★明牌）+ 剩餘天數 + 完整 content。
+
+#### 9.4.5 健康檢查覆蓋
+
+`stock:health-check`（每日 22:00）新增 4 項與短線相關檢查（`HealthCheck.php` 5c3-5c6）：
+
+| 檢查項 | 觸發條件 | 等級 |
+|---|---|---|
+| **短線 AI 檢討** | 工作日 19:30 排程跑完當日 swing daily-review 應產出；20:00 後仍無紀錄 → warn | ok / warn |
+| **短線候選** | 工作日 19:00 ai-screen-swing 應產出；20:00 後仍無 candidates 列入當日 trade_date → warn | ok / warn |
+| **短線持倉快照** | 有 active 持倉時，當日 `swing_position_snapshots` 數應等於 active 持倉數；20:00 後缺漏 → warn（提示 update-swing-positions 漏跑）| info / warn |
+| **短線教訓新鮮度** | `ai_lessons mode=swing source!=tip` 最新 trade_date 距今 > 14 天 → warn（提示 extractor 連續失敗）| ok / warn / info |
+
+20:00 後的時間閾值避免 09:50 跑健康檢查時誤報「當日沒有 19:30 才產出的東西」。

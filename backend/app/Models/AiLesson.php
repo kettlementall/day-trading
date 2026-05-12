@@ -83,6 +83,57 @@ class AiLesson extends Model
     }
 
     /**
+     * 取得短線（swing）選股階段教訓：screening + market + entry，tip 優先
+     */
+    public static function getSwingScreeningLessons(int $limit = 15): string
+    {
+        $lessons = static::active()
+            ->whereIn('type', ['screening', 'market', 'entry'])
+            ->whereIn('mode', ['swing', 'both'])
+            ->orderByDesc('priority')
+            ->orderByDesc('trade_date')
+            ->limit($limit)
+            ->get();
+
+        if ($lessons->isEmpty()) {
+            return '';
+        }
+
+        $lines = $lessons->map(function ($l) {
+            $tag = $l->source === 'tip' ? '★明牌' : $l->type;
+            return "- [{$l->trade_date->format('m/d')}][{$tag}] {$l->content}";
+        });
+
+        return "## 近期短線教訓\n" . $lines->implode("\n");
+    }
+
+    /**
+     * 取得短線盤後滾動建議教訓：entry + exit + market，tip 優先
+     * 限 12 條控制單檔 prompt token 量
+     */
+    public static function getSwingAdviceLessons(int $limit = 12): string
+    {
+        $lessons = static::active()
+            ->whereIn('type', ['entry', 'exit', 'market'])
+            ->whereIn('mode', ['swing', 'both'])
+            ->orderByDesc('priority')
+            ->orderByDesc('trade_date')
+            ->limit($limit)
+            ->get();
+
+        if ($lessons->isEmpty()) {
+            return '';
+        }
+
+        $lines = $lessons->map(function ($l) {
+            $tag = $l->source === 'tip' ? '★明牌' : $l->type;
+            return "- [{$l->trade_date->format('m/d')}][{$tag}] {$l->content}";
+        });
+
+        return "## 近期短線交易教訓\n" . $lines->implode("\n");
+    }
+
+    /**
      * 取得適用於盤中的教訓（calibration + entry + exit），tip 優先
      */
     public static function getIntradayLessons(int $limit = 15): string

@@ -237,6 +237,8 @@ class SwingPositionUpdateService
         $valuationJson = json_encode($valuationContext, JSON_UNESCAPED_UNICODE);
         $sectorJson = json_encode($sectorContext, JSON_UNESCAPED_UNICODE);
         $recentExitText = $recentExitSignal ? 'true（近 7 日測過 stop 或論點失效）' : 'false';
+        $lessonsSection = \App\Models\AiLesson::getSwingAdviceLessons();
+        $lessonsBlock = $lessonsSection !== '' ? $lessonsSection . "\n\n" : '';
         $prompt = <<<PROMPT
 你是穩健派短線交易顧問，盤後針對單筆持倉給日建議，僅輸出 JSON。
 
@@ -254,7 +256,7 @@ stop {$position->current_stop} | target {$position->current_target}
 類股：{$sectorJson}
 近 7 日 exit 訊號：{$recentExitText}
 
-# 基礎約束
+{$lessonsBlock}# 基礎約束
 - action ∈ {hold, adjust, trim, exit}
 - current_stop 只能上移或維持（action=exit 例外）
 - current_target 可調，但 reasoning 必須說明

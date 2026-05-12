@@ -92,6 +92,24 @@
         </div>
       </section>
 
+      <!-- AI 教訓：每週日 17:00 從上週平倉資料萃取，14 天有效期 -->
+      <section class="section">
+        <h2 class="section-title">AI 教訓</h2>
+        <div v-if="lessons.length" class="lesson-list">
+          <article v-for="l in lessons" :key="l.id" class="stock-card lesson-card">
+            <div class="lesson-head">
+              <el-tag :type="lessonTagType(l.type)" size="small">{{ lessonTagLabel(l.type) }}</el-tag>
+              <span v-if="l.category" class="lesson-category">{{ l.category }}</span>
+              <span v-if="l.source === 'tip'" class="lesson-source-tip">★ 明牌</span>
+              <span v-else-if="l.source === 'weekly'" class="lesson-source-weekly">每週萃取</span>
+              <span class="lesson-meta">{{ l.trade_date }} · 剩 {{ l.days_left }} 天</span>
+            </div>
+            <div class="lesson-content">{{ l.content }}</div>
+          </article>
+        </div>
+        <el-empty v-else description="尚無短線教訓（每週日 17:00 自動萃取）" :image-size="60" />
+      </section>
+
       <!-- 走勢趨勢 -->
       <section class="section" v-if="stats.daily?.length">
         <h2 class="section-title">候選走勢</h2>
@@ -158,15 +176,19 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
-import { getCandidateStats } from '../api'
+import { getCandidateStats, getSwingLessons } from '../api'
 
 use([CanvasRenderer, LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent])
 
 const days = ref(30)
 const stats = ref(null)
 const loading = ref(false)
+const lessons = ref([])
 
-onMounted(fetchData)
+onMounted(() => {
+  fetchData()
+  fetchLessons()
+})
 
 async function fetchData() {
   loading.value = true
@@ -176,6 +198,33 @@ async function fetchData() {
   } finally {
     loading.value = false
   }
+}
+
+async function fetchLessons() {
+  try {
+    const { data } = await getSwingLessons()
+    lessons.value = data.data || []
+  } catch {
+    lessons.value = []
+  }
+}
+
+function lessonTagType(type) {
+  return {
+    screening: 'primary',
+    entry: 'success',
+    exit: 'warning',
+    market: 'info',
+  }[type] || 'info'
+}
+
+function lessonTagLabel(type) {
+  return {
+    screening: '選股',
+    entry: '進場',
+    exit: '出場',
+    market: '大盤',
+  }[type] || type
 }
 
 const byStrategyList = computed(() => {
@@ -384,5 +433,56 @@ function strategyTagType(key) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* AI 教訓卡片 */
+.lesson-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lesson-card {
+  padding: 10px 12px;
+}
+
+.lesson-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.lesson-category {
+  color: var(--c-text-sub);
+  background: #f1f5f9;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.lesson-source-tip {
+  color: #d97706;
+  font-weight: 700;
+}
+
+.lesson-source-weekly {
+  color: var(--c-text-muted);
+  font-size: 11px;
+}
+
+.lesson-meta {
+  margin-left: auto;
+  color: var(--c-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lesson-content {
+  font-size: 13px;
+  color: var(--c-text);
+  line-height: 1.55;
 }
 </style>

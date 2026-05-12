@@ -144,6 +144,11 @@ scheduledCommand('stock:daily-review --mode=swing', '短線 AI 檢討')
 scheduledCommand('stock:extract-weekly-lessons', '週教訓萃取')
     ->weeklyOn(5, '16:00');
 
+// 每週日 17:00 從整週短線平倉持倉 + AI 軌跡 + 出場後 5 日股價萃取教訓
+// 排在週日確保前一交易週已完整收盤、5 日 forward window 有資料
+scheduledCommand('stock:extract-swing-lessons', '短線教訓萃取')
+    ->weeklyOn(0, '17:00');
+
 // 每週日 22:00 計算策略量化績效統計（30/60 天窗口）
 scheduledCommand('stock:compute-strategy-stats', '策略績效統計')
     ->weeklyOn(0, '22:00');

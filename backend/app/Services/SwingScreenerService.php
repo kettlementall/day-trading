@@ -415,13 +415,15 @@ class SwingScreenerService
             return "{$r['symbol']} {$r['name']} {$r['industry']} pre_score={$r['pre_score']} close={$r['entry_price']} | {$valText} | {$secText} | thesis=" . json_encode($r['thesis'], JSON_UNESCAPED_UNICODE);
         })->implode("\n");
         $totalCount = $candidates->count();
+        $lessonsSection = \App\Models\AiLesson::getSwingScreeningLessons();
+        $lessonsBlock = $lessonsSection !== '' ? $lessonsSection . "\n\n" : '';
 
         $prompt = <<<PROMPT
 你是穩健派台股短線理財專員，挑 1-4 週配置標的。避免追高，重視下檔風險／論點／籌碼／技術／估值。
 
 日期：{$date}
 
-# 產業論點
+{$lessonsBlock}# 產業論點
 {$thesisText}
 
 # 股票候選

@@ -162,6 +162,9 @@ export const getSwingCandidates = (date) =>
 export const getSwingPositions = () =>
   api.get('/swing/positions')
 
+export const getSwingLivePrices = () =>
+  api.get('/swing/positions/live-prices')
+
 export const createSwingPosition = (data) =>
   api.post('/swing/positions', data)
 
@@ -179,6 +182,9 @@ export const reduceSwingShares = (id, data) =>
 
 export const calculateSwingSizing = (data) =>
   api.post('/swing/sizing', data)
+
+export const getSwingLessons = () =>
+  api.get('/swing/lessons')
 
 export const getInvestmentTheses = () =>
   api.get('/investment-theses')
