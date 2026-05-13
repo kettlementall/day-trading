@@ -101,7 +101,7 @@
                   T+1 15:05 盤後結果回填 → 15:35 AI 隔日沖檢討
 ```
 
-**短線流程（Swing，最多 20 交易日）：**
+**短線流程（Swing，AI 動態決定持有期；建倉時的 `max_holding_days` 取 AI 建議的 `swing_time_horizon_days`，無建議時 fallback 20 個交易日；超過上限僅標記 `time_pressure=expired` 餵 AI 重估，不會強制平倉）：**
 ```
 週一 17:30 → stock:refresh-swing-universe → 重算 stocks.is_swing_eligible
             （規則：60 天日K + 過去 20 日均量 ≥ 1000 張 + 收盤 ≥ 10 元 + 排除衍生型 ETF）
