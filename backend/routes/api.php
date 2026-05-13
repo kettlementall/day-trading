@@ -62,6 +62,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // 消息面（viewer + admin 可看）
     Route::get('/news/dashboard', [NewsController::class, 'dashboard']);
 
+    // AI 產業論點（viewer + admin 可看）
+    Route::get('/investment-theses', [InvestmentThesisController::class, 'index']);
+
     // 短線配置（viewer + admin）
     Route::get('/swing/candidates', [SwingController::class, 'candidates']);
     Route::get('/swing/positions', [SwingController::class, 'positions']);
@@ -102,8 +105,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // 篩選規則
         Route::apiResource('screening-rules', ScreeningRuleController::class);
 
-        // AI 產業論點
-        Route::get('/investment-theses', [InvestmentThesisController::class, 'index']);
+        // AI 產業論點管理
         Route::patch('/investment-theses/{investmentThesis}', [InvestmentThesisController::class, 'update']);
         Route::post('/investment-theses/{investmentThesis}/disable', [InvestmentThesisController::class, 'disable']);
         Route::post('/investment-theses/{investmentThesis}/enable', [InvestmentThesisController::class, 'enable']);

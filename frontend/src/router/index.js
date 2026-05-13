@@ -74,7 +74,7 @@ const routes = [
     path: '/investment-theses',
     name: 'investment-theses',
     component: () => import('../views/InvestmentThesesView.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true },
+    meta: { requiresAuth: true },
   },
   {
     path: '/spec',

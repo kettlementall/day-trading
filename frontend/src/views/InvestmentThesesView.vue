@@ -2,7 +2,7 @@
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">AI 產業論點</h1>
-      <el-button size="small" :loading="loading" @click="fetchTheses">刷新</el-button>
+      <el-button v-if="authStore.isAdmin" size="small" :loading="loading" @click="fetchTheses">刷新</el-button>
     </div>
 
     <div class="thesis-list">
@@ -13,7 +13,7 @@
             <el-tag size="small" :type="tagType(t.status)">{{ t.status }}</el-tag>
             <el-tag size="small" type="info">信心 {{ t.confidence_score }}</el-tag>
           </div>
-          <div class="actions">
+          <div v-if="authStore.isAdmin" class="actions">
             <el-button size="small" @click="edit(t)">編輯</el-button>
             <el-button v-if="t.status !== 'disabled'" size="small" type="danger" plain @click="disable(t)">停用</el-button>
             <el-button v-else size="small" type="success" plain @click="enable(t)">啟用</el-button>
@@ -49,7 +49,7 @@
       </div>
     </div>
 
-    <el-dialog v-model="dialog" title="編輯論點" width="520px">
+    <el-dialog v-if="authStore.isAdmin" v-model="dialog" title="編輯論點" width="520px">
       <el-form label-width="90px">
         <el-form-item label="標題">
           <el-input v-model="form.title" />
@@ -80,7 +80,9 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { disableInvestmentThesis, enableInvestmentThesis, getInvestmentTheses, updateInvestmentThesis } from '../api'
+import { useAuthStore } from '../stores/auth'
 
+const authStore = useAuthStore()
 const loading = ref(false)
 const theses = ref([])
 const dialog = ref(false)
@@ -100,6 +102,7 @@ async function fetchTheses() {
 }
 
 function edit(thesis) {
+  if (!authStore.isAdmin) return
   editingId.value = thesis.id
   form.title = thesis.title
   form.description = thesis.description
@@ -109,6 +112,7 @@ function edit(thesis) {
 }
 
 async function save() {
+  if (!authStore.isAdmin) return
   await updateInvestmentThesis(editingId.value, { ...form })
   ElMessage.success('已更新')
   dialog.value = false
@@ -116,11 +120,13 @@ async function save() {
 }
 
 async function disable(thesis) {
+  if (!authStore.isAdmin) return
   await disableInvestmentThesis(thesis.id)
   await fetchTheses()
 }
 
 async function enable(thesis) {
+  if (!authStore.isAdmin) return
   await enableInvestmentThesis(thesis.id)
   await fetchTheses()
 }
