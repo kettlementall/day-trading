@@ -50,15 +50,20 @@
         </span>
       </div>
 
+      <el-tabs v-model="positionTab" class="position-tabs">
+        <el-tab-pane :label="`目前持倉 ${currentPositions.length}`" name="current" />
+        <el-tab-pane :label="`已平倉 ${archivedPositions.length}`" name="closed" />
+      </el-tabs>
+
       <el-skeleton v-if="loading && !positions.length" :rows="3" animated class="skeleton-block" />
       <el-empty
-        v-else-if="!positions.length"
-        description="尚無短線持倉"
+        v-else-if="!visiblePositions.length"
+        :description="positionEmptyDescription"
         :image-size="90"
         class="empty-pad"
       />
       <div v-else class="position-list">
-        <article v-for="p in positions" :key="p.id" class="data-card position-row">
+        <article v-for="p in visiblePositions" :key="p.id" class="data-card position-row">
           <div class="row-main">
             <div class="row-id">
               <span class="symbol">{{ p.stock.symbol }}</span>
@@ -216,19 +221,9 @@
               size="small"
               :loading="positionActionId === p.id"
               :disabled="!isActiveStatus(p.status)"
-              @click="markClosed(p, 'closed')"
+              @click="openCloseDialog(p)"
             >
-              平倉
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :loading="positionActionId === p.id"
-              :disabled="!isActiveStatus(p.status)"
-              @click="markClosed(p, 'stopped')"
-            >
-              停損結束
+              結束持倉
             </el-button>
           </div>
         </article>
@@ -373,7 +368,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="closeDialog" :title="closeForm.status === 'closed' ? '平倉確認' : '停損結束確認'" width="440px">
+    <el-dialog v-model="closeDialog" title="結束持倉確認" width="440px">
       <el-form label-width="88px">
         <el-form-item label="股票">
           <span class="dialog-symbol">
@@ -420,7 +415,7 @@
       <template #footer>
         <el-button @click="closeDialog = false">取消</el-button>
         <el-button type="primary" :loading="positionActionId === closingPosition?.id" @click="submitClose">
-          確認{{ closeForm.status === 'closed' ? '平倉' : '停損結束' }}
+          確認結束
         </el-button>
       </template>
     </el-dialog>
@@ -653,6 +648,7 @@ const loading = ref(false)
 const saving = ref(false)
 const candidates = ref([])
 const positions = ref([])
+const positionTab = ref('current')
 const exposure = ref(null)
 const swingMeta = ref(null)
 const buyDialog = ref(false)
@@ -677,6 +673,15 @@ const reduceForm = reactive({ price: 0, shares: 1000 })
 const livePriceUpdatedAt = ref(null)
 const flashIds = ref(new Set())
 let livePollTimer = null
+
+const archivedPositions = computed(() => positions.value.filter(isArchivedClosedPosition))
+const currentPositions = computed(() => positions.value.filter((p) => !isArchivedClosedPosition(p)))
+const visiblePositions = computed(() => (
+  positionTab.value === 'closed' ? archivedPositions.value : currentPositions.value
+))
+const positionEmptyDescription = computed(() => (
+  positionTab.value === 'closed' ? '尚無已平倉持倉' : '尚無短線持倉'
+))
 
 onMounted(async () => {
   await fetchAll()
@@ -933,9 +938,8 @@ const reducePreview = computed(() => {
   }
 })
 
-function markClosed(position, status) {
+function openCloseDialog(position) {
   closingPosition.value = position
-  closeForm.status = status
   closeForm.exit_price = Number(position.current_price || position.entry_price || 0)
   closeForm.exit_note = ''
   // 預設出場原因：依現價對 target/stop 自動判斷，使用者可改
@@ -947,19 +951,19 @@ function markClosed(position, status) {
     closeForm.exit_reason = 'stop_hit'
   } else if (target > 0 && exitPrice >= target) {
     closeForm.exit_reason = 'target_hit'
-  } else if (status === 'stopped') {
-    closeForm.exit_reason = 'cut_loss_manual'
   } else if (entry > 0 && exitPrice > 0) {
     closeForm.exit_reason = exitPrice > entry ? 'take_profit_manual' : 'cut_loss_manual'
   } else {
     closeForm.exit_reason = 'take_profit_manual'
   }
+  closeForm.status = statusFromExitReason(closeForm.exit_reason)
   closeDialog.value = true
 }
 
 async function submitClose() {
   const position = closingPosition.value
   if (!position) return
+  closeForm.status = statusFromExitReason(closeForm.exit_reason)
   positionActionId.value = position.id
   try {
     await updateSwingPosition(position.id, {
@@ -968,7 +972,7 @@ async function submitClose() {
       exit_reason: closeForm.exit_reason,
       exit_note: closeForm.exit_note || null,
     })
-    ElMessage.success(closeForm.status === 'closed' ? '已平倉' : '已標記停損結束')
+    ElMessage.success('已結束持倉')
     closeDialog.value = false
     await fetchAll()
   } catch (e) {
@@ -976,6 +980,12 @@ async function submitClose() {
   } finally {
     positionActionId.value = null
   }
+}
+
+function statusFromExitReason(reason) {
+  return ['stop_hit', 'cut_loss_manual'].includes(reason)
+    ? 'stopped'
+    : 'closed'
 }
 
 function money(v) {
@@ -1101,6 +1111,13 @@ function positionTag(status) {
 
 function isActiveStatus(status) {
   return status === 'watching' || status === 'holding' || status === 'exit_suggested'
+}
+
+function isArchivedClosedPosition(position) {
+  if (!['closed', 'stopped'].includes(position?.status)) return false
+  if (!position.exit_date) return false
+  const exitDate = dayjs(position.exit_date)
+  return exitDate.isValid() && exitDate.isBefore(dayjs(), 'day')
 }
 </script>
 
@@ -1251,6 +1268,20 @@ function isActiveStatus(status) {
 .thesis-pill-meta {
   color: var(--c-text-sub);
   font-variant-numeric: tabular-nums;
+}
+
+.position-tabs {
+  margin: 2px 0 8px;
+}
+
+.position-tabs :deep(.el-tabs__header) {
+  margin-bottom: 8px;
+}
+
+.position-tabs :deep(.el-tabs__item) {
+  height: 32px;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 /* Loading & empty */
