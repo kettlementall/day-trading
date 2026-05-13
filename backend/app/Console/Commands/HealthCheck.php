@@ -7,6 +7,7 @@ use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\DailyQuote;
 use App\Models\DailyReview;
+use App\Models\FormulaSetting;
 use App\Models\InstitutionalTrade;
 use App\Models\MarginTrade;
 use App\Models\MarketHoliday;
@@ -356,8 +357,10 @@ class HealthCheck extends Command
             }
         }
 
-        // 6c. 候選池盤中環境偵測（當日有當沖候選時檢查）
-        if (!$isHoliday && $todayCandidateCount > 0) {
+        // 6c. 候選池盤中環境偵測（當日有當沖候選 + 盤中監控總開關開啟時才檢查）
+        // intraday_monitor=false 時 FetchIntradayQuotes/MonitorStocks 不會寫快照，
+        // 此區塊跑只會空轉並誤報 regime=unknown，故直接跳過。
+        if (!$isHoliday && $todayCandidateCount > 0 && FormulaSetting::isFeatureEnabled('intraday_monitor')) {
             try {
                 $regime = app(IntradayMarketRegimeService::class)->detect($date);
                 $metrics = $regime['metrics'] ?? [];
