@@ -260,6 +260,16 @@
               <span class="stock-name">{{ c.stock.name }}</span>
               <span v-if="c.stock.industry" class="industry-tag">{{ c.stock.industry }}</span>
               <button class="quote-btn" title="即時報價" @click.stop="goQuote(c)">💹</button>
+              <span v-if="c.risk_tags?.length" class="risk-tag-strip">
+                <span
+                  v-for="tag in c.risk_tags"
+                  :key="`${tag.type}-${tag.label}`"
+                  class="risk-tag"
+                  :class="`risk-tag-${tag.level}`"
+                >
+                  {{ tag.label }}
+                </span>
+              </span>
             </div>
             <div class="score-badge" :class="{ 'is-dim': !c.ai_selected }">
               <div class="score-num">{{ c.score }}</div>
@@ -295,6 +305,36 @@
               <div class="stat-label">目標 ETA</div>
               <div class="stat-value">{{ etaLabel(c.swing_entry_plan?.target_eta_days || c.swing_time_horizon_days) }}</div>
             </div>
+          </div>
+          <div class="fundamental-strip" :class="{ unavailable: !c.fundamentals?.available }">
+            <template v-if="c.fundamentals?.available">
+              <div>
+                <span>本益比</span>
+                <strong :class="valuationClass(c.fundamentals)">{{ formatMultiple(c.fundamentals.pe_ratio) }}</strong>
+              </div>
+              <div>
+                <span>淨值比</span>
+                <strong>{{ formatMultiple(c.fundamentals.pb_ratio) }}</strong>
+              </div>
+              <div>
+                <span>殖利率</span>
+                <strong>{{ formatPercent(c.fundamentals.dividend_yield) }}</strong>
+              </div>
+              <div>
+                <span>EPS(TTM)</span>
+                <strong>{{ formatPlainNumber(c.fundamentals.eps_ttm) }}</strong>
+              </div>
+              <div>
+                <span>估值日</span>
+                <strong>{{ c.fundamentals.as_of || '—' }}</strong>
+              </div>
+            </template>
+            <template v-else>
+              <div>
+                <span>基本面</span>
+                <strong>估值資料不足</strong>
+              </div>
+            </template>
           </div>
           <div v-if="c.swing_entry_plan?.target_price_reasoning || c.swing_entry_plan?.eta_reasoning" class="number-reasons candidate-reasons">
             <div v-if="c.swing_entry_plan?.target_price_reasoning">
@@ -1016,6 +1056,30 @@ function etaLabel(v) {
   return `約 ${v} 日`
 }
 
+function formatPlainNumber(v) {
+  if (v === null || v === undefined || v === '') return '—'
+  const n = Number(v)
+  if (Number.isNaN(n)) return '—'
+  return n.toFixed(2)
+}
+
+function formatMultiple(v) {
+  const n = formatPlainNumber(v)
+  return n === '—' ? n : `${n}x`
+}
+
+function formatPercent(v) {
+  const n = formatPlainNumber(v)
+  return n === '—' ? n : `${n}%`
+}
+
+function valuationClass(fundamentals) {
+  return {
+    cheap: 'valuation-cheap',
+    expensive: 'valuation-expensive',
+  }[fundamentals?.level] || ''
+}
+
 function statusLabel(status) {
   return {
     watching: '觀察',
@@ -1499,6 +1563,97 @@ function isActiveStatus(status) {
   margin-top: 8px;
 }
 
+.fundamental-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.fundamental-strip div {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--c-line);
+  border-radius: 6px;
+  background: rgba(248, 250, 252, 0.86);
+}
+
+.fundamental-strip span {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+  color: var(--c-text-muted);
+}
+
+.fundamental-strip strong {
+  display: block;
+  overflow: hidden;
+  color: var(--c-text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fundamental-strip.unavailable {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.valuation-cheap {
+  color: var(--c-up) !important;
+}
+
+.valuation-expensive {
+  color: var(--c-down) !important;
+}
+
+.risk-tag-strip {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.risk-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--c-line);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  background: #f8fafc;
+  color: var(--c-text-sub);
+}
+
+.risk-tag-danger {
+  border-color: rgba(220, 38, 38, 0.28);
+  background: rgba(254, 226, 226, 0.82);
+  color: #b91c1c;
+}
+
+.risk-tag-warning {
+  border-color: rgba(217, 119, 6, 0.28);
+  background: rgba(254, 243, 199, 0.82);
+  color: #92400e;
+}
+
+.risk-tag-positive {
+  border-color: rgba(22, 163, 74, 0.24);
+  background: rgba(220, 252, 231, 0.82);
+  color: #15803d;
+}
+
+.risk-tag-info {
+  border-color: rgba(71, 85, 105, 0.22);
+  background: rgba(241, 245, 249, 0.9);
+  color: #475569;
+}
+
 .advice-text {
   margin-top: 6px;
   font-size: 13px;
@@ -1787,6 +1942,9 @@ function isActiveStatus(status) {
     grid-column: span 2;
   }
   .row-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .fundamental-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .live-price-block {

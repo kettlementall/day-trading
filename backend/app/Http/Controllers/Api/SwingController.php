@@ -9,6 +9,7 @@ use App\Models\DailyQuote;
 use App\Models\IntradaySnapshot;
 use App\Models\InvestmentThesis;
 use App\Models\MarketHoliday;
+use App\Models\StockValuation;
 use App\Models\SwingPosition;
 use App\Services\FugleRealtimeClient;
 use Illuminate\Http\JsonResponse;
@@ -37,7 +38,13 @@ class SwingController extends Controller
         $candidates = $query
             ->orderByDesc('ai_selected')
             ->orderByDesc('score')
-            ->get();
+            ->get()
+            ->map(function (Candidate $candidate) use ($date) {
+                $fundamentals = $this->resolveFundamentals($candidate->stock_id, $date);
+                $candidate->setAttribute('fundamentals', $fundamentals);
+                $candidate->setAttribute('risk_tags', $this->resolveRiskTags($candidate, $fundamentals));
+                return $candidate;
+            });
 
         return response()->json([
             'date' => $date,
@@ -55,6 +62,131 @@ class SwingController extends Controller
             'count' => $candidates->count(),
             'data' => $candidates,
         ]);
+    }
+
+    private function resolveFundamentals(int $stockId, string $date): array
+    {
+        $valuation = StockValuation::where('stock_id', $stockId)
+            ->where('date', '<=', $date)
+            ->orderByDesc('date')
+            ->first();
+
+        if (!$valuation) {
+            return ['available' => false];
+        }
+
+        $pe = $valuation->pe_ratio !== null ? (float) $valuation->pe_ratio : null;
+        $level = 'normal';
+        if ($pe !== null) {
+            if ($pe >= 40) {
+                $level = 'expensive';
+            } elseif ($pe > 0 && $pe < 12) {
+                $level = 'cheap';
+            }
+        }
+
+        return [
+            'available' => true,
+            'pe_ratio' => $pe,
+            'pb_ratio' => $valuation->pb_ratio !== null ? (float) $valuation->pb_ratio : null,
+            'dividend_yield' => $valuation->dividend_yield !== null ? (float) $valuation->dividend_yield : null,
+            'eps_ttm' => $valuation->eps_ttm !== null ? (float) $valuation->eps_ttm : null,
+            'as_of' => $valuation->date?->format('Y-m-d'),
+            'level' => $level,
+        ];
+    }
+
+    private function resolveRiskTags(Candidate $candidate, array $fundamentals): array
+    {
+        $tags = [];
+        $add = function (string $type, string $label, string $level) use (&$tags) {
+            $key = "{$type}:{$label}";
+            if (isset($tags[$key])) {
+                return;
+            }
+            $tags[$key] = compact('type', 'label', 'level');
+        };
+
+        $pe = $fundamentals['pe_ratio'] ?? null;
+        $pb = $fundamentals['pb_ratio'] ?? null;
+        $yield = $fundamentals['dividend_yield'] ?? null;
+
+        if ($pe !== null && $pe >= 40) {
+            $add('valuation', '估值偏高', 'warning');
+        }
+        if ($pb !== null && $pb >= 6) {
+            $add('valuation', '淨值比偏高', 'warning');
+        }
+        if ($yield !== null && $yield >= 4 && ($pe === null || $pe < 25)) {
+            $add('support', '股息支撐', 'positive');
+        }
+
+        $entry = (float) $candidate->suggested_buy;
+        $stop = (float) $candidate->stop_loss;
+        if ($entry > 0 && $stop > 0) {
+            $stopDistance = (($entry - $stop) / $entry) * 100;
+            if ($stopDistance > 6) {
+                $add('discipline', '停損距離較大', 'warning');
+            }
+        }
+
+        if ($candidate->risk_reward_ratio !== null && (float) $candidate->risk_reward_ratio < 2) {
+            $add('risk_reward', '風報比不足', 'warning');
+        }
+
+        $text = $this->candidateRiskText($candidate);
+        if ($candidate->swing_strategy === 'trend_follow' && $this->containsAny($text, ['創高', '天價', '追高', '放量'])) {
+            $add('entry', '追高風險', 'danger');
+        }
+
+        $thesisSource = data_get($candidate->swing_thesis, 'source');
+        $benefitLevel = data_get($candidate->swing_thesis, 'benefit_level');
+        if ($thesisSource === 'keyword_industry' || $benefitLevel === 'watch') {
+            $add('thesis', '論點間接', 'info');
+        }
+
+        $industry = $candidate->stock?->industry ?? '';
+        if (
+            $this->containsAny($industry, ['航運', '鋼鐵'])
+            && $this->containsAny($text, ['運價', '原物料', '地緣'])
+        ) {
+            $add('event', '事件驅動', 'warning');
+        }
+
+        if ($this->containsAny($text, ['波動大', '報價反轉', '需求疲弱', '競爭加劇'])) {
+            $add('volatility', '波動風險', 'warning');
+        }
+
+        $priority = ['danger' => 0, 'warning' => 1, 'positive' => 2, 'info' => 3];
+        return collect(array_values($tags))
+            ->sortBy(fn (array $tag) => $priority[$tag['level']] ?? 9)
+            ->take(4)
+            ->values()
+            ->all();
+    }
+
+    private function candidateRiskText(Candidate $candidate): string
+    {
+        $riskNotes = is_array($candidate->swing_risk_notes)
+            ? implode(' ', $candidate->swing_risk_notes)
+            : (string) $candidate->swing_risk_notes;
+
+        return implode(' ', array_filter([
+            $candidate->ai_reasoning,
+            $candidate->swing_reasoning,
+            $riskNotes,
+        ]));
+    }
+
+    private function containsAny(string $text, array $needles): bool
+    {
+        foreach ($needles as $needle) {
+            if ($needle !== '' && mb_stripos($text, $needle) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function positions(Request $request): JsonResponse
