@@ -90,9 +90,10 @@ docker compose exec php php artisan stock:import-holidays 2026
 | 路由 | 角色 | 說明 |
 |------|------|------|
 | `/login` | 所有人 | 登入頁 |
-| `/` | viewer + admin | 候選標的（美股指數、盤中監控、AI 標籤） |
+| `/` | viewer + admin | 預設導向 `/swing` |
+| `/swing` | viewer + admin | AI 理專型短線候選與我的持倉（預設頁） |
 | `/overnight` | viewer + admin | 隔日沖候選標的 |
-| `/swing` | viewer + admin | AI 理專型短線候選與我的持倉 |
+| `/candidates` | viewer + admin | 當沖候選標的（美股指數、盤中監控、AI 標籤） |
 | `/stock/:id` | viewer + admin | 個股 K 線詳情 |
 | `/stats` | admin | 當沖績效統計 + 單日 AI 檢討報告 |
 | `/overnight/stats` | admin | 隔日沖績效統計 |

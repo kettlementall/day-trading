@@ -11,6 +11,10 @@ const routes = [
   // ── viewer + admin ─────────────────────────────────────────────
   {
     path: '/',
+    redirect: '/swing',
+  },
+  {
+    path: '/candidates',
     name: 'candidates',
     component: () => import('../views/CandidatesView.vue'),
     meta: { requiresAuth: true },
@@ -108,7 +112,7 @@ router.beforeEach(async (to) => {
 
   // 已登入者不需要看 login 頁
   if (to.meta.guestOnly && isAuthenticated) {
-    return { name: 'candidates' }
+    return { name: 'swing' }
   }
 
   // 未登入 → login
@@ -118,7 +122,7 @@ router.beforeEach(async (to) => {
 
   // viewer 嘗試進 admin 頁面 → 靜默導回首頁
   if (to.meta.requiresAdmin && !isAdmin) {
-    return { name: 'candidates' }
+    return { name: 'swing' }
   }
 })
 

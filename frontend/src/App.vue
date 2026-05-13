@@ -29,17 +29,17 @@
       </div>
 
       <!-- viewer + admin -->
-      <router-link to="/" class="nav-item" active-class="active" @click="closeMobileNav">
-        <el-icon><TrendCharts /></el-icon>
-        <span>當沖候選</span>
+      <router-link to="/swing" class="nav-item" active-class="active" @click="closeMobileNav">
+        <el-icon><DataLine /></el-icon>
+        <span>短線配置</span>
       </router-link>
       <router-link to="/overnight" class="nav-item" active-class="active" @click="closeMobileNav">
         <el-icon><Moon /></el-icon>
         <span>隔日沖候選</span>
       </router-link>
-      <router-link to="/swing" class="nav-item" active-class="active" @click="closeMobileNav">
-        <el-icon><DataLine /></el-icon>
-        <span>短線配置</span>
+      <router-link to="/candidates" class="nav-item" active-class="active" @click="closeMobileNav">
+        <el-icon><TrendCharts /></el-icon>
+        <span>當沖候選</span>
       </router-link>
       <router-link to="/quote" class="nav-item" active-class="active" @click="closeMobileNav">
         <el-icon><Search /></el-icon>
