@@ -277,7 +277,7 @@
               </span>
             </div>
             <div class="score-badge" :class="{ 'is-dim': !c.ai_selected }">
-              <div class="score-num">{{ c.score }}</div>
+              <div class="score-num">{{ formatCardNumber(c.score) }}</div>
               <div class="score-label">分數</div>
             </div>
           </div>
@@ -296,15 +296,15 @@
           <div class="row-stats compact">
             <div class="stat">
               <div class="stat-label">建議買進</div>
-              <div class="stat-value">{{ c.suggested_buy }}</div>
+              <div class="stat-value">{{ formatCardNumber(c.suggested_buy) }}</div>
             </div>
             <div class="stat">
               <div class="stat-label">目標價</div>
-              <div class="stat-value">{{ c.target_price }}</div>
+              <div class="stat-value">{{ formatCardNumber(c.target_price) }}</div>
             </div>
             <div class="stat">
               <div class="stat-label">停損價</div>
-              <div class="stat-value">{{ c.stop_loss }}</div>
+              <div class="stat-value">{{ formatCardNumber(c.stop_loss) }}</div>
             </div>
             <div class="stat">
               <div class="stat-label">目標 ETA</div>
@@ -315,19 +315,19 @@
             <template v-if="c.fundamentals?.available">
               <div>
                 <span>本益比</span>
-                <strong :class="valuationClass(c.fundamentals)">{{ formatMultiple(c.fundamentals.pe_ratio) }}</strong>
+                <strong :class="valuationClass(c.fundamentals)">{{ formatCardMultiple(c.fundamentals.pe_ratio) }}</strong>
               </div>
               <div>
                 <span>淨值比</span>
-                <strong>{{ formatMultiple(c.fundamentals.pb_ratio) }}</strong>
+                <strong>{{ formatCardMultiple(c.fundamentals.pb_ratio) }}</strong>
               </div>
               <div>
                 <span>殖利率</span>
-                <strong>{{ formatPercent(c.fundamentals.dividend_yield) }}</strong>
+                <strong>{{ formatCardPercent(c.fundamentals.dividend_yield) }}</strong>
               </div>
               <div>
                 <span>EPS(TTM)</span>
-                <strong>{{ formatPlainNumber(c.fundamentals.eps_ttm) }}</strong>
+                <strong>{{ formatCardNumber(c.fundamentals.eps_ttm) }}</strong>
               </div>
               <div>
                 <span>估值日</span>
@@ -1083,13 +1083,30 @@ function formatPlainNumber(v) {
   return n.toFixed(2)
 }
 
+function formatCardNumber(v) {
+  if (v === null || v === undefined || v === '') return '—'
+  const n = Number(v)
+  if (Number.isNaN(n)) return '—'
+  return Math.round(n).toString()
+}
+
 function formatMultiple(v) {
   const n = formatPlainNumber(v)
   return n === '—' ? n : `${n}x`
 }
 
+function formatCardMultiple(v) {
+  const n = formatCardNumber(v)
+  return n === '—' ? n : `${n}x`
+}
+
 function formatPercent(v) {
   const n = formatPlainNumber(v)
+  return n === '—' ? n : `${n}%`
+}
+
+function formatCardPercent(v) {
+  const n = formatCardNumber(v)
   return n === '—' ? n : `${n}%`
 }
 

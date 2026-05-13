@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\MarketHoliday;
+use App\Models\DailyQuote;
 use App\Models\Stock;
 use App\Models\StockValuation;
 use App\Services\TelegramService;
@@ -66,17 +67,24 @@ class FetchStockValuations extends Command
             $pe    = $this->parseNumber($row['PEratio']      ?? $row['本益比'] ?? null);
             $yield = $this->parseNumber($row['DividendYield'] ?? $row['殖利率(%)'] ?? null);
             $pb    = $this->parseNumber($row['PBratio']       ?? $row['股價淨值比'] ?? null);
+            $stockId = $symbols[$symbol];
+            $close = DailyQuote::where('stock_id', $stockId)
+                ->where('date', '<=', $date)
+                ->orderByDesc('date')
+                ->value('close');
+            $epsTtm = $pe !== null && $close !== null ? round((float) $close / $pe, 2) : null;
 
             if ($pe === null && $yield === null && $pb === null) {
                 continue;
             }
 
             StockValuation::updateOrCreate(
-                ['stock_id' => $symbols[$symbol], 'date' => $date],
+                ['stock_id' => $stockId, 'date' => $date],
                 [
                     'pe_ratio'       => $pe,
                     'pb_ratio'       => $pb,
                     'dividend_yield' => $yield,
+                    'eps_ttm'        => $epsTtm,
                 ]
             );
 

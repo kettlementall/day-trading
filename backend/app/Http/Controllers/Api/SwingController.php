@@ -76,6 +76,15 @@ class SwingController extends Controller
         }
 
         $pe = $valuation->pe_ratio !== null ? (float) $valuation->pe_ratio : null;
+        $epsTtm = $valuation->eps_ttm !== null ? (float) $valuation->eps_ttm : null;
+        if ($epsTtm === null && $pe !== null) {
+            $close = DailyQuote::where('stock_id', $stockId)
+                ->where('date', '<=', $valuation->date)
+                ->orderByDesc('date')
+                ->value('close');
+            $epsTtm = $close !== null ? round((float) $close / $pe, 2) : null;
+        }
+
         $level = 'normal';
         if ($pe !== null) {
             if ($pe >= 40) {
@@ -90,7 +99,7 @@ class SwingController extends Controller
             'pe_ratio' => $pe,
             'pb_ratio' => $valuation->pb_ratio !== null ? (float) $valuation->pb_ratio : null,
             'dividend_yield' => $valuation->dividend_yield !== null ? (float) $valuation->dividend_yield : null,
-            'eps_ttm' => $valuation->eps_ttm !== null ? (float) $valuation->eps_ttm : null,
+            'eps_ttm' => $epsTtm,
             'as_of' => $valuation->date?->format('Y-m-d'),
             'level' => $level,
         ];
