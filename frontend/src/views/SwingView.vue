@@ -112,6 +112,16 @@
               <div class="stat-label">股數</div>
               <div class="stat-value">{{ p.shares }}</div>
             </div>
+            <div v-if="isArchivedClosedPosition(p)" class="stat">
+              <div class="stat-label">平均出場</div>
+              <div class="stat-value">{{ p.average_exit_price || p.exit_price || '—' }}</div>
+            </div>
+            <div v-if="isArchivedClosedPosition(p)" class="stat">
+              <div class="stat-label">實現報酬</div>
+              <div class="stat-value" :class="priceColor(p.realized_profit_percent)">
+                {{ signed(p.realized_profit_percent) }}%
+              </div>
+            </div>
             <div class="stat">
               <div class="stat-label">停損</div>
               <div class="stat-value">{{ p.current_stop || '—' }}</div>

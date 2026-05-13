@@ -32,6 +32,8 @@ class SwingPosition extends Model
         'current_target',
         'max_holding_days',
         'exit_price',
+        'realized_exit_shares',
+        'realized_exit_value',
         'exit_date',
         'exit_reason',
         'exit_note',
@@ -55,6 +57,8 @@ class SwingPosition extends Model
         'current_stop' => 'decimal:2',
         'current_target' => 'decimal:2',
         'exit_price' => 'decimal:2',
+        'realized_exit_shares' => 'integer',
+        'realized_exit_value' => 'decimal:2',
         'shares' => 'integer',
         'entry_date' => 'date:Y-m-d',
         'exit_date' => 'date:Y-m-d',
@@ -89,5 +93,16 @@ class SwingPosition extends Model
         $log[] = array_merge(['time' => now()->toDateTimeString()], $advice);
         $this->advice_log = $log;
         $this->latest_advice = $advice;
+    }
+
+    public function averageExitPrice(): ?float
+    {
+        $shares = (int) ($this->realized_exit_shares ?? 0);
+        $value = (float) ($this->realized_exit_value ?? 0);
+        if ($shares > 0 && $value > 0) {
+            return round($value / $shares, 2);
+        }
+
+        return $this->exit_price !== null ? (float) $this->exit_price : null;
     }
 }

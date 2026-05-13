@@ -159,7 +159,7 @@ class SwingLessonExtractor
     private function buildCase(SwingPosition $position): ?array
     {
         $entry = (float) $position->entry_price;
-        $exit  = (float) $position->exit_price;
+        $exit  = (float) ($position->averageExitPrice() ?? 0);
         if ($entry <= 0 || $exit <= 0) {
             return null;
         }

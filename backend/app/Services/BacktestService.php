@@ -623,7 +623,7 @@ class BacktestService
 
         $returns = $positions->map(function (SwingPosition $p) {
             $entry = (float) $p->entry_price;
-            $exit = (float) $p->exit_price;
+            $exit = (float) ($p->averageExitPrice() ?? 0);
             return $entry > 0 ? round(($exit - $entry) / $entry * 100, 2) : 0;
         });
 

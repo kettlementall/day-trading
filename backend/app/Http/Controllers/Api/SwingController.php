@@ -213,6 +213,8 @@ class SwingController extends Controller
                 $position->setAttribute('market_value', $marketValue);
                 $position->setAttribute('cost_amount', $cost);
                 $position->setAttribute('risk_amount', $position->current_stop ? max(0, ($entry - (float) $position->current_stop) * $shares) : null);
+                $position->setAttribute('average_exit_price', $position->averageExitPrice());
+                $position->setAttribute('realized_profit_percent', $position->average_exit_price && $entry > 0 ? round(((float) $position->average_exit_price - $entry) / $entry * 100, 2) : null);
                 $latestDaily = DailyQuote::where('stock_id', $position->stock_id)->orderByDesc('date')->first();
                 $latestSnapshot = $position->snapshots->last();
                 $position->setAttribute('tracking_status', [
@@ -410,10 +412,19 @@ class SwingController extends Controller
 
         if ($isClosing) {
             $validated['exit_date'] = $validated['exit_date'] ?? now()->toDateString();
+            $wasActive = in_array($position->status, SwingPosition::ACTIVE_STATUSES, true);
+            $exitPrice = (float) ($validated['exit_price'] ?? $position->exit_price ?? 0);
+            if ($wasActive && $exitPrice > 0 && (int) $position->shares > 0) {
+                $validated['realized_exit_shares'] = (int) ($position->realized_exit_shares ?? 0) + (int) $position->shares;
+                $validated['realized_exit_value'] = round(
+                    (float) ($position->realized_exit_value ?? 0) + ($exitPrice * (int) $position->shares),
+                    2
+                );
+            }
             if (empty($validated['exit_reason'])) {
                 $validated['exit_reason'] = $this->inferExitReason(
                     $validated['status'],
-                    (float) ($validated['exit_price'] ?? $position->exit_price ?? 0),
+                    $exitPrice,
                     (float) ($position->entry_price ?? 0),
                     (float) ($position->current_target ?? 0),
                     (float) ($position->current_stop ?? 0),
@@ -499,12 +510,23 @@ class SwingController extends Controller
             $position->update([
                 'status' => SwingPosition::STATUS_CLOSED,
                 'exit_price' => $validated['price'],
+                'realized_exit_shares' => (int) ($position->realized_exit_shares ?? 0) + $sellShares,
+                'realized_exit_value' => round((float) ($position->realized_exit_value ?? 0) + ((float) $validated['price'] * $sellShares), 2),
                 'exit_date' => now()->toDateString(),
+                'exit_reason' => $this->inferExitReason(
+                    SwingPosition::STATUS_CLOSED,
+                    (float) $validated['price'],
+                    (float) ($position->entry_price ?? 0),
+                    (float) ($position->current_target ?? 0),
+                    (float) ($position->current_stop ?? 0),
+                ),
             ]);
         } else {
             // 部分減倉：股數減少，平均成本不變（剩餘部位的成本基準不變）
             $position->update([
                 'shares' => $oldShares - $sellShares,
+                'realized_exit_shares' => (int) ($position->realized_exit_shares ?? 0) + $sellShares,
+                'realized_exit_value' => round((float) ($position->realized_exit_value ?? 0) + ((float) $validated['price'] * $sellShares), 2),
             ]);
         }
 
