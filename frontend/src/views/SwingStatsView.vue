@@ -92,6 +92,82 @@
         </div>
       </section>
 
+      <!-- 單日 AI 檢討：每日 19:30 產出完整 swing 檢討報告 -->
+      <section class="section">
+        <div class="section-heading-row">
+          <h2 class="section-title">單日 AI 檢討</h2>
+          <div class="review-controls">
+            <el-date-picker
+              v-model="reviewDate"
+              type="date"
+              format="MM/DD"
+              value-format="YYYY-MM-DD"
+              :clearable="false"
+              size="small"
+              style="width: 110px"
+              @change="loadReview"
+            />
+            <el-button
+              v-if="!reviewResult?.report || reviewing"
+              type="warning"
+              size="small"
+              :loading="reviewing"
+              @click="runDailyReview"
+            >
+              產出報告
+            </el-button>
+            <el-button
+              v-else
+              type="info"
+              size="small"
+              plain
+              @click="runDailyReview"
+            >
+              重新產出
+            </el-button>
+          </div>
+        </div>
+
+        <div class="stock-card review-card">
+          <div v-if="reviewLoading" class="validation-status">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>載入報告中...</span>
+          </div>
+
+          <template v-else>
+            <div v-if="reviewing" class="validation-status">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              <span>AI 分析中...</span>
+            </div>
+
+            <div v-if="reviewLogs.length" class="validation-logs" ref="reviewLogBox">
+              <div v-for="(log, i) in reviewLogs" :key="i" class="log-line">{{ log }}</div>
+            </div>
+
+            <div v-if="reviewing && reviewStreamText" class="review-report">
+              <div class="report-header">
+                <el-icon class="is-loading" style="margin-right: 6px;"><Loading /></el-icon>
+                <span>報告生成中...</span>
+              </div>
+              <div class="report-content" v-html="renderMarkdown(reviewStreamText)" />
+            </div>
+
+            <div v-else-if="reviewResult?.report" class="review-report">
+              <div class="report-header">
+                <span>{{ reviewResult.date }} — {{ reviewResult.candidates_count }} 檔候選/持倉檢討</span>
+              </div>
+              <div class="report-content" v-html="renderMarkdown(reviewResult.report)" />
+            </div>
+
+            <div v-else-if="reviewResult?.error" class="review-error">
+              {{ reviewResult.error }}
+            </div>
+
+            <el-empty v-else description="此日期尚無短線 AI 檢討報告" :image-size="60" />
+          </template>
+        </div>
+      </section>
+
       <!-- AI 教訓：每週日 17:00 從上週平倉資料萃取，14 天有效期 -->
       <section class="section">
         <h2 class="section-title">AI 教訓</h2>
@@ -170,13 +246,21 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
-import { getCandidateStats, getSwingLessons } from '../api'
+import { Loading } from '@element-plus/icons-vue'
+import dayjs from 'dayjs'
+import {
+  getCandidateStats,
+  getDailyReviewDates,
+  getDailyReviewShow,
+  getDailyReviewUrl,
+  getSwingLessons,
+} from '../api'
 
 use([CanvasRenderer, LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent])
 
@@ -184,10 +268,18 @@ const days = ref(30)
 const stats = ref(null)
 const loading = ref(false)
 const lessons = ref([])
+const reviewDate = ref(dayjs().format('YYYY-MM-DD'))
+const reviewLoading = ref(false)
+const reviewLogs = ref([])
+const reviewResult = ref(null)
+const reviewStreamText = ref('')
+const reviewing = ref(false)
+const reviewLogBox = ref(null)
 
 onMounted(() => {
   fetchData()
   fetchLessons()
+  initReview()
 })
 
 async function fetchData() {
@@ -207,6 +299,90 @@ async function fetchLessons() {
   } catch {
     lessons.value = []
   }
+}
+
+async function initReview() {
+  try {
+    const { data } = await getDailyReviewDates('swing')
+    if (data?.length) {
+      reviewDate.value = data[0]
+    }
+  } finally {
+    await loadReview()
+  }
+}
+
+async function loadReview() {
+  reviewLoading.value = true
+  reviewResult.value = null
+  reviewLogs.value = []
+  reviewStreamText.value = ''
+  try {
+    const { data } = await getDailyReviewShow(reviewDate.value, 'swing')
+    if (data.exists) {
+      reviewResult.value = {
+        date: data.date,
+        candidates_count: data.candidates_count,
+        report: data.report,
+      }
+    }
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
+function runDailyReview() {
+  reviewing.value = true
+  reviewLogs.value = []
+  reviewResult.value = null
+  reviewStreamText.value = ''
+
+  const eventSource = new EventSource(getDailyReviewUrl(reviewDate.value, 'swing'))
+
+  eventSource.addEventListener('log', (e) => {
+    const { message } = JSON.parse(e.data)
+    reviewLogs.value.push(message)
+  })
+
+  eventSource.addEventListener('chunk', (e) => {
+    const { text } = JSON.parse(e.data)
+    reviewStreamText.value += text
+  })
+
+  eventSource.addEventListener('done', (e) => {
+    reviewResult.value = JSON.parse(e.data)
+    reviewStreamText.value = ''
+    reviewing.value = false
+    eventSource.close()
+  })
+
+  eventSource.onerror = () => {
+    if (reviewStreamText.value) {
+      reviewResult.value = {
+        date: reviewDate.value,
+        candidates_count: null,
+        report: reviewStreamText.value,
+      }
+      reviewStreamText.value = ''
+    } else {
+      reviewResult.value = { error: 'AI 檢討連線失敗，請稍後重試' }
+    }
+    reviewing.value = false
+    eventSource.close()
+  }
+}
+
+function renderMarkdown(text) {
+  if (!text) return ''
+  return text
+    .replace(/### (.*)/g, '<h4>$1</h4>')
+    .replace(/## (.*)/g, '<h3>$1</h3>')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n- /g, '\n<li>')
+    .replace(/<li>(.*?)(?=\n|$)/g, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
+    .replace(/<\/ul>\s*<ul>/g, '')
+    .replace(/\n/g, '<br>')
 }
 
 function lessonTagType(type) {
@@ -272,6 +448,13 @@ function strategyTagType(key) {
     base_breakout: 'warning',
   }[key] || 'info'
 }
+
+watch(() => reviewLogs.value.length, async () => {
+  await nextTick()
+  if (reviewLogBox.value) {
+    reviewLogBox.value.scrollTop = reviewLogBox.value.scrollHeight
+  }
+})
 </script>
 
 <style scoped>
@@ -322,6 +505,26 @@ function strategyTagType(key) {
   border-radius: 2px;
   background: var(--c-primary);
   margin-right: 8px;
+}
+
+.section-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.section-heading-row .section-title {
+  margin-bottom: 0;
+}
+
+.review-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .stats-grid {
@@ -484,5 +687,106 @@ function strategyTagType(key) {
   font-size: 13px;
   color: var(--c-text);
   line-height: 1.55;
+}
+
+.review-card {
+  padding: 12px;
+}
+
+.validation-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--c-primary);
+  margin-bottom: 8px;
+}
+
+.validation-logs {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-family: monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 10px;
+  border-radius: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.review-report {
+  margin-top: 6px;
+}
+
+.report-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text);
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  background: #f8fafc;
+  border-radius: 4px;
+}
+
+.report-content {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--c-text);
+  padding: 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  max-height: 620px;
+  overflow-y: auto;
+}
+
+.report-content :deep(h3) {
+  font-size: 15px;
+  margin: 16px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.report-content :deep(h4) {
+  font-size: 14px;
+  margin: 12px 0 6px;
+  color: var(--c-primary);
+}
+
+.report-content :deep(strong) {
+  color: #d97706;
+}
+
+.report-content :deep(ul) {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.report-content :deep(li) {
+  margin: 2px 0;
+}
+
+.review-error {
+  padding: 10px;
+  background: #fef0f0;
+  color: #f56c6c;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .section-heading-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .review-controls {
+    justify-content: flex-start;
+  }
 }
 </style>
