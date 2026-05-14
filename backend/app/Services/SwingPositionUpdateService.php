@@ -115,32 +115,38 @@ class SwingPositionUpdateService
         $stop = (float) ($position->current_stop ?: $entry * 0.92);
         $target = (float) ($position->current_target ?: $entry * 1.12);
         $profitPct = $this->profitPercent($position, $close);
-        $stopHit = $close <= $stop;
+        $stopBreached = $close <= $stop;
+        $riskZoneTouched = $recentExitSignal && !$stopBreached;
 
-        // 停損觸發、論點 invalidation 仍交給 AI 給完整分析；只有 AI 失敗才走 fallback 規則。
-        // stop_hit=true 時 askAi 會把 action 鎖死 exit，但要求 reasoning / volume_price_signal /
-        // chip_risk_notes / eta_reasoning 寫完整出場分析（取代以前只有一句話「跌破停損建議出場」）。
+        // 停損跌破、論點 invalidation 仍交給 AI 完整審查；只有 AI 失敗才走 fallback 規則。
+        // stop_breached=true 代表進入停損審查模式，不等於必須出場。
         if ($this->apiKey) {
-            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $recentExitSignal, $stopHit);
+            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $recentExitSignal, $stopBreached, $riskZoneTouched);
             if ($ai) {
-                if ($stopHit) {
-                    // 安全網：機械停損觸發，無論 AI 怎麼判都強制 exit
-                    $ai['action'] = 'exit';
-                    $ai['technical_health'] = $ai['technical_health'] ?? 'broken';
-                    $ai['risk_pressure'] = 'high';
-                }
+                $ai['stop_breached'] = $stopBreached;
+                $ai['risk_zone_touched'] = $riskZoneTouched;
                 return $this->normalizeAdvice($position, $ai, $profitPct);
             }
         }
 
-        // AI 失敗時的保守退路：停損觸發優先（最高風險）
-        if ($stopHit) {
+        // AI 失敗時的保守退路：已跌破停損但無 AI 可重新審查時，優先保護風險。
+        if ($stopBreached) {
             return $this->normalizeAdvice($position, [
                 'action' => 'exit',
-                'reasoning' => "收盤 {$close} 跌破停損 {$stop}，建議出場。(AI 分析失敗未取得完整理由，請人工檢視技術破位與論點狀態)",
+                'reasoning' => "收盤 {$close} 跌破停損 {$stop}，且 AI 停損審查失敗，建議先出場控風險。請人工檢視技術破位、論點狀態與籌碼是否仍支持續抱。",
                 'current_stop' => $stop,
                 'current_target' => $target,
                 'profit_percent' => $profitPct,
+                'stop_breached' => true,
+                'risk_zone_touched' => false,
+                'stop_review_state' => 'invalidated',
+                'stop_review_reasoning' => 'AI 停損審查失敗，無法確認原始進場假設仍成立。',
+                'repair_condition' => null,
+                'failure_condition' => '已跌破停損且 AI 無法完成審查',
+                'market_vs_stock_issue' => 'mixed',
+                'decision_summary' => '跌破停損且 AI 審查失敗，先以風控出場。',
+                'why_not_exit' => null,
+                'why_not_hold' => '已跌破停損且無法確認 thesis、技術與籌碼仍支持續抱。',
                 'thesis_health' => $this->thesisHealth($thesisStatus),
                 'technical_health' => 'broken',
                 'chip_health' => $chipContext['health'],
@@ -161,11 +167,15 @@ class SwingPositionUpdateService
                 'current_target' => $target,
                 'profit_percent' => $profitPct,
                 'thesis_invalidated' => true,
+                'risk_zone_touched' => $riskZoneTouched,
                 'thesis_health' => 'invalidated',
                 'technical_health' => 'broken',
                 'chip_health' => $chipContext['health'],
                 'risk_pressure' => 'high',
                 'time_pressure' => $this->timePressure($holdingDays, $position),
+                'decision_summary' => '論點與技術同步轉壞，建議出場。',
+                'why_not_exit' => null,
+                'why_not_hold' => '論點失效且技術結構已破壞。',
             ], $profitPct);
         }
         if ($invalidationSignal) {
@@ -176,11 +186,15 @@ class SwingPositionUpdateService
                 'current_stop' => max($stop, round($close * 0.95, 2)),
                 'current_target' => $target,
                 'profit_percent' => $profitPct,
+                'risk_zone_touched' => $riskZoneTouched,
                 'thesis_health' => 'invalidated',
                 'technical_health' => $technicalContext['health'],
                 'chip_health' => $chipContext['health'],
                 'risk_pressure' => 'medium',
                 'time_pressure' => $this->timePressure($holdingDays, $position),
+                'decision_summary' => '論點轉弱但技術未破，先減碼並保留觀察。',
+                'why_not_exit' => '技術結構尚未破壞，仍可用較小部位驗證。',
+                'why_not_hold' => '論點已出現 invalidation signal，不適合全倉續抱。',
             ], $profitPct);
         }
 
@@ -191,11 +205,15 @@ class SwingPositionUpdateService
                 'current_stop' => max($stop, round($close * 0.96, 2)),
                 'current_target' => $target,
                 'profit_percent' => $profitPct,
+                'risk_zone_touched' => $riskZoneTouched,
                 'thesis_health' => $this->thesisHealth($thesisStatus),
                 'technical_health' => $technicalContext['health'],
                 'chip_health' => $chipContext['health'],
                 'risk_pressure' => 'medium',
                 'time_pressure' => 'normal',
+                'decision_summary' => '已達目標區，建議部分停利或上移停損。',
+                'why_not_exit' => '若 thesis 未失效，可留部分部位延伸獲利。',
+                'why_not_hold' => '價格已達原目標，應先鎖定部分風險報酬。',
             ], $profitPct);
         }
 
@@ -206,11 +224,15 @@ class SwingPositionUpdateService
                 'current_stop' => max($stop, round($close * 0.95, 2)),
                 'current_target' => $target,
                 'profit_percent' => $profitPct,
+                'risk_zone_touched' => $riskZoneTouched,
                 'thesis_health' => $this->thesisHealth($thesisStatus),
                 'technical_health' => $technicalContext['health'],
                 'chip_health' => $chipContext['health'],
                 'risk_pressure' => 'medium',
                 'time_pressure' => 'normal',
+                'decision_summary' => '已有明顯獲利，上移停損保護利潤。',
+                'why_not_exit' => '尚未達到 thesis 或技術失效條件。',
+                'why_not_hold' => '已有明顯獲利，停損應跟上避免回吐。',
             ], $profitPct);
         }
 
@@ -220,11 +242,15 @@ class SwingPositionUpdateService
             'current_stop' => $stop,
             'current_target' => $target,
             'profit_percent' => $profitPct,
+            'risk_zone_touched' => $riskZoneTouched,
             'thesis_health' => $this->thesisHealth($thesisStatus),
             'technical_health' => $technicalContext['health'],
             'chip_health' => $chipContext['health'],
             'risk_pressure' => $chipContext['health'] === 'weak' || $technicalContext['health'] === 'weak' ? 'medium' : 'low',
             'time_pressure' => $this->timePressure($holdingDays, $position),
+            'decision_summary' => '價格仍在停損與目標區間，續抱觀察。',
+            'why_not_exit' => '尚未跌破停損，且產業論點未失效。',
+            'why_not_hold' => null,
         ], $profitPct);
     }
 
@@ -238,7 +264,8 @@ class SwingPositionUpdateService
         array $valuationContext = [],
         array $sectorContext = [],
         bool $recentExitSignal = false,
-        bool $stopHit = false
+        bool $stopBreached = false,
+        bool $riskZoneTouched = false
     ): ?array {
         $candidate = $position->candidate;
         $thesisJson = json_encode($thesisStatus, JSON_UNESCAPED_UNICODE);
@@ -247,28 +274,69 @@ class SwingPositionUpdateService
         $valuationJson = json_encode($valuationContext, JSON_UNESCAPED_UNICODE);
         $sectorJson = json_encode($sectorContext, JSON_UNESCAPED_UNICODE);
         $recentExitText = $recentExitSignal ? 'true（近 7 日測過 stop 或論點失效）' : 'false';
+        $riskZoneText = $riskZoneTouched ? 'true（未跌破今日停損，但近期碰過停損附近或出現 exit 壓力）' : 'false';
         $lessonsSection = \App\Models\AiLesson::getSwingAdviceLessons();
         $lessonsBlock = $lessonsSection !== '' ? $lessonsSection . "\n\n" : '';
+        $previousStopReview = $this->lastStopReviewAdvice($position);
+        $previousStopReviewBlock = '';
+        if ($previousStopReview) {
+            $prevReasoning = mb_substr((string) ($previousStopReview['reasoning'] ?? ''), 0, 180);
+            $previousStopReviewBlock = <<<PREVSTOP
 
-        $stopHitBlock = '';
-        if ($stopHit) {
-            $stopHitBlock = <<<STOPHIT
+# 上次停損審查追蹤
+上次 action: {$previousStopReview['action']}
+上次修復條件: {$previousStopReview['repair_condition']}
+上次失敗條件: {$previousStopReview['failure_condition']}
+上次理由摘要: {$prevReasoning}
 
-# ⚠ 機械停損已觸發（最高優先，覆蓋下方所有規則）
-今日收盤 {$quote->close} ≤ 停損 {$position->current_stop}，action **必須**輸出 exit，禁止改為 hold/trim/adjust（系統會強制 override 為 exit，但仍以你的判斷為主）。
-你的任務從「給日建議」改為「完整出場分析」，輸出時請確保：
-1. **reasoning 至少 80 字**：明確描述
-   - 技術破位細節（跌破哪些均線/支撐位、收盤跌幅、量能型態如爆量收黑/量縮破底/跌停鎖死）
-   - 論點是否同步失效（具體說明哪部分被打破，若論點仍存活但價格破位，要說明可能的解讀）
-   - 籌碼面今日狀態（外資 / 投信 / 自營賣超張數，融資增減）
-2. **chip_risk_notes**：列 2-3 條近期出場訊號的具體數字（例：「外資連 3 日賣超 8500 張」「融資使用率達 92%」）
-3. **volume_price_signal**：今日量價型態的簡短描述（≤ 25 字）
-4. **eta_reasoning**：若認為未來有回補機會，明確列出觸發條件（例：「站回月線且法人轉買連續 5 日」）；若認為論點完全壞掉，寫「不建議回補」
-5. **target_price_reasoning**：仍要寫，但描述為「原訂目標已失效」並補充「若未來重啟，新目標應參考 X」
-6. technical_health 應為 broken，risk_pressure 應為 high
+若上次已因跌破停損給過 hold/trim/adjust，本次必須先判斷修復條件是否發生。若沒有發生，預設應 trim 或 exit；若仍要 hold，必須指出新的重大正面訊號，不能重複同一套理由。
+
+PREVSTOP;
+        }
+
+        $stopReviewBlock = '';
+        if ($stopBreached) {
+            $stopReviewBlock = <<<STOPREVIEW
+
+# ⚠ 停損審查模式（最高優先）
+今日收盤 {$quote->close} ≤ 停損 {$position->current_stop}，代表原交易假設被市場挑戰。跌破停損不是自動出場，但你必須重新審查原始 thesis、技術結構、籌碼、類股/市場背景是否仍支持持有。若核心支柱失效，必須 exit。
+
+停損審查時請先回答：
+1. 原始 thesis 是否仍成立？若成立，跌破停損可能是市場同步回檔、類股拖累、洗盤、假跌破、波動比預期大或停損設太近；若不成立，應偏 exit。
+2. 跌破停損是個股問題，還是市場/類股一起跌？
+3. 資金是否撤退？請用量價、法人、融資或同族群表現判斷。
+4. 若不出場，下一次檢討要看到什麼才算修復？若沒有發生什麼就該出場？
+
+停損審查允許 action=hold/trim/adjust/exit：
+- exit：原始進場假設失效，或技術/籌碼/論點核心支柱明確破壞。
+- trim：假設未完全失效，但風險升高，先降部位。
+- adjust：可調整目標、縮短 ETA 或上移停損；不可下修停損。
+- hold：只允許在 thesis 仍成立且有清楚 repair_condition 時使用。
+
+停損審查必填欄位：
+- stop_review_state: thesis_intact / damaged / invalidated
+- stop_review_reasoning: 為什麼可觀察或必須出場
+- repair_condition: 若不出場，下次檢討要看到什麼才算修復
+- failure_condition: 若出現或持續什麼狀況就該出場
+- market_vs_stock_issue: market_drag / sector_drag / stock_specific / mixed
 
 
-STOPHIT;
+STOPREVIEW;
+        }
+        $riskZoneBlock = '';
+        if ($riskZoneTouched) {
+            $riskZoneBlock = <<<RISKZONE
+
+# 風險區觀察模式
+今日沒有跌破目前停損，不能使用停損審查結論；stop_review_state 必須輸出 null。
+近 7 日 exit 訊號只是風險提醒，不是出場命令。請判斷壓力是否已修復：
+- 若 thesis 仍有效、價格已收回關鍵位置、籌碼沒有惡化，可以 hold，但要用 why_not_exit 說清楚。
+- 若 thesis 仍有效但量能/籌碼/相對強度不足，優先考慮 trim 或 adjust，而不是直接 exit。
+- 若 thesis、技術或籌碼已有核心破壞，才 exit。
+
+風險區觀察可填 repair_condition / failure_condition，但不得填 stop_review_state。
+
+RISKZONE;
         }
         $prompt = <<<PROMPT
 你是穩健派短線交易顧問，盤後針對單筆持倉給日建議，僅輸出 JSON。
@@ -286,7 +354,10 @@ stop {$position->current_stop} | target {$position->current_target}
 估值：{$valuationJson}
 類股：{$sectorJson}
 近 7 日 exit 訊號：{$recentExitText}
-{$stopHitBlock}
+風險區觀察：{$riskZoneText}
+{$stopReviewBlock}
+{$riskZoneBlock}
+{$previousStopReviewBlock}
 {$lessonsBlock}# 基礎約束
 - action ∈ {hold, adjust, trim, exit}
 - current_stop 只能上移或維持（action=exit 例外）
@@ -299,12 +370,16 @@ stop {$position->current_stop} | target {$position->current_target}
 # 進階仲裁
 - related_stock_context 存在時：判斷此股是否仍符合 benefit_level 與 role，若角色弱化要反映在 thesis_health/risk_pressure/reasoning/target/ETA。
 - thesis_status.invalidation_signal=true：不可單獨 exit。只有「論點失效＋技術 weak/broken」或「論點失效＋瀕臨 stop」雙條件成立才 exit；否則 trim/adjust 上移 stop，給時間驗證。invalidation_reason=title_not_found_in_db 多半只是命名飄移，非基本面壞。
-- 近 7 日 exit 訊號=true：即便 close 已收回，預設 trim 上移 stop 或 adjust 縮 ETA，禁止簡單 hold；只有「突破前高＋量能放大＋籌碼回流」三者齊備才可 hold。
+- 近 7 日 exit 訊號=true：這是風險提醒，不是出場命令。若 thesis 仍有效、價格已收回關鍵位置、籌碼沒有惡化，可以 hold；若只是尚未確認修復，才 trim/adjust；若核心支柱破壞才 exit。
+- stop_breached=false 時，stop_review_state 與 stop_review_reasoning 必須是 null，只能用 risk_zone_touched 表達近期受壓。
 
 # 輸出 schema
 {
   "action": "<hold|adjust|trim|exit>",
+  "decision_summary": "<一句話結論>",
   "reasoning": "<理由>",
+  "why_not_exit": "<非 exit 時說明為什麼不用出場；exit 時 null>",
+  "why_not_hold": "<非 hold 時說明為什麼不能全抱；hold 時 null>",
   "current_stop": <num>, "current_target": <num>,
   "target_price_reasoning": "<引用至少一個依據>",
   "profit_percent": <num>,
@@ -317,7 +392,14 @@ stop {$position->current_stop} | target {$position->current_target}
   "chip_health": "<healthy|neutral|weak>",
   "risk_pressure": "<low|medium|high>",
   "chip_risk_notes": ["<原因>"],
-  "volume_price_signal": "<量價描述>"
+  "volume_price_signal": "<量價描述>",
+  "stop_breached": <bool>,
+  "risk_zone_touched": <bool>,
+  "stop_review_state": "<thesis_intact|damaged|invalidated|null>",
+  "stop_review_reasoning": "<停損審查理由或 null>",
+  "repair_condition": "<下次檢討要看到什麼才算修復或 null>",
+  "failure_condition": "<什麼狀況持續/出現就該出場或 null>",
+  "market_vs_stock_issue": "<market_drag|sector_drag|stock_specific|mixed|null>"
 }
 PROMPT;
 
@@ -391,8 +473,49 @@ PROMPT;
         $advice['risk_pressure'] = $advice['risk_pressure'] ?? 'low';
         $advice['chip_risk_notes'] = $advice['chip_risk_notes'] ?? [];
         $advice['volume_price_signal'] = $advice['volume_price_signal'] ?? null;
+        $advice['stop_breached'] = (bool) ($advice['stop_breached'] ?? false);
+        $advice['risk_zone_touched'] = (bool) ($advice['risk_zone_touched'] ?? false);
+        $advice['stop_review_state'] = $advice['stop_breached'] && in_array($advice['stop_review_state'] ?? null, ['thesis_intact', 'damaged', 'invalidated'], true)
+            ? $advice['stop_review_state']
+            : null;
+        $advice['stop_review_reasoning'] = $advice['stop_breached'] ? ($advice['stop_review_reasoning'] ?? null) : null;
+        $advice['repair_condition'] = $advice['repair_condition'] ?? null;
+        $advice['failure_condition'] = $advice['failure_condition'] ?? null;
+        $advice['market_vs_stock_issue'] = in_array($advice['market_vs_stock_issue'] ?? null, ['market_drag', 'sector_drag', 'stock_specific', 'mixed'], true)
+            ? $advice['market_vs_stock_issue']
+            : null;
+        $advice['decision_summary'] = $advice['decision_summary'] ?? $advice['adjustment_reason'] ?? $advice['reasoning'] ?? null;
+        $advice['why_not_exit'] = $action === 'exit' ? null : ($advice['why_not_exit'] ?? null);
+        $advice['why_not_hold'] = $action === 'hold' ? null : ($advice['why_not_hold'] ?? null);
+        $advice['previous_stop_review'] = $this->lastStopReviewAdvice($position);
 
         return $advice;
+    }
+
+    private function lastStopReviewAdvice(SwingPosition $position): ?array
+    {
+        $log = $position->advice_log ?? [];
+        if (!is_array($log)) {
+            return null;
+        }
+
+        for ($i = count($log) - 1; $i >= 0; $i--) {
+            $entry = $log[$i];
+            if (!is_array($entry) || empty($entry['stop_breached']) || empty($entry['stop_review_state'])) {
+                continue;
+            }
+
+            return [
+                'time' => $entry['time'] ?? null,
+                'action' => $entry['action'] ?? null,
+                'stop_review_state' => $entry['stop_review_state'] ?? null,
+                'repair_condition' => $entry['repair_condition'] ?? null,
+                'failure_condition' => $entry['failure_condition'] ?? null,
+                'reasoning' => $entry['reasoning'] ?? null,
+            ];
+        }
+
+        return null;
     }
 
     private function buildValuationContext(SwingPosition $position, string $date): array
