@@ -54,8 +54,8 @@
 | **17:15** | **`stock:fetch-valuations`** | **從 TWSE 抓取本益比/殖利率/股價淨值比（BWIBBU_ALL），供隔日沖 Opus 估值判斷使用** |
 | 18:00 | `news:fetch`                | 盤後新聞抓取                                                    |
 | 18:15 | `news:compute-indices`      | 計算新聞指數                                                    |
-| **18:25** | **`stock:research-investment-theses`** | **AI 自動研究/更新短線產業投資論點** |
-| **18:30** | **`stock:update-swing-positions`** | **每日盤後更新使用者短線持倉與損益快照** |
+| **18:20** | **`stock:research-investment-theses`** | **AI 自動研究/更新短線產業投資論點** |
+| **18:50** | **`stock:update-swing-positions`** | **每日盤後更新使用者短線持倉與損益快照** |
 | **19:00** | **`stock:ai-screen-swing`** | **AI 理專型短線選股（產業論點 + 技術/籌碼/估值）** |
 | **19:30** | **`stock:daily-review --mode=swing`** | **短線 AI 檢討報告** |
 | 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + 短線檢討/候選/持倉快照/教訓新鮮度 + API 連通性 + Log 大小警告） |
@@ -129,8 +129,8 @@
 14:30 日K ─┬─ 16:30 法人 ─ 17:00 融資 ─ 17:15 估值
 18:00 新聞 ─ 18:15 新聞指數
              │
-             ├─ 18:25 AI 研究/更新 investment_theses（confidence 衰退與 inactive）
-             ├─ 18:30 更新 user 專屬 swing_positions + snapshots（hold/adjust/exit）
+             ├─ 18:20 AI 研究/更新 investment_theses（confidence 衰退與 inactive）
+             ├─ 18:50 更新 user 專屬 swing_positions + snapshots（hold/adjust/exit）
              └─ 19:00 swing AI 選股（讀 is_swing_eligible；全域 candidates.mode=swing）
                          │
                          └─ 使用者於 /swing 手動確認買入，建立自己的持倉
