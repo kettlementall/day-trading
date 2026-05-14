@@ -139,7 +139,7 @@ class OvernightExitMonitorService
             $advice = $this->askSonnet($slot, $candidate, $monitor, $quote, $yesterdayVolumes[$candidate->stock_id] ?? 0);
 
             match ($advice['action']) {
-                'exit' => $this->handleExit($monitor, $slot, $advice, $summary, $symbol, $name),
+                'exit' => $this->handleExit($monitor, $slot, $advice, $summary, $symbol, $name, $quote, $candidate),
                 'adjust' => $this->handleAdjust($monitor, $slot, $advice, $summary, $symbol, $name),
                 default => $this->handleHold($monitor, $slot, $advice, $summary),
             };
@@ -241,21 +241,41 @@ class OvernightExitMonitorService
         $monitor->save();
     }
 
-    private function handleExit(CandidateMonitor $monitor, string $slot, array $advice, array &$summary, string $symbol = '', string $name = ''): void
+    private function handleExit(
+        CandidateMonitor $monitor,
+        string $slot,
+        array $advice,
+        array &$summary,
+        string $symbol = '',
+        string $name = '',
+        array $quote = [],
+        ?Candidate $candidate = null
+    ): void
     {
+        $exitPrice = (float) ($quote['current_price'] ?? $quote['close'] ?? $quote['open'] ?? 0);
+        $buyPrice = $candidate ? (float) $candidate->suggested_buy : 0.0;
+        $profitPct = ($buyPrice > 0 && $exitPrice > 0)
+            ? round(($exitPrice - $buyPrice) / $buyPrice * 100, 1)
+            : 0;
+
         $monitor->logAiAdvice('exit', $advice['reasoning'], null, [
             'strategy_state' => $advice['strategy_state'] ?? null,
             'strategy_issue' => $advice['strategy_issue'] ?? null,
         ]);
         $this->transition($monitor, CandidateMonitor::STATUS_CLOSED, "{$slot} AI 建議提前出場：{$advice['reasoning']}");
-        $monitor->update(['exit_time' => now()]);
+        $updates = ['exit_time' => now()];
+        if ($exitPrice > 0) {
+            $updates['exit_price'] = $exitPrice;
+        }
+        $monitor->update($updates);
         $summary['exited']++;
         $this->telegram->broadcast(sprintf(
             "🔴🔴🔴 *隔日沖AI出場* 🔴🔴🔴\n\n"
             . "📌 *%s %s*\n"
+            . "💰 出場：*%.2f*｜損益：*%+.1f%%*\n"
             . "💡 %s\n"
             . "⏰ %s",
-            $symbol, $name, $advice['reasoning'], $slot
+            $symbol, $name, $exitPrice, $profitPct, $advice['reasoning'], $slot
         ));
     }
 

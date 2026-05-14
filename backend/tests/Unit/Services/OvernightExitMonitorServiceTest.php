@@ -2,9 +2,15 @@
 
 namespace Tests\Unit\Services;
 
+use App\Models\Candidate;
+use App\Models\CandidateMonitor;
+use App\Services\FugleRealtimeClient;
 use App\Services\OvernightExitMonitorService;
+use App\Services\TelegramService;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
+use ReflectionMethod;
 
 /**
  * 隔日沖出場監控 Sonnet prompt 構築相關的純函數測試。
@@ -18,6 +24,90 @@ use PHPUnit\Framework\TestCase;
  */
 class OvernightExitMonitorServiceTest extends TestCase
 {
+    public function test_handleExit_records_current_price_as_exit_price(): void
+    {
+        $monitor = new class extends CandidateMonitor {
+            public array $updated = [];
+
+            public function save(array $options = []): bool
+            {
+                return true;
+            }
+
+            public function update(array $attributes = [], array $options = []): bool
+            {
+                $this->updated = $attributes;
+                $this->setRawAttributes([...$this->getAttributes(), ...$attributes], true);
+
+                return true;
+            }
+
+            public function logTransition(string $fromStatus, string $toStatus, string $reason): void
+            {
+                $this->state_log = [[
+                    'from_status' => $fromStatus,
+                    'to_status' => $toStatus,
+                    'reason' => $reason,
+                ]];
+            }
+
+            public function logAiAdvice(string $action, string $notes, ?array $adjustments = null, array $context = []): void
+            {
+                $this->ai_advice_log = [[
+                    'action' => $action,
+                    'notes' => $notes,
+                    'adjustments' => $adjustments,
+                    ...$context,
+                ]];
+            }
+        };
+        $monitor->setRawAttributes([
+            'status' => CandidateMonitor::STATUS_HOLDING,
+            'current_target' => 110,
+            'current_stop' => 96,
+            'ai_advice_log' => null,
+            'state_log' => null,
+        ], true);
+
+        $candidate = new Candidate();
+        $candidate->setRawAttributes(['suggested_buy' => 100], true);
+
+        $telegram = $this->createMock(TelegramService::class);
+        $telegram->expects($this->once())->method('broadcast');
+
+        $serviceReflector = new ReflectionClass(OvernightExitMonitorService::class);
+        $service = $serviceReflector->newInstanceWithoutConstructor();
+        $fugleProperty = $serviceReflector->getProperty('fugle');
+        $fugleProperty->setAccessible(true);
+        $fugleProperty->setValue($service, $this->createMock(FugleRealtimeClient::class));
+        $telegramProperty = $serviceReflector->getProperty('telegram');
+        $telegramProperty->setAccessible(true);
+        $telegramProperty->setValue($service, $telegram);
+
+        $summary = ['exited' => 0];
+        $method = new ReflectionMethod(OvernightExitMonitorService::class, 'handleExit');
+        $method->setAccessible(true);
+        $method->invokeArgs($service, [
+            $monitor,
+            '1015',
+            [
+                'reasoning' => 'strategy_state=failed，量價結構轉弱，提前出場避免尾盤擴大虧損',
+                'strategy_state' => 'failed',
+                'strategy_issue' => '量價結構轉弱',
+            ],
+            &$summary,
+            '2330',
+            '台積電',
+            ['current_price' => 102.5, 'close' => 102, 'open' => 101],
+            $candidate,
+        ]);
+
+        $this->assertSame(CandidateMonitor::STATUS_CLOSED, $monitor->status);
+        $this->assertSame(102.5, $monitor->updated['exit_price']);
+        $this->assertArrayHasKey('exit_time', $monitor->updated);
+        $this->assertSame(1, $summary['exited']);
+    }
+
     #[DataProvider('gapDiffProvider')]
     public function test_classifyGapDiff_returns_correct_label(float $gapDiff, string $expected): void
     {
