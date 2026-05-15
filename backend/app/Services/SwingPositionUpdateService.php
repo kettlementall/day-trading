@@ -417,37 +417,70 @@ stop {$position->current_stop} | target {$position->current_target}
 }
 PROMPT;
 
-        try {
-            $response = Http::timeout(60)
-                ->withHeaders([
-                    'x-api-key' => $this->apiKey,
-                    'anthropic-version' => '2023-06-01',
-                    'content-type' => 'application/json',
-                ])
-                ->post('https://api.anthropic.com/v1/messages', [
-                    'model' => $this->model,
-                    'max_tokens' => 1600,
-                    'messages' => [['role' => 'user', 'content' => $prompt]],
-                ]);
+        $maxAttempts = 3;
+        $symbol = $position->stock?->symbol ?? "id={$position->id}";
 
-            if (!$response->successful()) {
-                Log::error('SwingPositionUpdate API error: ' . $response->body());
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                $response = Http::timeout(60)
+                    ->withHeaders([
+                        'x-api-key' => $this->apiKey,
+                        'anthropic-version' => '2023-06-01',
+                        'content-type' => 'application/json',
+                    ])
+                    ->post('https://api.anthropic.com/v1/messages', [
+                        'model' => $this->model,
+                        'max_tokens' => 1600,
+                        'messages' => [['role' => 'user', 'content' => $prompt]],
+                    ]);
+
+                if (!$response->successful()) {
+                    Log::warning("SwingPositionUpdate {$symbol} attempt {$attempt}/{$maxAttempts} HTTP {$response->status()}: " . mb_substr($response->body(), 0, 300));
+                    if ($attempt < $maxAttempts && in_array($response->status(), [429, 500, 502, 503, 504, 529], true)) {
+                        sleep($attempt * 5);
+                        continue;
+                    }
+                    Log::error("SwingPositionUpdate {$symbol} 連續 {$maxAttempts} 次 API 失敗，走 fallback");
+                    return null;
+                }
+
+                $text = trim($response->json('content.0.text', ''));
+                $text = preg_replace('/^```json?\s*/i', '', $text);
+                $text = preg_replace('/\s*```$/', '', $text);
+                $start = strpos($text, '{');
+                $end = strrpos($text, '}');
+                if ($start === false || $end === false || $end <= $start) {
+                    Log::warning("SwingPositionUpdate {$symbol} attempt {$attempt}/{$maxAttempts} 無 JSON 大括號: " . mb_substr($text, 0, 200));
+                    if ($attempt < $maxAttempts) {
+                        sleep($attempt * 3);
+                        continue;
+                    }
+                    return null;
+                }
+
+                $data = json_decode(substr($text, $start, $end - $start + 1), true);
+                if (!is_array($data)) {
+                    Log::warning("SwingPositionUpdate {$symbol} attempt {$attempt}/{$maxAttempts} JSON decode 失敗: " . mb_substr($text, $start, 200));
+                    if ($attempt < $maxAttempts) {
+                        sleep($attempt * 3);
+                        continue;
+                    }
+                    return null;
+                }
+
+                return $data;
+            } catch (\Throwable $e) {
+                Log::warning("SwingPositionUpdate {$symbol} attempt {$attempt}/{$maxAttempts} exception: " . $e->getMessage());
+                if ($attempt < $maxAttempts) {
+                    sleep($attempt * 5);
+                    continue;
+                }
+                Log::error("SwingPositionUpdate {$symbol} 連續 {$maxAttempts} 次 exception，走 fallback: " . $e->getMessage());
                 return null;
             }
-
-            $text = trim($response->json('content.0.text', ''));
-            $start = strpos($text, '{');
-            $end = strrpos($text, '}');
-            if ($start === false || $end === false || $end <= $start) {
-                return null;
-            }
-            $data = json_decode(substr($text, $start, $end - $start + 1), true);
-
-            return is_array($data) ? $data : null;
-        } catch (\Throwable $e) {
-            Log::error('SwingPositionUpdate: ' . $e->getMessage());
-            return null;
         }
+
+        return null;
     }
 
     private function normalizeAdvice(SwingPosition $position, array $advice, ?float $profitPercent = null): array
