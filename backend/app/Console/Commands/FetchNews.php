@@ -40,12 +40,54 @@ class FetchNews extends Command
             usleep(500_000);
         }
 
+        $backfilled = $this->backfillMissingCnyesContent($date);
+        if ($backfilled > 0) {
+            $this->info("  回補內文 {$backfilled} 篇");
+        }
+
         $time = now()->format('H:i');
         app(TelegramService::class)->broadcast("✅ *新聞抓取*({$time}) 完成\n📅 {$date} | 共 {$totalCount} 篇", 'system');
 
         $this->info("新聞抓取完成，共 {$totalCount} 篇");
 
         return self::SUCCESS;
+    }
+
+    private function backfillMissingCnyesContent(string $date): int
+    {
+        $count = 0;
+        NewsArticle::where('source', 'cnyes')
+            ->where('fetched_date', $date)
+            ->whereIn('category', ['tw_stock', 'international'])
+            ->whereNull('content')
+            ->whereNotNull('url')
+            ->orderByDesc('published_at')
+            ->limit(30)
+            ->get()
+            ->each(function (NewsArticle $article) use (&$count) {
+                if (!preg_match('/\/news\/id\/(\d+)/', (string) $article->url, $matches)) {
+                    return;
+                }
+
+                $content = $this->fetchCnyesContent($matches[1], (string) $article->url);
+                usleep(300_000);
+
+                if (!$content) {
+                    return;
+                }
+
+                $article->fill([
+                    'content' => mb_substr($content, 0, 12000),
+                    'content_fetched_at' => now(),
+                    'sentiment_score' => null,
+                    'sentiment_label' => null,
+                    'ai_analysis' => null,
+                ]);
+                $article->save();
+                $count++;
+            });
+
+        return $count;
     }
 
     private function fetchCnyesCategory(string $category, string $date): int
@@ -81,20 +123,42 @@ class FetchNews extends Command
                     $publishedAt = isset($item['publishAt'])
                         ? Carbon::createFromTimestamp($item['publishAt'], 'Asia/Taipei')
                         : null;
+                    if ($publishedAt && $publishedAt->toDateString() > $date) {
+                        continue;
+                    }
+                    $content = null;
+                    if ($newsId && in_array($category, ['tw_stock', 'wd_stock'], true)) {
+                        $content = $this->fetchCnyesContent((string) $newsId, $url);
+                        usleep(200_000);
+                    }
 
-                    $fullText = $title . ' ' . $summary;
+                    $fullText = $title . ' ' . $summary . ' ' . ($content ?? '');
                     $industry = NewsIndustryMap::classify($fullText);
 
-                    NewsArticle::updateOrCreate(
-                        ['source' => 'cnyes', 'title' => mb_substr($title, 0, 500), 'fetched_date' => $date],
-                        [
-                            'summary' => mb_substr($summary, 0, 2000),
-                            'url' => mb_substr($url, 0, 1000),
-                            'category' => $mappedCategory,
-                            'industry' => $industry,
-                            'published_at' => $publishedAt,
-                        ]
-                    );
+                    $article = NewsArticle::firstOrNew([
+                        'source' => 'cnyes',
+                        'title' => mb_substr($title, 0, 500),
+                        'fetched_date' => $date,
+                    ]);
+                    $updates = [
+                        'summary' => mb_substr($summary, 0, 2000),
+                        'url' => mb_substr($url, 0, 1000),
+                        'category' => $mappedCategory,
+                        'industry' => $industry,
+                        'published_at' => $publishedAt,
+                    ];
+                    $newContent = $content ? mb_substr($content, 0, 12000) : null;
+                    if ($newContent) {
+                        $updates['content'] = $newContent;
+                        $updates['content_fetched_at'] = now();
+                    }
+                    if (!$article->exists || ($newContent && !$article->content)) {
+                        $updates['sentiment_score'] = null;
+                        $updates['sentiment_label'] = null;
+                        $updates['ai_analysis'] = null;
+                    }
+                    $article->fill($updates);
+                    $article->save();
                     $count++;
                 }
 
@@ -107,5 +171,52 @@ class FetchNews extends Command
         }
 
         return $count;
+    }
+
+    private function fetchCnyesContent(string $newsId, string $url): ?string
+    {
+        try {
+            $response = Http::timeout(15)->get("https://api.cnyes.com/media/api/v1/news/{$newsId}");
+            if ($response->successful()) {
+                $content = $response->json('items.content')
+                    ?? $response->json('items.data.content')
+                    ?? $response->json('content');
+                $text = $this->cleanContent((string) $content);
+                if ($text !== '') {
+                    return $text;
+                }
+            }
+        } catch (\Exception $e) {
+            Log::warning("FetchNews cnyes detail {$newsId}: " . $e->getMessage());
+        }
+
+        if ($url === '') {
+            return null;
+        }
+
+        try {
+            $response = Http::timeout(15)->get($url);
+            if (!$response->successful()) {
+                return null;
+            }
+
+            $html = $response->body();
+            $html = preg_replace('/<script\b[^>]*>.*?<\/script>/is', ' ', $html);
+            $html = preg_replace('/<style\b[^>]*>.*?<\/style>/is', ' ', $html);
+            $text = $this->cleanContent(strip_tags($html));
+
+            return $text !== '' ? $text : null;
+        } catch (\Exception $e) {
+            Log::warning("FetchNews cnyes html {$newsId}: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    private function cleanContent(string $content): string
+    {
+        $content = html_entity_decode($content, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $content = preg_replace('/\s+/u', ' ', $content);
+
+        return trim((string) $content);
     }
 }

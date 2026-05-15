@@ -121,9 +121,15 @@ class InvestmentThesisResearchService
             ->values()
             ->take(12);
 
-        $newsLines = $articles->map(fn ($a) =>
-            "- [{$a->industry}/{$a->sentiment_label}/impact=" . ($a->ai_analysis['impact'] ?? '-') . "] {$a->title}" . ($a->summary ? " — " . mb_substr($a->summary, 0, 180) : '')
-        )->implode("\n");
+        $newsLines = $articles->map(function ($a) {
+            $summary = $a->summary ? " — " . mb_substr($a->summary, 0, 180) : '';
+            $content = $a->content ? " | 內文摘錄：" . mb_substr(preg_replace('/\s+/u', ' ', $a->content), 0, 300) : '';
+            $risk = data_get($a->ai_analysis, 'short_term_risk')
+                ? ' | 短線風險=' . data_get($a->ai_analysis, 'risk_type', 'unknown') . '：' . data_get($a->ai_analysis, 'risk_reason', '')
+                : '';
+
+            return "- [{$a->industry}/{$a->sentiment_label}/impact=" . ($a->ai_analysis['impact'] ?? '-') . "] {$a->title}{$summary}{$risk}{$content}";
+        })->implode("\n");
         $indexLines = $indices->map(fn ($i) =>
             "{$i->date->format('Y-m-d')} {$i->scope}:{$i->scope_value} 情緒{$i->sentiment} 熱度{$i->heatmap} 恐慌{$i->panic}"
         )->implode("\n");

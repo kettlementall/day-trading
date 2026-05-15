@@ -166,6 +166,20 @@ class SwingController extends Controller
             $add('volatility', '波動風險', 'warning');
         }
 
+        $newsRisk = data_get($candidate->swing_entry_plan, 'news_risk');
+        if (data_get($newsRisk, 'has_short_term_risk')) {
+            $label = match (data_get($newsRisk, 'risk_type')) {
+                'margin_pressure' => '獲利率風險',
+                'earnings_quality' => '獲利品質',
+                'guidance_uncertainty' => '展望不確定',
+                'order_delay' => '訂單遞延',
+                'cost_pressure' => '成本壓力',
+                'event_risk' => '事件風險',
+                default => '新聞風險',
+            };
+            $add('news', $label, 'danger');
+        }
+
         $priority = ['danger' => 0, 'warning' => 1, 'positive' => 2, 'info' => 3];
         return collect(array_values($tags))
             ->sortBy(fn (array $tag) => $priority[$tag['level']] ?? 9)

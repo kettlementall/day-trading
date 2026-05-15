@@ -18,7 +18,7 @@ class SwingPositionUpdateService
     private string $apiKey;
     private string $model;
 
-    public function __construct()
+    public function __construct(private StockNewsRiskContextService $newsRiskContext)
     {
         $this->apiKey = config('services.anthropic.api_key', '');
         $this->model = config('services.anthropic.overnight_model', 'claude-sonnet-4-6');
@@ -55,8 +55,9 @@ class SwingPositionUpdateService
             $chipContext = $this->buildChipContext($position, $date);
             $valuationContext = $this->buildValuationContext($position, $date);
             $sectorContext = $this->buildSectorContext($position, $date);
+            $newsRiskContext = $this->newsRiskContext->build($position->stock, $date, 5, 6);
             $recentExitSignal = $this->hasRecentExitSignal($position, $quote);
-            $advice = $this->buildAdvice($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $recentExitSignal);
+            $advice = $this->buildAdvice($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $newsRiskContext, $recentExitSignal);
             $action = $advice['action'] ?? 'hold';
 
             if ($action === 'exit') {
@@ -108,6 +109,7 @@ class SwingPositionUpdateService
         array $chipContext,
         array $valuationContext = [],
         array $sectorContext = [],
+        array $newsRiskContext = [],
         bool $recentExitSignal = false
     ): array {
         $close = (float) $quote->close;
@@ -121,10 +123,11 @@ class SwingPositionUpdateService
         // 停損跌破、論點 invalidation 仍交給 AI 完整審查；只有 AI 失敗才走 fallback 規則。
         // stop_breached=true 代表進入停損審查模式，不等於必須出場。
         if ($this->apiKey) {
-            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $recentExitSignal, $stopBreached, $riskZoneTouched);
+            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $newsRiskContext, $recentExitSignal, $stopBreached, $riskZoneTouched);
             if ($ai) {
                 $ai['stop_breached'] = $stopBreached;
                 $ai['risk_zone_touched'] = $riskZoneTouched;
+                $ai['news_risk'] = $newsRiskContext;
                 return $this->normalizeAdvice($position, $ai, $profitPct);
             }
         }
@@ -152,6 +155,7 @@ class SwingPositionUpdateService
                 'chip_health' => $chipContext['health'],
                 'risk_pressure' => 'high',
                 'time_pressure' => $this->timePressure($holdingDays, $position),
+                'news_risk' => $newsRiskContext,
             ], $profitPct);
         }
 
@@ -176,6 +180,7 @@ class SwingPositionUpdateService
                 'decision_summary' => '論點與技術同步轉壞，建議出場。',
                 'why_not_exit' => null,
                 'why_not_hold' => '論點失效且技術結構已破壞。',
+                'news_risk' => $newsRiskContext,
             ], $profitPct);
         }
         if ($invalidationSignal) {
@@ -195,6 +200,7 @@ class SwingPositionUpdateService
                 'decision_summary' => '論點轉弱但技術未破，先減碼並保留觀察。',
                 'why_not_exit' => '技術結構尚未破壞，仍可用較小部位驗證。',
                 'why_not_hold' => '論點已出現 invalidation signal，不適合全倉續抱。',
+                'news_risk' => $newsRiskContext,
             ], $profitPct);
         }
 
@@ -214,6 +220,7 @@ class SwingPositionUpdateService
                 'decision_summary' => '已達目標區，建議部分停利或上移停損。',
                 'why_not_exit' => '若 thesis 未失效，可留部分部位延伸獲利。',
                 'why_not_hold' => '價格已達原目標，應先鎖定部分風險報酬。',
+                'news_risk' => $newsRiskContext,
             ], $profitPct);
         }
 
@@ -233,6 +240,7 @@ class SwingPositionUpdateService
                 'decision_summary' => '已有明顯獲利，上移停損保護利潤。',
                 'why_not_exit' => '尚未達到 thesis 或技術失效條件。',
                 'why_not_hold' => '已有明顯獲利，停損應跟上避免回吐。',
+                'news_risk' => $newsRiskContext,
             ], $profitPct);
         }
 
@@ -251,6 +259,7 @@ class SwingPositionUpdateService
             'decision_summary' => '價格仍在停損與目標區間，續抱觀察。',
             'why_not_exit' => '尚未跌破停損，且產業論點未失效。',
             'why_not_hold' => null,
+            'news_risk' => $newsRiskContext,
         ], $profitPct);
     }
 
@@ -263,6 +272,7 @@ class SwingPositionUpdateService
         array $chipContext,
         array $valuationContext = [],
         array $sectorContext = [],
+        array $newsRiskContext = [],
         bool $recentExitSignal = false,
         bool $stopBreached = false,
         bool $riskZoneTouched = false
@@ -273,6 +283,7 @@ class SwingPositionUpdateService
         $chipJson = json_encode($chipContext, JSON_UNESCAPED_UNICODE);
         $valuationJson = json_encode($valuationContext, JSON_UNESCAPED_UNICODE);
         $sectorJson = json_encode($sectorContext, JSON_UNESCAPED_UNICODE);
+        $newsRiskText = $this->newsRiskContext->toPrompt($newsRiskContext);
         $recentExitText = $recentExitSignal ? 'true（近 7 日測過 stop 或論點失效）' : 'false';
         $riskZoneText = $riskZoneTouched ? 'true（未跌破今日停損，但近期碰過停損附近或出現 exit 壓力）' : 'false';
         $lessonsSection = \App\Models\AiLesson::getSwingAdviceLessons();
@@ -353,6 +364,8 @@ stop {$position->current_stop} | target {$position->current_target}
 籌碼：{$chipJson}
 估值：{$valuationJson}
 類股：{$sectorJson}
+個股新聞風險：
+{$newsRiskText}
 近 7 日 exit 訊號：{$recentExitText}
 風險區觀察：{$riskZoneText}
 {$stopReviewBlock}
@@ -369,6 +382,7 @@ stop {$position->current_stop} | target {$position->current_target}
 
 # 進階仲裁
 - related_stock_context 存在時：判斷此股是否仍符合 benefit_level 與 role，若角色弱化要反映在 thesis_health/risk_pressure/reasoning/target/ETA。
+- 個股新聞風險若有 short_term_risk=true 或負面新聞，必須判斷是否破壞原始 thesis；說明它是短線價格風險、獲利品質風險，還是 thesis 失效。不可只用技術面忽略法說/財報/訂單利空。
 - thesis_status.invalidation_signal=true：不可單獨 exit。只有「論點失效＋技術 weak/broken」或「論點失效＋瀕臨 stop」雙條件成立才 exit；否則 trim/adjust 上移 stop，給時間驗證。invalidation_reason=title_not_found_in_db 多半只是命名飄移，非基本面壞。
 - 近 7 日 exit 訊號=true：這是風險提醒，不是出場命令。若 thesis 仍有效、價格已收回關鍵位置、籌碼沒有惡化，可以 hold；若只是尚未確認修復，才 trim/adjust；若核心支柱破壞才 exit。
 - stop_breached=false 時，stop_review_state 與 stop_review_reasoning 必須是 null，只能用 risk_zone_touched 表達近期受壓。

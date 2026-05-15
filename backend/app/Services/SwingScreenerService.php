@@ -22,7 +22,10 @@ class SwingScreenerService
     private string $model;
     private int $maxAiAttempts = 3;
 
-    public function __construct(private FugleRealtimeClient $fugle)
+    public function __construct(
+        private FugleRealtimeClient $fugle,
+        private StockNewsRiskContextService $newsRiskContext,
+    )
     {
         $this->apiKey = config('services.anthropic.api_key', '');
         $this->model = config('services.anthropic.screening_model', 'claude-opus-4-6');
@@ -74,6 +77,7 @@ class SwingScreenerService
                 'target_price_reasoning' => $ai['target_price_reasoning'] ?? null,
                 'eta_reasoning' => $ai['eta_reasoning'] ?? null,
                 'review_after_days' => $ai['review_after_days'] ?? null,
+                'news_risk' => $row['news_risk'] ?? null,
             ], $entryPlan);
             $swingThesis = array_merge(
                 is_array($row['thesis'] ?? null) ? $row['thesis'] : [],
@@ -206,6 +210,7 @@ class SwingScreenerService
         // ETF 的 industry 欄位資料品質差（部分舊 ETF 被誤填成塑膠/紡織等），不對應單一類股
         $sectorChange = ($isEtf || !$stock->industry) ? null : SectorIndex::getChangeForIndustry($date, $stock->industry);
         $sectorRank = ($isEtf || !$stock->industry) ? null : SectorIndex::getRankForIndustry($date, $stock->industry);
+        $newsRisk = $this->newsRiskContext->build($stock, $date, 5, 6);
 
         $trendScore = ($ma20 && $ma60 && $close > $ma20 && $ma20 >= $ma60) ? 25 : 0;
         $pullbackScore = ($ma20 && abs($close - $ma20) / $ma20 < 0.05) ? 15 : 0;
@@ -255,6 +260,7 @@ class SwingScreenerService
                 'change_percent' => $sectorChange,
                 'rank' => $sectorRank,
             ],
+            'news_risk' => $newsRisk,
             'chips' => [
                 'institutional_5d' => $inst->sum('total_net'),
                 'margin_5d' => $margin->sum('margin_change'),
@@ -411,8 +417,9 @@ class SwingScreenerService
                     $secRank ? "(排名#{$secRank})" : '',
                 )
                 : '類股=—';
+            $newsRiskText = $this->newsRiskContext->toPrompt($r['news_risk'] ?? []);
 
-            return "{$r['symbol']} {$r['name']} {$r['industry']} pre_score={$r['pre_score']} close={$r['entry_price']} | {$valText} | {$secText} | thesis=" . json_encode($r['thesis'], JSON_UNESCAPED_UNICODE);
+            return "{$r['symbol']} {$r['name']} {$r['industry']} pre_score={$r['pre_score']} close={$r['entry_price']} | {$valText} | {$secText} | news_risk={$newsRiskText} | thesis=" . json_encode($r['thesis'], JSON_UNESCAPED_UNICODE);
         })->implode("\n");
         $totalCount = $candidates->count();
         $lessonsSection = \App\Models\AiLesson::getSwingScreeningLessons();
@@ -436,8 +443,9 @@ class SwingScreenerService
 4. 同 strategy 內必須有分數階梯，不可全同分。
 5. benefit_level=core 提高論點權重；secondary 中度；watch 僅輔助。
 6. **估值僅為輔助**：純估值股（PE 低／殖利率高但無題材催化、無技術驅動）≤65 分且不得 selected。殖利率型存股（官股金控、防禦傳產）不適合 4 週短線（修正期以季計）。80+ 必須三要素齊全：論點關聯 + 技術驅動 + 可驗證催化窗（法說/訂單/季報/產業會議/政策/報價）。不同產業估值基準（半導體 vs 金融）由你判斷。
-7. **字數紀律**：reasoning ≤50 字（策略 + 個股角色 + 風險）｜target_price_reasoning ≤35 字（含壓力/均線/ATR/R:R 之一）｜eta_reasoning ≤30 字（含趨勢/波動/量能/催化窗之一）｜risk_notes ≤3 條每條 ≤15 字｜selected=false 可更短 20-30 字。
-8. **禁止輸出 entry_plan 物件**（系統會自動從 top-level 欄位組合）。
+7. **單檔新聞風險必須處理**：若 news_risk 顯示 short_term_risk=true 或負面新聞，必須在 score、selected、reasoning、risk_notes 反映；不可只因產業論點正面而忽略單檔法說/財報/訂單風險。
+8. **字數紀律**：reasoning ≤50 字（策略 + 個股角色 + 風險）｜target_price_reasoning ≤35 字（含壓力/均線/ATR/R:R 之一）｜eta_reasoning ≤30 字（含趨勢/波動/量能/催化窗之一）｜risk_notes ≤3 條每條 ≤15 字｜selected=false 可更短 20-30 字。
+9. **禁止輸出 entry_plan 物件**（系統會自動從 top-level 欄位組合）。
 
 # 輸出格式（JSON 陣列共 {$totalCount} 筆，不包 markdown）
 [{
