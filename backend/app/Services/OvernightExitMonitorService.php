@@ -577,7 +577,7 @@ USER;
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model'      => $this->model,
-                    'max_tokens' => 768,
+                    'max_tokens' => 1536,
                     'system'     => [
                         [
                             'type'          => 'text',
@@ -591,6 +591,13 @@ USER;
             if (!$response->successful()) {
                 Log::warning("OvernightExitMonitor Sonnet {$symbol}: HTTP {$response->status()} — "
                     . mb_substr($response->body(), 0, 500));
+                return $fallback;
+            }
+
+            $stopReason = $response->json('stop_reason');
+            if ($stopReason === 'max_tokens') {
+                Log::warning("OvernightExitMonitor Sonnet {$symbol}: 回應因 max_tokens 截斷 — "
+                    . mb_substr($response->json('content.0.text', ''), 0, 500));
                 return $fallback;
             }
 
