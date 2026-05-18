@@ -31,8 +31,10 @@ class SwingScreenerService
         $this->model = config('services.anthropic.screening_model', 'claude-opus-4-6');
     }
 
-    public function screen(string $date): Collection
+    public function screen(string $date, ?string $tradeDate = null): Collection
     {
+        $tradeDate = $tradeDate ?? $date;
+
         $theses = InvestmentThesis::where('status', InvestmentThesis::STATUS_ACTIVE)
             ->where('confidence_score', '>=', 40)
             ->where(function ($q) use ($date) {
@@ -58,9 +60,9 @@ class SwingScreenerService
         $selected = $this->askAiWithRetry($date, $rows, $theses, $aiRows);
         $selectedBySymbol = collect($selected)->keyBy('symbol');
 
-        Candidate::where('trade_date', $date)->where('mode', 'swing')->delete();
+        Candidate::where('trade_date', $tradeDate)->where('mode', 'swing')->delete();
 
-        $created = $aiRows->map(function (array $row) use ($date, $selectedBySymbol) {
+        $created = $aiRows->map(function (array $row) use ($date, $tradeDate, $selectedBySymbol) {
             $ai = $selectedBySymbol->get($row['symbol']);
             $score = max(0, min(100, (float) $ai['score']));
             $aiSelected = (bool) $ai['selected'];
@@ -86,7 +88,7 @@ class SwingScreenerService
 
             $candidate = Candidate::create([
                 'stock_id' => $row['stock_id'],
-                'trade_date' => $date,
+                'trade_date' => $tradeDate,
                 'mode' => 'swing',
                 'suggested_buy' => $entry,
                 'target_price' => $target,

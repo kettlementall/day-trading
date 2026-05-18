@@ -82,7 +82,7 @@ scheduledCommand('stock:research-investment-theses', 'AI 產業論點研究', se
 scheduledCommand('stock:update-swing-positions', '短線持倉更新', selfNotify: true)
     ->dailyAt('18:50')->weekdays();
 scheduledCommand('stock:ai-screen-swing', '短線 AI 選股', selfNotify: true)
-    ->dailyAt('19:00')->weekdays();
+    ->dailyAt('19:00');
 
 // 腿 2：盤中動態加入（4+1 軸聯集 → Fugle 即時報價 → 4 條規則 → Haiku 快評 → 寫入 candidates）
 // 09:35 觸發 = 09:30 5 分 K 收後 5 分鐘，足夠抓老師 09:37 報的明牌

@@ -56,7 +56,7 @@
 | 18:15 | `news:compute-indices`      | 計算新聞指數                                                    |
 | **18:20** | **`stock:research-investment-theses`** | **AI 自動研究/更新短線產業投資論點** |
 | **18:50** | **`stock:update-swing-positions`** | **每日盤後更新使用者短線持倉與損益快照** |
-| **19:00** | **`stock:ai-screen-swing`** | **AI 理專型短線選股（產業論點 + 技術/籌碼/估值）** |
+| **19:00** | **`stock:ai-screen-swing`** | **AI 理專型短線選股（產業論點 + 技術/籌碼/估值；週一~週五寫入當日 trade_date，週日/連假最後一晚追加跑一次並以 `previousTradingDay` 為 trade_date 覆蓋最近交易日候選，讓使用者開盤前看到最新 thesis 選股）** |
 | **19:30** | **`stock:daily-review --mode=swing`** | **短線 AI 檢討報告** |
 | 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + 短線檢討/候選/持倉快照/教訓新鮮度 + API 連通性 + Log 大小警告） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
@@ -131,7 +131,7 @@
              │
              ├─ 18:20 AI 研究/更新 investment_theses（confidence 衰退與 inactive）
              ├─ 18:50 更新 user 專屬 swing_positions + snapshots（hold/adjust/exit）
-             └─ 19:00 swing AI 選股（讀 is_swing_eligible；全域 candidates.mode=swing）
+             └─ 19:00 swing AI 選股（讀 is_swing_eligible；全域 candidates.mode=swing；週日/連假最後一晚會以最新 thesis 重跑一次覆蓋最近交易日候選）
                          │
                          └─ 使用者於 /swing 手動確認買入，建立自己的持倉
 ```
@@ -139,6 +139,8 @@
 ### 休市日檢查
 
 `stock:ai-screen`、`stock:ai-screen-overnight`、`stock:fetch-intraday`、`stock:monitor-intraday`、`stock:monitor-overnight-exit`、`stock:scan-intraday-movers`、`stock:update-results`、`stock:update-overnight-results`、`stock:daily-review`、`stock:fetch-margin`、`stock:fetch-valuations` 開頭檢查 `MarketHoliday::isHoliday()`，週末或國定假日自動跳過。
+
+`stock:ai-screen-swing` 例外：排程改為每日 19:00 觸發，命令內判定「今日與明日皆為休市日才跳過」。其餘狀況都會跑 — 今日為交易日時 `trade_date` 寫入當日；今日休市但明日是交易日（典型：週日、連假最後一晚）則以 `previousTradingDay(today)` 為 `trade_date`，刷新「最近一次交易日」的候選名單，讓 `/swing` 頁面在開盤前看到最新 thesis 選股。
 
 手動補跑例外：`stock:ai-screen-overnight {date}`、`stock:update-results {date}`、`stock:update-overnight-results {date}`、`stock:daily-review {date}` 顯式傳入 date 時不擋，保留歷史補跑彈性；`stock:scan-intraday-movers --date=...` 為測試/模擬日期，顯式傳入時不做休市日阻擋。其餘交易時段或交易所資料抓取指令遇休市日一律跳過，避免打即時 API 或將上一交易日資料寫到休市日期。
 
