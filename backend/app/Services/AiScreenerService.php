@@ -145,6 +145,37 @@ class AiScreenerService
     }
 
     /**
+     * 隔日沖最終排序：Opus 逐檔審核後，再由 Opus 做跨標的 portfolio ranking。
+     *
+     * Final Ranking 失敗時不覆寫既有逐檔 Opus 結果。
+     */
+    public function finalRankOvernight(string $tradeDate, Collection $candidates, ?string $snapshotDate = null): Collection
+    {
+        if ($candidates->isEmpty()) {
+            return $candidates;
+        }
+
+        if (!$this->apiKey) {
+            Log::warning('AiScreenerService finalRankOvernight: ANTHROPIC_API_KEY 未設定，略過 Final Ranking');
+            return $candidates;
+        }
+
+        try {
+            $regime = app(OvernightRegimeContextService::class)->getContext();
+            $systemPrompt = $this->buildFinalRankingSystemPrompt($tradeDate, $snapshotDate, $regime);
+            $userMessage = $this->buildFinalRankingUserMessage($candidates);
+            $items = $this->callFinalRankingWithRetry($systemPrompt, $userMessage);
+            $this->applyFinalRanking($candidates, $items);
+
+            Log::info("AiScreenerService finalRankOvernight {$tradeDate}: applied " . count($items) . " ranking rows");
+            return $candidates->fresh();
+        } catch (\Throwable $e) {
+            Log::error("AiScreenerService finalRankOvernight {$tradeDate}: " . $e->getMessage());
+            return $candidates;
+        }
+    }
+
+    /**
      * Fallback：API 失敗時，取 top 15 by score + 預設策略
      */
     public function fallbackScreen(Collection $candidates): Collection
@@ -471,6 +502,79 @@ MSG;
         return $result;
     }
 
+    private function callFinalRankingWithRetry(string $systemPrompt, string $userMessage): array
+    {
+        $maxAttempts = 3;
+        $attempt = 0;
+
+        while (true) {
+            $attempt++;
+            try {
+                return $this->callFinalRankingApi($systemPrompt, $userMessage);
+            } catch (\RuntimeException $e) {
+                $msg = $e->getMessage();
+
+                if ((str_contains($msg, 'API 529') || str_contains($msg, 'overloaded_error')) && $attempt < $maxAttempts) {
+                    $sleep = 2 ** $attempt;
+                    Log::warning("AiScreenerService finalRankOvernight: 529 Overloaded，{$sleep}s 後重試");
+                    sleep($sleep);
+                    continue;
+                }
+
+                if (str_contains($msg, '無法解析') && $attempt < $maxAttempts) {
+                    Log::warning('AiScreenerService finalRankOvernight: JSON 解析失敗，2s 後重試');
+                    sleep(2);
+                    continue;
+                }
+
+                throw $e;
+            } catch (\Illuminate\Http\Client\ConnectionException $e) {
+                if ($attempt >= 2) {
+                    throw new \RuntimeException('Final Ranking 連線逾時（重試後仍失敗）', 0, $e);
+                }
+                sleep(3);
+            }
+        }
+    }
+
+    private function callFinalRankingApi(string $systemPrompt, string $userMessage): array
+    {
+        $response = Http::timeout(90)
+            ->withHeaders([
+                'x-api-key'         => $this->apiKey,
+                'anthropic-version' => '2023-06-01',
+                'anthropic-beta'    => 'prompt-caching-2024-07-31',
+                'content-type'      => 'application/json',
+            ])
+            ->post('https://api.anthropic.com/v1/messages', [
+                'model'      => $this->model,
+                'max_tokens' => 4096,
+                'system'     => [
+                    [
+                        'type'          => 'text',
+                        'text'          => $systemPrompt,
+                        'cache_control' => ['type' => 'ephemeral'],
+                    ],
+                ],
+                'messages' => [
+                    ['role' => 'user', 'content' => $userMessage],
+                ],
+            ]);
+
+        if (!$response->successful()) {
+            throw new \RuntimeException('API ' . $response->status() . ': ' . $response->body());
+        }
+
+        $text = $response->json('content.0.text', '');
+        $items = self::parseFinalRankingResponse($text);
+
+        if (empty($items)) {
+            throw new \RuntimeException('無法解析 Final Ranking 回應：' . mb_substr($text, 0, 200));
+        }
+
+        return $items;
+    }
+
     private function parseSingleResponse(string $text): ?array
     {
         $text = trim($text);
@@ -484,6 +588,155 @@ MSG;
         }
 
         return $data;
+    }
+
+    public static function parseFinalRankingResponse(string $text): array
+    {
+        $text = trim($text);
+        $text = preg_replace('/^```json?\s*/i', '', $text);
+        $text = preg_replace('/\s*```$/', '', $text);
+
+        $data = json_decode($text, true);
+        if (!is_array($data)) {
+            return [];
+        }
+
+        $items = $data['rankings'] ?? $data['items'] ?? $data;
+        if (!is_array($items)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $symbol = (string) ($item['symbol'] ?? '');
+            if ($symbol === '') {
+                continue;
+            }
+
+            $normalized[$symbol] = self::normalizeFinalRankingItem($item);
+        }
+
+        return $normalized;
+    }
+
+    public static function normalizeFinalRankingItem(array $item): array
+    {
+        $tier = $item['rank_tier'] ?? $item['tier'] ?? 'avoid';
+        $tier = in_array($tier, ['primary', 'watch', 'avoid'], true) ? $tier : 'avoid';
+
+        $fit = $item['regime_fit'] ?? null;
+        $fit = in_array($fit, ['strong', 'acceptable', 'weak'], true) ? $fit : null;
+
+        return [
+            'rank_tier' => $tier,
+            'regime_fit' => $fit,
+            'reasoning' => mb_substr((string) ($item['reasoning'] ?? $item['reason'] ?? ''), 0, 1000),
+        ];
+    }
+
+    private function buildFinalRankingSystemPrompt(string $tradeDate, ?string $snapshotDate, array $regime): string
+    {
+        $today = $snapshotDate ?? now()->toDateString();
+        $regimeSection = $regime['prompt'] ?? '即時大盤/類股資料不可用；不得因此硬排除標的。';
+
+        return <<<SYSTEM
+你是台股隔日沖 Opus Final Ranking AI。現在是 {$today} 12:50 後，目標是決定今日收盤前建倉、{$tradeDate} 出場的最終主清單。
+
+你不是逐檔重做分析，而是根據已完成的 Opus 逐檔結果，做跨標的比較與資金排序。
+
+{$regimeSection}
+
+排序原則：
+- primary：真正值得進主清單的標的，通常 3–6 檔；若品質不足可以少於 3 檔。
+- watch：條件有亮點但在今日 regime 下證據不夠強，保留後台觀察，不進主清單。
+- avoid：逐檔分析已排除、價格結構不佳、普通延續型證據不足、或相對排序落後。
+- 不要因單一硬門檻機械排除；請比較尾盤強度、量能、類股位置、風報比、隔日跳空潛力與風險。
+- 若市場偏弱，普通 open_follow_through 必須比 limit_up_chase 或明顯抗跌主流股有更高證據。
+- 不得把逐檔 Opus 已排除且缺少買進/目標/停損價格的標的列為 primary。
+
+請直接回覆 JSON，不要 markdown：
+{
+  "rankings": [
+    {
+      "symbol": "2330",
+      "rank_tier": "primary|watch|avoid",
+      "regime_fit": "strong|acceptable|weak",
+      "reasoning": "一句說明為何在今日 regime 下排這個 tier"
+    }
+  ]
+}
+
+每個輸入 symbol 都必須回傳一筆 rankings。
+SYSTEM;
+    }
+
+    private function buildFinalRankingUserMessage(Collection $candidates): string
+    {
+        $rows = $candidates
+            ->map(function (Candidate $candidate) {
+                $stock = $candidate->stock;
+                $warnings = is_array($candidate->ai_warnings)
+                    ? implode('；', $candidate->ai_warnings)
+                    : ($candidate->ai_warnings ?? '');
+
+                return [
+                    'symbol' => $stock->symbol,
+                    'name' => $stock->name,
+                    'industry' => $stock->industry,
+                    'haiku_score' => (float) $candidate->score,
+                    'haiku_reasoning' => $candidate->haiku_reasoning,
+                    'opus_selected' => (bool) $candidate->ai_selected,
+                    'opus_reasoning' => $candidate->ai_reasoning,
+                    'entry_type' => $candidate->overnight_strategy,
+                    'gap_potential_percent' => $candidate->gap_potential_percent !== null ? (float) $candidate->gap_potential_percent : null,
+                    'suggested_buy' => $candidate->suggested_buy !== null ? (float) $candidate->suggested_buy : null,
+                    'target_price' => $candidate->target_price !== null ? (float) $candidate->target_price : null,
+                    'stop_loss' => $candidate->stop_loss !== null ? (float) $candidate->stop_loss : null,
+                    'risk_reward_ratio' => $candidate->risk_reward_ratio !== null ? (float) $candidate->risk_reward_ratio : null,
+                    'overnight_plan' => $candidate->overnight_reasoning,
+                    'price_reasoning' => $candidate->ai_price_reasoning,
+                    'warnings' => $warnings,
+                ];
+            })
+            ->values()
+            ->all();
+
+        $json = json_encode($rows, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return <<<MSG
+以下是已完成 Opus 逐檔審核的隔日沖候選。請做最終跨標的排序。
+
+{$json}
+MSG;
+    }
+
+    private function applyFinalRanking(Collection $candidates, array $items): void
+    {
+        foreach ($candidates as $candidate) {
+            $symbol = $candidate->stock->symbol;
+            $item = $items[$symbol] ?? [
+                'rank_tier' => $candidate->ai_selected ? 'watch' : 'avoid',
+                'regime_fit' => null,
+                'reasoning' => 'Final Ranking 未回傳此標的，保守不列入主清單',
+            ];
+
+            $tier = $item['rank_tier'];
+            if ($tier === 'primary' && (!$candidate->ai_selected || !$candidate->suggested_buy || !$candidate->target_price || !$candidate->stop_loss)) {
+                $tier = 'avoid';
+                $item['reasoning'] = trim(($item['reasoning'] ?? '') . '；逐檔 Opus 未選入或價格不完整，不升為 primary');
+            }
+
+            $candidate->update([
+                'ai_selected' => $tier === 'primary',
+                'overnight_rank_tier' => $tier,
+                'overnight_regime_fit' => $item['regime_fit'],
+                'overnight_final_rank_reasoning' => $item['reasoning'],
+            ]);
+        }
     }
 
     // -------------------------------------------------------------------------

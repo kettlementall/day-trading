@@ -92,6 +92,24 @@
             AI 排除
           </el-tag>
           <el-tag
+            v-if="item.overnight_rank_tier"
+            size="small"
+            :type="rankTierType(item.overnight_rank_tier)"
+            effect="plain"
+            round
+          >
+            {{ rankTierLabel(item.overnight_rank_tier) }}
+          </el-tag>
+          <el-tag
+            v-if="item.overnight_regime_fit"
+            size="small"
+            :type="regimeFitType(item.overnight_regime_fit)"
+            effect="plain"
+            round
+          >
+            {{ regimeFitLabel(item.overnight_regime_fit) }}
+          </el-tag>
+          <el-tag
             v-for="reason in (item.reasons || [])"
             :key="reason"
             size="small"
@@ -204,6 +222,12 @@
                 class="key-level-chip level-resistance"
               >{{ lv.price }}<span class="chip-reason"> {{ lv.reason }}</span></span>
             </div>
+          </div>
+
+          <!-- Final Ranking -->
+          <div v-if="item.overnight_final_rank_reasoning" class="card-section">
+            <span class="section-label label-rank">最終排序</span>
+            <p class="section-text">{{ item.overnight_final_rank_reasoning }}</p>
           </div>
 
           <!-- 消息題材面選入理由 -->
@@ -325,6 +349,26 @@ function entryLabel(entryType) {
     limit_up_chase: '漲停追強',
   }
   return map[entryType] || entryType || ''
+}
+
+function rankTierLabel(tier) {
+  return { primary: '主推', watch: '觀察', avoid: '避免' }[tier] || tier
+}
+
+function rankTierType(tier) {
+  if (tier === 'primary') return 'success'
+  if (tier === 'watch') return 'warning'
+  return 'info'
+}
+
+function regimeFitLabel(fit) {
+  return { strong: 'Regime 強', acceptable: 'Regime 可', weak: 'Regime 弱' }[fit] || fit
+}
+
+function regimeFitType(fit) {
+  if (fit === 'strong') return 'success'
+  if (fit === 'acceptable') return 'warning'
+  return 'danger'
 }
 
 function outcomeLabel(outcome) {
@@ -614,6 +658,7 @@ function outcomeClass(outcome) {
 
 .label-support     { background: #f0f9eb; color: #67c23a; }
 .label-resistance  { background: #fef0f0; color: #f56c6c; }
+.label-rank        { background: #f4f4f5; color: #303133; }
 .label-news        { background: #ecf5ff; color: #409eff; }
 .label-fundamental { background: #fdf6ec; color: #e6a23c; }
 .label-operation   { background: #f5f7fa; color: #606266; }

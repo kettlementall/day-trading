@@ -17,7 +17,7 @@ use Illuminate\Support\Facades\Log;
 class AiScreenOvernightCandidates extends Command
 {
     protected $signature = 'stock:ai-screen-overnight {date?} {--force : 即使已有 Opus 完成過的批次仍強制覆寫} {--backfill : 補跑歷史資料（跳過 monitor 初始化與 Telegram 通知）}';
-    protected $description = '隔日沖選股（12:50 執行）：Screener → Haiku → Opus，供今日收盤前下單';
+    protected $description = '隔日沖選股（12:50 執行）：Screener → Haiku → Opus → Final Ranking，供今日收盤前下單';
 
     public function handle(
         StockScreener $screener,
@@ -98,10 +98,18 @@ class AiScreenOvernightCandidates extends Command
         $haikuPassed = $candidates->where('haiku_selected', true)->values();
         $candidates  = $ai->screen($tradeDate, $haikuPassed, 'overnight', $snapshotDate);
 
-        $selected = $candidates->where('ai_selected', true)->count();
-        $this->info("Opus 審核完成：{$selected} 檔選入隔日沖清單");
+        $opusSelected = $candidates->where('ai_selected', true)->count();
+        $this->info("Opus 審核完成：{$opusSelected} 檔暫選");
 
-        // Step 4: 為 AI 選入的候選初始化隔日監控（status=holding）
+        // Step 4: Opus Final Ranking（跨標的比較 + 即時 regime context）
+        // 失敗時 AiScreenerService 會保留逐檔 Opus 結果，不覆寫 ai_selected。
+        $this->info('Step 4: Opus Final Ranking...');
+        $candidates = $ai->finalRankOvernight($tradeDate, $candidates, $snapshotDate);
+
+        $selected = $candidates->where('ai_selected', true)->count();
+        $this->info("Final Ranking 完成：{$selected} 檔進入隔日沖主清單");
+
+        // Step 5: 為最終主清單初始化隔日監控（status=holding）
         // 補跑模式跳過：trade_date 已過，建 holding 沒意義且會污染未來查詢
         $selectedCandidates = $candidates->where('ai_selected', true)->values();
         if (! $backfill) {
@@ -117,15 +125,16 @@ class AiScreenOvernightCandidates extends Command
 
         if (! $backfill) {
             $lines = ["🌙 *隔日沖選股完成* ({$snapshotDate} → {$tradeDate})"];
-            $lines[] = "寬篩 {$total} 檔 → Haiku {$haikuCount} 檔 → Opus 選入 {$selected} 檔";
+            $lines[] = "寬篩 {$total} 檔 → Haiku {$haikuCount} 檔 → Opus 暫選 {$opusSelected} 檔 → Final 主推 {$selected} 檔";
             $lines[] = '';
 
             foreach ($selectedCandidates as $c) {
                 $lines[] = sprintf(
-                    "• %s %s | %s | 買 %.1f / 目標 %.1f / 停損 %.1f",
+                    "• %s %s | %s | %s | 買 %.1f / 目標 %.1f / 停損 %.1f",
                     $c->stock->symbol,
                     $c->stock->name,
                     $c->overnight_strategy ?? '-',
+                    $c->overnight_regime_fit ?? '-',
                     (float) $c->suggested_buy,
                     (float) $c->target_price,
                     (float) $c->stop_loss

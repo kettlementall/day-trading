@@ -170,6 +170,40 @@ class FugleRealtimeClient
     }
 
     /**
+     * 批次抓取原始 Fugle quote，供指數/類股等非 Stock model symbols 使用。
+     *
+     * @param  string[]  $symbols
+     * @return array<string, array>
+     */
+    public function fetchRawQuotesBySymbols(array $symbols): array
+    {
+        $symbols = array_values(array_unique(array_filter($symbols)));
+        if (empty($symbols) || empty($this->apiKeys)) {
+            return [];
+        }
+
+        $results = [];
+        $total = count($symbols);
+
+        foreach ($symbols as $index => $symbol) {
+            try {
+                $quote = $this->fetchRawQuote($symbol);
+                if ($quote) {
+                    $results[$symbol] = $quote;
+                }
+            } catch (\Exception $e) {
+                Log::error("Fugle raw [{$symbol}]: " . $e->getMessage());
+            }
+
+            if ($index < $total - 1) {
+                usleep(self::REQUEST_DELAY_US);
+            }
+        }
+
+        return $results;
+    }
+
+    /**
      * 抓取單檔 5 分 K 線（parsed）
      *
      * @return array[] 每筆含 time, open, high, low, close, volume

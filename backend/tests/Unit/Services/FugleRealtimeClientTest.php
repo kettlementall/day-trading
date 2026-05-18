@@ -33,4 +33,10 @@ class FugleRealtimeClientTest extends TestCase
             __DIR__ . '/../../../app/Services/IntradayMarketRegimeService.php'
         ));
     }
+
+    public function test_raw_quote_batch_by_symbol_is_supported(): void
+    {
+        $this->assertStringContainsString('public function fetchRawQuotesBySymbols(array $symbols): array', $this->source);
+        $this->assertStringContainsString('$this->fetchRawQuote($symbol)', $this->source);
+    }
 }
