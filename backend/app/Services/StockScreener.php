@@ -6,7 +6,9 @@ use App\Models\Candidate;
 use App\Models\DailyQuote;
 use App\Models\FormulaSetting;
 use App\Models\InstitutionalTrade;
+use App\Models\IntradaySnapshot;
 use App\Models\MarginTrade;
+use App\Models\MarketHoliday;
 use App\Models\NewsIndex;
 use App\Models\Stock;
 use App\Services\MarketContextService;
@@ -47,6 +49,21 @@ class StockScreener
         $compoundPenalties = FormulaSetting::getConfig('screener_penalties') ?: [];
 
         $candidates = collect();
+        $overnightSnapshots = collect();
+        if ($mode === 'overnight') {
+            $snapshotDate = MarketHoliday::previousTradingDay($tradeDate);
+            $stockIds = $stocks->pluck('id');
+            $latestSnapshotIds = IntradaySnapshot::query()
+                ->whereIn('stock_id', $stockIds)
+                ->where('trade_date', $snapshotDate)
+                ->selectRaw('MAX(id) as id')
+                ->groupBy('stock_id')
+                ->pluck('id');
+
+            $overnightSnapshots = $latestSnapshotIds->isNotEmpty()
+                ? IntradaySnapshot::whereIn('id', $latestSnapshotIds)->get()->keyBy('stock_id')
+                : collect();
+        }
 
         // 取得最新消息面指數
         $newsOverall = NewsIndex::where('scope', 'overall')
@@ -301,13 +318,28 @@ class StockScreener
                 if ($riskReward < $minRR && !$isGapReversalCandidate) continue;
             }
 
-            // intraday 模式：計算複合分數供下游排序使用
+            // intraday / overnight 模式：計算複合分數供下游排序使用
             $compoundScore = 0.0;
             if ($mode === 'intraday') {
                 $compoundScore = $this->calcCompoundScore(
                     $closes, $highs, $volumes, $changePcts, $amplitudes,
                     $avgAmplitude5, $avgVolume5, $inst, $margin->first(),
                     $compoundWeights, $compoundPenalties
+                );
+            } elseif ($mode === 'overnight') {
+                $compoundScore = $this->calcOvernightScore(
+                    $closes,
+                    $highs,
+                    $lows,
+                    $volumes,
+                    $changePcts,
+                    $avgVolume5,
+                    $ma5,
+                    $ma10,
+                    $ma20,
+                    $inst,
+                    $margin->first(),
+                    $overnightSnapshots->get($stock->id),
                 );
             }
 
@@ -319,7 +351,7 @@ class StockScreener
                 'target_price'      => $targetPrice,
                 'stop_loss'         => $stopLoss,
                 'risk_reward_ratio' => $riskReward,
-                'score'             => $mode === 'intraday' ? round($compoundScore, 2) : 0,
+                'score'             => in_array($mode, ['intraday', 'overnight'], true) ? round($compoundScore, 2) : 0,
                 'reasons'           => $reasons,
                 'indicators'        => $indicators,
                 '_avg_vol5'         => $avgVolume5,
@@ -330,7 +362,7 @@ class StockScreener
 
         // 排序與截斷
         // - intraday：複合分數降冪（振幅 + 流動性 + 日內活躍 + 籌碼 + 動能 + 突破 - 負分）
-        // - overnight：5 日均量降冪（強勢延續邏輯，與當沖選股目標不同）
+        // - overnight：隔日沖複合分數降冪（尾盤強度 + 量能 + 趨勢/籌碼 + 過熱懲罰）
         // gap_reversal 候選保證入選（不被排序截斷）
         $defaultMax = $mode === 'intraday' ? 100 : 80;
         $maxCandidates = $maxCandidatesOverride ?? ($screenConfig['max_candidates'] ?? $defaultMax);
@@ -338,7 +370,7 @@ class StockScreener
         $normalCandidates = $candidates->filter(fn($c) => !($c['_gap_reversal'] ?? false));
 
         $normalSlots = max(0, $maxCandidates - $gapReversalCandidates->count());
-        $sortKey = $mode === 'intraday' ? '_compound_score' : '_avg_vol5';
+        $sortKey = in_array($mode, ['intraday', 'overnight'], true) ? '_compound_score' : '_avg_vol5';
         $selected = $normalCandidates->sortByDesc($sortKey)->take($normalSlots);
         $candidates = $selected->concat($gapReversalCandidates)->values();
 
@@ -559,6 +591,116 @@ class StockScreener
             'down'  => floor($price / $tick) * $tick,
             default => round($price / $tick) * $tick,
         };
+    }
+
+    /**
+     * 隔日沖寬篩排序分數，分數只決定 Haiku/Opus 看到的優先順序。
+     */
+    private function calcOvernightScore(
+        array $closes,
+        array $highs,
+        array $lows,
+        array $volumes,
+        array $changes,
+        float $avgVol5Lots,
+        ?float $ma5,
+        ?float $ma10,
+        ?float $ma20,
+        Collection $instCollection,
+        ?MarginTrade $latestMargin,
+        ?IntradaySnapshot $snapshot
+    ): float {
+        $score = 0.0;
+        $close = (float) ($closes[0] ?? 0);
+        $latestVolumeLots = ((float) ($volumes[0] ?? 0)) / 1000;
+        $volumeRatio = $avgVol5Lots > 0 ? $latestVolumeLots / $avgVol5Lots : 0;
+        $todayChange = (float) ($changes[0] ?? 0);
+        $recent5Change = array_sum(array_slice($changes, 0, 5));
+
+        $score += min($avgVol5Lots / 5000, 1) * 12;
+
+        if ($volumeRatio >= 2.5) {
+            $score += 18;
+        } elseif ($volumeRatio >= 1.5) {
+            $score += 13;
+        } elseif ($volumeRatio >= 1.1) {
+            $score += 7;
+        } elseif ($volumeRatio > 0 && $volumeRatio < 0.7) {
+            $score -= 6;
+        }
+
+        if ($todayChange >= 1.0 && $todayChange <= 6.5) {
+            $score += 16;
+        } elseif ($todayChange > 6.5 && $todayChange <= 9.5) {
+            $score += 8;
+        } elseif ($todayChange < -1.0) {
+            $score -= 10;
+        }
+
+        if ($ma5 && $ma10 && $ma20 && $close > 0) {
+            if ($ma5 > $ma10 && $ma10 > $ma20 && $close > $ma5) {
+                $score += 16;
+            } elseif ($close > $ma5 && $ma5 > $ma10) {
+                $score += 9;
+            } elseif ($ma5 < $ma10 && $ma10 < $ma20 && $close < $ma5) {
+                $score -= 18;
+            }
+        }
+
+        if ($instCollection->count() >= 3 && $instCollection->take(3)->every(fn($i) => (float) $i->foreign_net > 0)) {
+            $score += 14;
+        } elseif ($instCollection->isNotEmpty() && (float) $instCollection->first()->foreign_net > 0) {
+            $score += 6;
+        } elseif ($instCollection->isNotEmpty() && (float) $instCollection->first()->foreign_net < 0) {
+            $score -= 6;
+        }
+
+        if ($instCollection->isNotEmpty() && (float) $instCollection->first()->trust_net > 0) {
+            $score += 5;
+        }
+
+        if ($latestMargin && (float) $latestMargin->margin_change > 0 && $todayChange > 4) {
+            $score -= 8;
+        }
+
+        if ($snapshot && (float) $snapshot->current_price > 0) {
+            $current = (float) $snapshot->current_price;
+            $high = (float) $snapshot->high;
+            $low = (float) $snapshot->low;
+            $range = max($high - $low, 0);
+            $closeLocation = $range > 0 ? ($current - $low) / $range : 0.5;
+
+            if ($closeLocation >= 0.75) {
+                $score += 16;
+            } elseif ($closeLocation >= 0.55) {
+                $score += 8;
+            } elseif ($closeLocation <= 0.25) {
+                $score -= 12;
+            }
+
+            $estimatedVolumeRatio = (float) $snapshot->estimated_volume_ratio;
+            if ($estimatedVolumeRatio >= 1.5) {
+                $score += 10;
+            } elseif ($estimatedVolumeRatio > 0 && $estimatedVolumeRatio < 0.7) {
+                $score -= 6;
+            }
+
+            if ((float) $snapshot->external_ratio >= 55) {
+                $score += 5;
+            } elseif ((float) $snapshot->external_ratio <= 45) {
+                $score -= 5;
+            }
+        }
+
+        if ($recent5Change > 18) {
+            $score -= 16;
+        } elseif ($recent5Change > 12) {
+            $score -= 8;
+        } elseif ($recent5Change < -8) {
+            $score -= 10;
+        }
+
+        return round(max(0, $score), 2);
     }
 
     // -------------------------------------------------------------------------

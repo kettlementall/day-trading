@@ -104,4 +104,63 @@ class BacktestServiceOvernightActualMetricsTest extends TestCase
 
         $this->assertSame(100.0, $metrics['actual_exit_rate']);
     }
+
+    public function test_selected_metrics_ignore_rejected_candidates(): void
+    {
+        $metrics = BacktestService::calcOvernightSelectedMetrics(collect([
+            (object) [
+                'ai_selected' => true,
+                'result' => (object) [
+                    'gap_predicted_correctly' => true,
+                    'overnight_outcome' => 'hit_target',
+                    'open_gap_percent' => 2.0,
+                    'entry_price_actual' => 100,
+                    'exit_price_actual' => 104,
+                    'monitor_status' => 'target_hit',
+                ],
+            ],
+            (object) [
+                'ai_selected' => false,
+                'result' => (object) [
+                    'gap_predicted_correctly' => false,
+                    'overnight_outcome' => 'hit_stop',
+                    'open_gap_percent' => -2.0,
+                    'entry_price_actual' => 100,
+                    'exit_price_actual' => 90,
+                    'monitor_status' => 'stop_hit',
+                ],
+            ],
+        ]), 3);
+
+        $this->assertSame(3, $metrics['selected_count']);
+        $this->assertSame(1, $metrics['evaluated']);
+        $this->assertSame(100.0, $metrics['actual_exit_rate']);
+        $this->assertSame(100.0, $metrics['actual_win_rate']);
+        $this->assertSame(0.0, $metrics['actual_stop_rate']);
+        $this->assertSame(4.0, $metrics['avg_actual_return']);
+    }
+
+    public function test_selected_metrics_return_zero_when_no_selected_candidates(): void
+    {
+        $metrics = BacktestService::calcOvernightSelectedMetrics(collect([
+            (object) [
+                'ai_selected' => false,
+                'result' => (object) [
+                    'gap_predicted_correctly' => false,
+                    'overnight_outcome' => 'hit_stop',
+                    'open_gap_percent' => -2.0,
+                    'entry_price_actual' => 100,
+                    'exit_price_actual' => 90,
+                    'monitor_status' => 'stop_hit',
+                ],
+            ],
+        ]), 0);
+
+        $this->assertSame(0, $metrics['selected_count']);
+        $this->assertSame(0, $metrics['evaluated']);
+        $this->assertSame(0, $metrics['actual_exit_rate']);
+        $this->assertSame(0, $metrics['actual_win_rate']);
+        $this->assertSame(0, $metrics['actual_stop_rate']);
+        $this->assertSame(0, $metrics['avg_actual_return']);
+    }
 }

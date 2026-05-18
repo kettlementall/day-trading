@@ -13,7 +13,41 @@
     <el-skeleton v-if="loading" :rows="6" animated />
 
     <template v-else-if="stats">
-      <!-- 核心指標卡片 -->
+      <h3 class="section-title">AI 選入實績</h3>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value">{{ selectedStats.selected_count ?? selectedStats.total_candidates }}</div>
+          <div class="stat-label">AI 選入數</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">{{ selectedStats.actual_exit_rate }}%</div>
+          <div class="stat-label">實際出場率</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" :class="selectedStats.actual_win_rate >= 50 ? 'highlight-up' : 'highlight-down'">
+            {{ selectedStats.actual_win_rate }}%
+          </div>
+          <div class="stat-label">實際勝率</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" :class="selectedStats.avg_actual_return > 0 ? 'highlight-up' : 'highlight-down'">
+            {{ selectedStats.avg_actual_return > 0 ? '+' : '' }}{{ selectedStats.avg_actual_return }}%
+          </div>
+          <div class="stat-label">平均實際報酬</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" :class="selectedStats.actual_stop_rate <= 35 ? 'highlight-up' : 'highlight-down'">
+            {{ selectedStats.actual_stop_rate }}%
+          </div>
+          <div class="stat-label">實際停損率</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">{{ stats.ai_approval_rate }}%</div>
+          <div class="stat-label">AI 通過率</div>
+        </div>
+      </div>
+
+      <h3 class="section-title">寬篩對照</h3>
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-value">{{ stats.total_candidates }}</div>
@@ -24,50 +58,22 @@
           <div class="stat-label">已驗證</div>
         </div>
         <div class="stat-card">
-          <div class="stat-value highlight-up">{{ stats.gap_accuracy_rate }}%</div>
-          <div class="stat-label">跳空預測率</div>
+          <div class="stat-value" :class="stats.win_rate >= 50 ? 'highlight-up' : 'highlight-down'">{{ stats.win_rate }}%</div>
+          <div class="stat-label">理論獲利率</div>
         </div>
         <div class="stat-card">
           <div class="stat-value highlight-up">{{ stats.hit_target_rate }}%</div>
-          <div class="stat-label">達標率</div>
+          <div class="stat-label">理論達標率</div>
         </div>
         <div class="stat-card">
-          <div class="stat-value" :class="stats.win_rate >= 50 ? 'highlight-up' : 'highlight-down'">
-            {{ stats.win_rate }}%
-          </div>
-          <div class="stat-label">獲利率</div>
+          <div class="stat-value">{{ stats.gap_accuracy_rate }}%</div>
+          <div class="stat-label">跳空預測率</div>
         </div>
         <div class="stat-card">
           <div class="stat-value" :class="stats.avg_open_gap > 0 ? 'highlight-up' : 'highlight-down'">
             {{ stats.avg_open_gap > 0 ? '+' : '' }}{{ stats.avg_open_gap }}%
           </div>
           <div class="stat-label">平均開盤跳空</div>
-        </div>
-      </div>
-
-      <!-- 輔助指標 -->
-      <div class="sub-stats">
-        <span>停損觸及率 <b>{{ stats.hit_stop_rate }}%</b></span>
-        <span>AI 通過率 <b>{{ stats.ai_approval_rate }}%</b></span>
-      </div>
-
-      <!-- 實際出場績效（不影響上方理論績效口徑） -->
-      <div class="stats-grid actual-grid">
-        <div class="stat-card">
-          <div class="stat-value">{{ stats.actual_exit_rate }}%</div>
-          <div class="stat-label">實際出場率</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" :class="stats.actual_win_rate >= 50 ? 'highlight-up' : 'highlight-down'">
-            {{ stats.actual_win_rate }}%
-          </div>
-          <div class="stat-label">實際勝率</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" :class="stats.avg_actual_return > 0 ? 'highlight-up' : 'highlight-down'">
-            {{ stats.avg_actual_return > 0 ? '+' : '' }}{{ stats.avg_actual_return }}%
-          </div>
-          <div class="stat-label">平均實際報酬</div>
         </div>
       </div>
 
@@ -252,6 +258,7 @@ const store = useOvernightStore()
 const days = ref(30)
 const loading = ref(false)
 const stats = computed(() => store.stats)
+const selectedStats = computed(() => stats.value?.selected_metrics || stats.value || {})
 const reviewLogBox = ref(null)
 const reviewDate = ref(dayjs().format('YYYY-MM-DD'))
 const reviewLoading = ref(false)
@@ -349,10 +356,25 @@ watch(() => store.reviewLogs.length, async () => {
 
 const chartOption = computed(() => {
   const daily = stats.value?.daily || []
+  const hasSelectedDaily = daily.some(d => d.selected_evaluated !== undefined)
+  const legendData = hasSelectedDaily
+    ? ['實際勝率', '實際出場率', '實際停損率']
+    : ['獲利率', '跳空預測率', '達標率']
+  const series = hasSelectedDaily
+    ? [
+        { name: '實際勝率', type: 'line', data: daily.map(d => d.selected_actual_win_rate), smooth: true, itemStyle: { color: '#f56c6c' } },
+        { name: '實際出場率', type: 'line', data: daily.map(d => d.selected_actual_exit_rate), smooth: true, itemStyle: { color: '#409eff' } },
+        { name: '實際停損率', type: 'line', data: daily.map(d => d.selected_actual_stop_rate), smooth: true, itemStyle: { color: '#67c23a' } },
+      ]
+    : [
+        { name: '獲利率', type: 'line', data: daily.map(d => d.win_rate), smooth: true, itemStyle: { color: '#f56c6c' } },
+        { name: '跳空預測率', type: 'line', data: daily.map(d => d.gap_accuracy_rate), smooth: true, itemStyle: { color: '#409eff' } },
+        { name: '達標率', type: 'line', data: daily.map(d => d.hit_target_rate), smooth: true, itemStyle: { color: '#67c23a' } },
+      ]
   return {
     grid: { top: 36, right: 16, bottom: 24, left: 40 },
     tooltip: { trigger: 'axis' },
-    legend: { data: ['獲利率', '跳空預測率', '達標率'], top: 0, textStyle: { fontSize: 11 } },
+    legend: { data: legendData, top: 0, textStyle: { fontSize: 11 } },
     xAxis: {
       type: 'category',
       data: daily.map(d => d.date?.slice(5)),
@@ -363,11 +385,7 @@ const chartOption = computed(() => {
       max: 100,
       axisLabel: { formatter: '{value}%', fontSize: 11 },
     },
-    series: [
-      { name: '獲利率', type: 'line', data: daily.map(d => d.win_rate), smooth: true, itemStyle: { color: '#f56c6c' } },
-      { name: '跳空預測率', type: 'line', data: daily.map(d => d.gap_accuracy_rate), smooth: true, itemStyle: { color: '#409eff' } },
-      { name: '達標率', type: 'line', data: daily.map(d => d.hit_target_rate), smooth: true, itemStyle: { color: '#67c23a' } },
-    ],
+    series,
   }
 })
 
@@ -409,6 +427,11 @@ onMounted(() => {
   font-size: 11px;
   color: #909399;
   margin-top: 2px;
+}
+
+.section-title {
+  margin: 12px 0 8px;
+  font-size: 15px;
 }
 
 .highlight-up { color: #f56c6c; }

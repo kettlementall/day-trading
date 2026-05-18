@@ -230,6 +230,11 @@ class BacktestService
 
         $metrics = $this->calcOvernightMetricsFromCollection($candidates, $total);
         $metrics['period'] = ['from' => $from, 'to' => $to];
+        $selectedTotal = Candidate::where('mode', 'overnight')
+            ->whereBetween('trade_date', [$from, $to])
+            ->where('ai_selected', true)
+            ->count();
+        $metrics['selected_metrics'] = self::calcOvernightSelectedMetrics($candidates, $selectedTotal);
 
         // 策略分類
         $metrics['by_strategy'] = [];
@@ -354,6 +359,54 @@ class BacktestService
         ];
     }
 
+    public static function calcOvernightSelectedMetrics(Collection $candidates, ?int $selectedTotal = null): array
+    {
+        $selected = $candidates->filter(fn ($c) => (bool) ($c->ai_selected ?? false))->values();
+        $evaluated = $selected->count();
+        $selectedCount = $selectedTotal ?? $evaluated;
+
+        if ($evaluated === 0) {
+            return [
+                'selected_count' => $selectedCount,
+                'total_candidates' => $selectedCount,
+                'evaluated' => 0,
+                'gap_accuracy_rate' => 0,
+                'hit_target_rate' => 0,
+                'win_rate' => 0,
+                'hit_stop_rate' => 0,
+                'avg_open_gap' => 0,
+                'ai_approval_rate' => 0,
+                'actual_exit_rate' => 0,
+                'actual_win_rate' => 0,
+                'actual_stop_rate' => 0,
+                'avg_actual_return' => 0,
+            ];
+        }
+
+        $wins = ['hit_target', 'gap_up_strong', 'gap_up', 'up'];
+        $losses = ['hit_stop', 'gap_down', 'down'];
+        $gapCorrect = $selected->filter(fn ($c) => $c->result->gap_predicted_correctly)->count();
+        $hitTarget = $selected->filter(fn ($c) => $c->result->overnight_outcome === 'hit_target')->count();
+        $winCount = $selected->filter(fn ($c) => in_array($c->result->overnight_outcome, $wins))->count();
+        $lossCount = $selected->filter(fn ($c) => in_array($c->result->overnight_outcome, $losses))->count();
+        $openGaps = $selected
+            ->filter(fn ($c) => $c->result->open_gap_percent !== null)
+            ->map(fn ($c) => (float) $c->result->open_gap_percent);
+
+        return [
+            'selected_count' => $selectedCount,
+            'total_candidates' => $selectedCount,
+            'evaluated' => $evaluated,
+            'gap_accuracy_rate' => round($gapCorrect / $evaluated * 100, 1),
+            'hit_target_rate' => round($hitTarget / $evaluated * 100, 1),
+            'win_rate' => round($winCount / $evaluated * 100, 1),
+            'hit_stop_rate' => round($lossCount / $evaluated * 100, 1),
+            'avg_open_gap' => $openGaps->isNotEmpty() ? round($openGaps->avg(), 2) : 0,
+            'ai_approval_rate' => 100.0,
+            ...self::calcOvernightActualMetrics($selected, $evaluated),
+        ];
+    }
+
     private function calcOvernightDailyTrend(string $from, string $to): array
     {
         $rows = DB::table('candidates as c')
@@ -370,6 +423,11 @@ class BacktestService
                 DB::raw("SUM(CASE WHEN cr.entry_price_actual > 0 AND cr.exit_price_actual > cr.entry_price_actual THEN 1 ELSE 0 END) as actual_wins"),
                 DB::raw("SUM(CASE WHEN cr.entry_price_actual > 0 AND cr.exit_price_actual > 0 AND cr.monitor_status = 'stop_hit' THEN 1 ELSE 0 END) as actual_stops"),
                 DB::raw("AVG(CASE WHEN cr.entry_price_actual > 0 AND cr.exit_price_actual > 0 THEN (cr.exit_price_actual - cr.entry_price_actual) / cr.entry_price_actual * 100 ELSE NULL END) as avg_actual_return"),
+                DB::raw("SUM(CASE WHEN c.ai_selected = 1 THEN 1 ELSE 0 END) as selected_evaluated"),
+                DB::raw("SUM(CASE WHEN c.ai_selected = 1 AND cr.entry_price_actual > 0 AND cr.exit_price_actual > 0 THEN 1 ELSE 0 END) as selected_actual_exits"),
+                DB::raw("SUM(CASE WHEN c.ai_selected = 1 AND cr.entry_price_actual > 0 AND cr.exit_price_actual > cr.entry_price_actual THEN 1 ELSE 0 END) as selected_actual_wins"),
+                DB::raw("SUM(CASE WHEN c.ai_selected = 1 AND cr.entry_price_actual > 0 AND cr.exit_price_actual > 0 AND cr.monitor_status = 'stop_hit' THEN 1 ELSE 0 END) as selected_actual_stops"),
+                DB::raw("AVG(CASE WHEN c.ai_selected = 1 AND cr.entry_price_actual > 0 AND cr.exit_price_actual > 0 THEN (cr.exit_price_actual - cr.entry_price_actual) / cr.entry_price_actual * 100 ELSE NULL END) as selected_avg_actual_return"),
             )
             ->groupBy('c.trade_date')
             ->orderBy('c.trade_date')
@@ -385,6 +443,11 @@ class BacktestService
             'actual_win_rate' => $row->actual_exits > 0 ? round($row->actual_wins / $row->actual_exits * 100, 1) : 0,
             'actual_stop_rate' => $row->actual_exits > 0 ? round($row->actual_stops / $row->actual_exits * 100, 1) : 0,
             'avg_actual_return' => $row->avg_actual_return !== null ? round($row->avg_actual_return, 2) : 0,
+            'selected_evaluated' => (int) $row->selected_evaluated,
+            'selected_actual_exit_rate' => $row->selected_evaluated > 0 ? round($row->selected_actual_exits / $row->selected_evaluated * 100, 1) : 0,
+            'selected_actual_win_rate' => $row->selected_actual_exits > 0 ? round($row->selected_actual_wins / $row->selected_actual_exits * 100, 1) : 0,
+            'selected_actual_stop_rate' => $row->selected_actual_exits > 0 ? round($row->selected_actual_stops / $row->selected_actual_exits * 100, 1) : 0,
+            'selected_avg_actual_return' => $row->selected_avg_actual_return !== null ? round($row->selected_avg_actual_return, 2) : 0,
         ])->toArray();
     }
 
