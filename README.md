@@ -16,6 +16,7 @@ AI 驅動的台股當沖全流程系統：選股 → 開盤校準 → 盤中監�
 ```
 06:00  抓取美股指數 + 隔夜新聞
 08:00  市場情境判斷 → 規則式寬篩（~80 檔）→ AI 審核選出 10-15 檔 + 策略標籤 + 價格覆蓋
+08:30  盤前方向簡報（Opus 聚合美股/夜盤/新聞情緒/法人 T-1 → Telegram）
 09:00  盤中快照開始（動態頻率 1-3 分鐘）
 09:05  AI 開盤校準（通過/否決 + 調整目標停損）
 09:05+ 規則式監控 + AI 滾動建議（10-20 分鐘）
@@ -109,6 +110,9 @@ docker compose exec php php artisan stock:import-holidays 2026
 ```bash
 # AI 選股（通常由排程自動執行）
 docker compose exec php php artisan stock:ai-screen
+
+# 盤前方向簡報（排程 08:30 自動跑；手動補跑可加 date，--force 覆蓋既有）
+docker compose exec php php artisan stock:premarket-briefing [date] [--force]
 
 # 抓取當日行情
 docker compose exec php php artisan stock:fetch-daily

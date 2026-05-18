@@ -67,6 +67,10 @@ scheduledCommand('news:compute-indices', '新聞指數(06:15)', selfNotify: true
 // 每日 08:00 / 12:00 / 18:00 抓取新聞並分析
 scheduledCommand('news:fetch', '新聞抓取(08:00)', selfNotify: true)->dailyAt('08:00');
 scheduledCommand('news:compute-indices', '新聞指數(08:15)', selfNotify: true)->dailyAt('08:15');
+
+// 每日 08:30 盤前方向簡報（Opus 聚合美股/夜盤/MarketContext/NewsIndex/法人 T-1 → Telegram）
+scheduledCommand('stock:premarket-briefing', '盤前方向簡報', selfNotify: true)
+    ->dailyAt('08:30')->weekdays();
 scheduledCommand('news:fetch', '新聞抓取(12:00)', selfNotify: true)->dailyAt('12:00');
 scheduledCommand('news:compute-indices', '新聞指數(12:15)', selfNotify: true)->dailyAt('12:15');
 scheduledCommand('news:fetch', '新聞抓取(18:00)', selfNotify: true)->dailyAt('18:00');

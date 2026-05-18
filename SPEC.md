@@ -36,6 +36,7 @@
 | 08:45 | `stock:fetch-us-indices --tx-only` | 更新台指期日盤開盤價（日盤 08:45 開盤，確保候選頁顯示當日盤中即時價而非夜盤收盤價）             |
 | 08:00 | `news:fetch`                | 開盤前新聞抓取                                                   |
 | 08:15 | `news:compute-indices`      | 計算新聞指數                                                    |
+| **08:30** | **`stock:premarket-briefing`** | **盤前方向簡報（Opus 聚合美股/夜盤/MarketContext/NewsIndex/法人 T-1 → Telegram，見 §3.0）** |
 | 09:05 | `stock:fetch-intraday`      | 盤中即時行情（5分K）                                               |
 | 09:30 | `stock:fetch-intraday`      | 盤中即時行情（30分鐘後狀態）                                           |
 | 09:00-13:30 | `stock:monitor-intraday` | 盤中即時監控（每 30 秒快照；command 內部 loop，scheduler 每分鐘觸發作為當機重啟保底） |
@@ -366,6 +367,96 @@ docker compose exec php php artisan stock:dry-run-screener --date=YYYY-MM-DD --w
 ```
 
 不寫入 DB，同時輸出「5 日均量榜 vs 複合分數榜」對比表 + 觀察名單排名變化，方便調整權重時驗證。
+
+---
+
+## 3.0 盤前方向簡報（DailyBriefing）
+
+每日 08:30 由 `stock:premarket-briefing` 指令執行（休市日自動跳過），用 Opus 聚合隔夜素材產出當日交易方向，僅推 Telegram，個股選擇仍由 §3 AI 選股負責。
+
+### 觸發時點
+
+08:30 — 落在 08:15 NewsIndex 重算之後、08:45 台指期日盤更新之前。早於開盤 30 分鐘給操盤者消化空間，且不與 08:00 `stock:ai-screen` 衝突（兩者可並行）。
+
+### 資料來源（皆只讀，不重抓 API）
+
+| 區塊 | 來源 | 取用範圍 |
+|------|------|---------|
+| 市場情境 | `MarketContextService::detect($tradeDate)` | normal / bullish_catalyst / bearish_panic + triggers |
+| 美股 + 夜盤 | `us_market_indices` (06:00 寫入) | trade_date 當日所有 symbol |
+| 新聞情緒 | `news_indices` (08:15 寫入) | overall 一筆 + industry 與前一交易日 sentiment 差異 top 8 |
+| 法人籌碼 T-1 | `institutional_trades` (16:30 寫入) | trade_date 之前最近一筆，total_net 買超 top 5 / 賣超 top 5 |
+| **類股強弱 T-1** | `sector_indices` (14:45 寫入) | trade_date 之前最近一筆，change_percent top 5 強 / top 5 弱 |
+| **大盤節奏代理** | `sector_indices` 近 5 個交易日 | 電子工業 / 金融保險 / 半導體業 5 日累計變化 + trend 標籤（strong_up / mild_up / sideways / mild_down / strong_down） |
+| **重大事件新聞** | `news_articles` 近 24 小時 | `ai_analysis.impact='high'` 或 `panic_signal=true` 的 top 5（依 panic 優先、`ABS(sentiment_score)` 排序），含 industries / risk_type |
+
+> 為何用「電子工業 / 金融保險 / 半導體業」做大盤節奏代理：`sector_indices` 不含加權指數（TWSE MI_INDEX 純類股），但這三類佔 TAIEX 約 70–80% 權重，足以反映大盤節奏。盤前 08:30 無法即時抓 TAIEX，採用 T-1 收盤前 5 日累計作為近似。
+
+### Opus 輸出 schema
+
+prompt 要求 Opus 回傳純 JSON：
+
+```json
+{
+  "direction": "bullish | neutral | bearish",
+  "headline": "≤ 30 字一句結論",
+  "drivers": ["≤ 50 字 × 最多 3 條，依重要性排序"],
+  "sectors": ["≤ 3 個產業類股名稱（依 direction 對應追擊/迴避/觀察）"],
+  "cautions": ["≤ 60 字 × 最多 2 條，至少 1 條必須是具體操作建議（倉位/停損/節奏）"]
+}
+```
+
+**sectors 欄位語意依 direction 切換**：
+- `bullish` → 追擊類股（今日主流、相對抗跌、有催化）
+- `bearish` → 迴避類股（最受國際利空衝擊、權值股拖累對象）
+- `neutral` → 觀察類股（量能集中、可能領漲領跌）
+
+**cautions 強制至少 1 條具體動作建議**，例如「建議倉位 ≤ 30%、停損縮緊至 2%、跳空後 15 分鐘止穩才考慮進場」。避免「謹慎觀察」這類含糊用語。
+
+`PremarketBriefingService::parseResponse()` 容錯 markdown code fence、提取 `{...}` 區段；同時兼容舊欄位 `focus_sectors`。解析失敗時寫入 fallback 內容 + 標記 cautions，仍會推 Telegram。
+
+### Telegram 格式（signal 級，所有啟用通知的用戶都收得到）
+
+```
+🌅 盤前方向 MM-DD
+
+📉 偏空｜headline
+
+驅動因素
+1. ...
+2. ...
+3. ...
+
+🚫 迴避類股：A、B、C        ← bullish=🎯 追擊類股 / neutral=🔍 觀察類股
+
+⚠️ 操作建議 / 風險
+- 倉位 ≤ 30%、停損 2%、開盤跳空後 15 分鐘止穩才進場
+- 外資連賣面板族群，勿搶反彈
+
+情境：bearish_panic（費半-3.57%、台指期-1.66%）
+大盤節奏 5 日累計：電子工業 +5.36% / 金融保險 +4.48% / 半導體業 +5.9%
+```
+
+### 持久化
+
+`premarket_briefings` 表（每日 1 筆，`trade_date` 唯一）保留：
+- 結構化欄位 `direction / headline / drivers / focus_sectors / cautions`（`focus_sectors` 欄位名稱維持向後相容，儲存 Opus 回傳的 `sectors`）
+- `raw_markdown`（Telegram 推播原文）
+- `input_payload`（餵給 Opus 的完整 JSON snapshot，含 sector_strength / market_rhythm / key_events，保留供未來盤後校對閉環）
+- `model / prompt_tokens / completion_tokens / cost_usd`（成本與用量）
+
+### 設計原則
+
+- **不重複個股推薦**：sectors 僅給類股，避免與 §3 AI 選股推薦的 10–15 檔重疊或互相干擾。
+- **資料缺漏不阻斷**：即使美股、類股、或新聞無資料，Opus 仍會產出簡報，並在 cautions 註明缺口。
+- **休市日跳過**：command 在 schedule 觸發時檢查 `MarketHoliday::isHoliday()`；手動傳 date 不檢查（保留補跑彈性）。
+- **重複跑保護**：同 trade_date 已有 briefing 直接跳過，可用 `--force` 強制重跑覆蓋。
+- **強制動作建議**：cautions 中至少 1 條為可執行操作（倉位/停損/節奏），避免簡報只給「方向」不給「動作」。
+- **API retry**：`callOpus()` 內建 3 次重試，429 / 500 / 502 / 503 / 504 / 529 退避 5s / 10s；非可重試狀態直接中止；連續 3 次失敗才丟例外讓 command 走失敗路徑（schedule 會發 Telegram 系統失敗通知）。
+
+### 成本
+
+Opus 4.6：input ~4.6K token（含類股、節奏、事件）、output ~330 token → 約 **$0.09 / 天**（~$25 / 年，依交易日 250 天計）。
 
 ---
 
