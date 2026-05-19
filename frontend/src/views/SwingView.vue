@@ -141,6 +141,13 @@
             <div class="advice-body">
               <div class="advice-action">
                 {{ adviceActionLabel(p.latest_advice.action) }}
+                <span
+                  v-if="p.latest_advice.is_fallback"
+                  class="fallback-badge"
+                  title="AI 呼叫失敗，此 advice 由系統安全 fallback 產生，非 AI 真實判斷"
+                >
+                  技術 fallback
+                </span>
                 <span v-if="p.tracking_status?.latest_snapshot_at" class="advice-time">
                   {{ formatDateTime(p.tracking_status.latest_snapshot_at) }}
                 </span>
@@ -1583,6 +1590,21 @@ function isArchivedClosedPosition(position) {
   font-size: 11px;
   font-weight: 500;
   color: var(--c-text-muted);
+}
+
+.fallback-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  border: 1px solid rgba(217, 119, 6, 0.42);
+  background: rgba(254, 243, 199, 0.85);
+  color: #92400e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: help;
 }
 
 .adjust-line,

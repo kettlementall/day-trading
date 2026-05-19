@@ -1822,6 +1822,9 @@ AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`�
 9. `normalizeAdvice()` 會強制規範：`stop_breached=false` 時，`stop_review_state` / `stop_review_reasoning` 一律歸 `null`；只有真正跌破 stop 的 advice 才會成為 `previous_stop_review`。
 10. 若上一輪已因停損給過觀察，本輪 prompt 會注入上次 `repair_condition` / `failure_condition`；若修復條件未發生，預設應 `trim` 或 `exit`，避免無限延後出場。
 11. AI 呼叫失敗時仍採保守退路：`askAi()` 內含 **3 次重試**（HTTP 429/5xx/529 等暫態錯誤 sleep 5/10s、JSON 解析失敗 sleep 3/6s），且預先 strip markdown code fence (```` ```json ````) 後才嘗試解析。3 次都失敗才走 fallback；若已跌破停損但無法完成 AI 審查，回 `exit` 並提醒人工檢視。每次失敗都會寫 `Log::warning` 並記下 attempt 次數、HTTP code、回應前 200-300 字，避免靜默假象 exit。
+12. **Fallback advice 標記**：AI 連續 3 次失敗時，service 寫 fallback advice（`action=exit` 或 `trim` 視觸發路徑）會額外帶 `is_fallback: true` 旗標。`lastStopReviewAdvice()` 撈過往停損審查決策時跳過 `is_fallback=true` 的 entries — 避免技術 fallback 被當作「上次 AI 審查結論」污染後續真實 AI 的決策（規則 10 不該因 fallback 觸發強制 exit）。Fallback advice 仍保留在 `advice_log` 供 audit；`Log::info` 會記跳過 entry 的 position_id / time / action 方便事後 grep。前端 `SwingView.vue` 在 advice 區顯示「技術 fallback」黃底 badge 提示使用者該決策非 AI 判斷。
+
+   **`is_fallback` 語意**：表示「AI 未完成審查」，**不代表決策本身錯誤**。三條 fallback 路徑（A: 停損 + AI 失敗 → exit；B: 論點失效 + 技術破壞 + AI 失敗 → exit；C: 論點失效 + AI 失敗 → trim）的 action 本身仍然是合理的風控選擇；標記僅用來防止這些「機器決策」被當作「AI 已審慎判斷」綁定後續真實 AI 的選擇空間。
 
 ### 9.5b 持倉過熱事實對稱化
 

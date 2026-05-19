@@ -133,9 +133,11 @@ class SwingPositionUpdateService
         }
 
         // AI 失敗時的保守退路：已跌破停損但無 AI 可重新審查時，優先保護風險。
+        // is_fallback=true 讓下次 lastStopReviewAdvice 跳過、不污染後續真實 AI 決策（見 SPEC §9.5 條 12）
         if ($stopBreached) {
             return $this->normalizeAdvice($position, [
                 'action' => 'exit',
+                'is_fallback' => true,
                 'reasoning' => "收盤 {$close} 跌破停損 {$stop}，且 AI 停損審查失敗，建議先出場控風險。請人工檢視技術破位、論點狀態與籌碼是否仍支持續抱。",
                 'current_stop' => $stop,
                 'current_target' => $target,
@@ -166,6 +168,7 @@ class SwingPositionUpdateService
         if ($invalidationSignal && $techBroken) {
             return $this->normalizeAdvice($position, [
                 'action' => 'exit',
+                'is_fallback' => true,
                 'reasoning' => '論點失效且技術跌破月線/季線，建議出場。',
                 'current_stop' => $stop,
                 'current_target' => $target,
@@ -187,6 +190,7 @@ class SwingPositionUpdateService
             // 論點轉弱但技術未破，給 trim 訊號讓使用者注意；不強迫立刻出場
             return $this->normalizeAdvice($position, [
                 'action' => 'trim',
+                'is_fallback' => true,
                 'reasoning' => '論點信心轉弱（' . ($thesisStatus['invalidation_reason'] ?? 'unknown') . '）但技術尚未破壞，建議部分減倉並上移停損保護獲利。',
                 'current_stop' => max($stop, round($close * 0.95, 2)),
                 'current_target' => $target,
@@ -553,6 +557,16 @@ PROMPT;
         for ($i = count($log) - 1; $i >= 0; $i--) {
             $entry = $log[$i];
             if (!is_array($entry) || empty($entry['stop_breached']) || empty($entry['stop_review_state'])) {
+                continue;
+            }
+            // 跳過技術 fallback — 不該綁定後續真實 AI 決策（避免污染，見 SPEC §9.5 條 12）
+            if (!empty($entry['is_fallback'])) {
+                Log::info(sprintf(
+                    'lastStopReviewAdvice skipped fallback entry: position_id=%d time=%s action=%s',
+                    $position->id,
+                    $entry['time'] ?? 'unknown',
+                    $entry['action'] ?? 'unknown'
+                ));
                 continue;
             }
 
