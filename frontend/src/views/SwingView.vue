@@ -275,6 +275,9 @@
                   {{ tag.label }}
                 </span>
               </span>
+              <span v-if="streakDays(c) >= 2" class="streak-badge" title="連續入選日數">
+                入選 {{ streakDays(c) }} 日
+              </span>
             </div>
             <div class="score-badge" :class="{ 'is-dim': !c.ai_selected }">
               <div class="score-num">{{ formatCardNumber(c.score) }}</div>
@@ -285,6 +288,15 @@
           <div class="thesis-line">
             <el-icon class="thesis-icon"><Connection /></el-icon>
             <span>{{ c.swing_thesis?.title || '未連結論點' }}</span>
+          </div>
+          <div v-if="c.reasons?.length" class="reasons-line">
+            <span
+              v-for="(reason, idx) in c.reasons"
+              :key="`reason-${c.id}-${idx}`"
+              class="reason-chip"
+            >
+              {{ reason }}
+            </span>
           </div>
           <div v-if="c.swing_thesis?.source === 'related_stock'" class="thesis-role">
             <span>{{ benefitLabel(c.swing_thesis.benefit_level) }}</span>
@@ -1071,6 +1083,11 @@ function benefitLabel(level) {
   return { core: '核心受益', secondary: '次級受益', watch: '觀察' }[level] || '觀察'
 }
 
+function streakDays(c) {
+  const n = c?.swing_thesis?.consecutive_days_selected
+  return typeof n === 'number' ? n : 0
+}
+
 function etaLabel(v) {
   if (v === null || v === undefined || v === '') return '—'
   return `約 ${v} 日`
@@ -1710,6 +1727,41 @@ function isArchivedClosedPosition(position) {
   border-color: rgba(71, 85, 105, 0.22);
   background: rgba(241, 245, 249, 0.9);
   color: #475569;
+}
+
+.streak-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  border: 1px solid rgba(59, 130, 246, 0.32);
+  background: rgba(219, 234, 254, 0.7);
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.reasons-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0 4px;
+}
+
+.reason-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  border: 1px dashed rgba(148, 163, 184, 0.6);
+  background: transparent;
+  color: var(--c-text-sub);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
 }
 
 .advice-text {

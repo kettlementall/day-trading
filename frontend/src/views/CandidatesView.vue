@@ -313,6 +313,15 @@
           >
             {{ reason }}
           </el-tag>
+          <el-tag
+            v-if="item.mode === 'swing' && (item.swing_thesis?.consecutive_days_selected ?? 0) >= 2"
+            size="small"
+            type="info"
+            effect="plain"
+            round
+          >
+            入選 {{ item.swing_thesis.consecutive_days_selected }} 日
+          </el-tag>
         </div>
 
         <!-- AI 選股理由 -->

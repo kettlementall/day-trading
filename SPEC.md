@@ -1823,6 +1823,31 @@ AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`�
 10. 若上一輪已因停損給過觀察，本輪 prompt 會注入上次 `repair_condition` / `failure_condition`；若修復條件未發生，預設應 `trim` 或 `exit`，避免無限延後出場。
 11. AI 呼叫失敗時仍採保守退路：`askAi()` 內含 **3 次重試**（HTTP 429/5xx/529 等暫態錯誤 sleep 5/10s、JSON 解析失敗 sleep 3/6s），且預先 strip markdown code fence (```` ```json ````) 後才嘗試解析。3 次都失敗才走 fallback；若已跌破停損但無法完成 AI 審查，回 `exit` 並提醒人工檢視。每次失敗都會寫 `Log::warning` 並記下 attempt 次數、HTTP code、回應前 200-300 字，避免靜默假象 exit。
 
+### 9.5b 持倉過熱事實對稱化
+
+定義於 `SwingPositionUpdateService::buildTechnicalContext()` 與 `askAi()` 基礎約束段。
+
+**Why：** §9.7 讓選股 Opus 看到 4 條過熱事實，但 daily review 的 `buildTechnicalContext` 原本只回 `close / ma10 / ma20 / ma60 / atr / volume_ratio_20d / health`，**完全沒有對稱事實**。且 `health` 只看下檔（`close < ma20 → weak`、`close < ma60 → broken`），持倉拉到距 MA20 +11%、RSI 74 仍標 `health=healthy`，與訊號矛盾，導致 AI 容易把該 `trim` 鎖利的持倉判成 `hold`。
+
+**4 條對稱事實**（永遠輸出、無門檻，與 §9.7 reasons 標籤對應）：
+
+| Key | 計算 | 對應 §9.7 標籤 |
+|---|---|---|
+| `gain_3d_pct` | `(closes[0] - closes[3]) / closes[3] × 100`，round 至 1 位小數 | `近3日±X%` |
+| `price_streak_days` | `TechnicalIndicator::priceStreak($closes)`（正=連漲、負=連跌） | `連漲/連跌 N 日` |
+| `ma20_dist_pct` | `(close - ma20) / ma20 × 100` | `距MA20 ±X%` |
+| `rsi` | `(int) round(TechnicalIndicator::rsi($closes))` | `RSI <value>` |
+
+daily review 用結構化 JSON key 而非 chip 字串，因為 prompt context 是 `json_encode($technicalContext)` 餵入，不是 csv。
+
+**`TechnicalIndicator::priceStreak()`** 為 swing screener (`buildCandidatePayload`) 與 daily review (`buildTechnicalContext`) 共用 helper，避免兩處重複實作。
+
+**Prompt 規則**（原則性、無硬閾值）：
+
+> 「技術 context 中的 `gain_3d_pct / price_streak_days / ma20_dist_pct / rsi / volume_ratio_20d` 反映持倉的動能延伸、位置偏離與量能狀態。`health` 為單向下檔指標（跌破 MA20 才 weak），不會反映上檔過熱。若這些事實整合顯示持倉已遠離均線、動能轉強過熱、或量價背離，請判斷是否該 `trim` 鎖利或上移 `current_stop`；過熱與否由你綜合考量，不給硬閾值。」
+
+**`volume_ratio_20d`** 既有欄位（line 691），本次規則一併納入「動能 + 位置 + 量」三軸整合。
+
 ### 9.6 個股新聞風險訊號（`StockNewsRiskContextService`）
 
 短線（screener + 每日持倉審查）獨立於 §4 的總體 NewsIndex，需要看單檔層級「未來 1-5 個交易日是否有財報／訂單／成本／展望相關利空」。`StockNewsRiskContextService::build($stock, $date, $days=5, $limit=6)` 統一構建：
@@ -1887,3 +1912,50 @@ news_risk 是新增資料源 + AI prompt 規則，**無法用歷史資料回測*
 **Diagnostic：** 命令會先列「原始候選 N 檔｜帶 news_risk 欄位 M 檔｜完整 5 日 forward K 檔」，協助判斷是「資料未累積」還是「真的沒預測力」。news_risk feature 上線初期所有舊候選欄位皆 NULL，需累積 1-2 個月才可信。
 
 **使用建議：** 不排程，每兩週手動跑一次，連跑 2-3 次都顯示「差距 < 0.5%」則考慮回退到 §4 簡化版（只用 `short_term_risk` bool 旗標、不分類、不上 UI tag）。
+
+### 9.7 物理層事實標籤 + 連續入選 streak
+
+定義於 `SwingScreenerService::buildCandidatePayload()` 與 `priorSelectionStreak()`。
+
+**設計原則：** 物理層只丟事實、不扣分、不設顯示門檻。動能/位置是否過熱由 Opus 整合判斷，避免硬閾值。呼應 §2.2「reasons 為事實標籤」原則；§2.5 當沖複合分數的 4 條硬閾值 penalty 是反例，列為未來重構議題。
+
+#### 4 條動態事實標籤（永遠輸出，無顯示門檻）
+
+| 標籤 | 計算 | 範例 |
+|---|---|---|
+| `近3日±X%` | `(closes[0] - closes[3]) / closes[3] × 100`，round 至 1 位小數 | `近3日+12%` / `近3日-7%` |
+| `連漲/連跌 N 日` | `computePriceStreak(closes)` — 從今日往前比較相鄰收盤，方向相同+1，**平盤即中斷**（streak=0），cap ±20 | `連漲5日` / `連跌3日` / `連漲0日`（首日平盤） |
+| `距MA20 ±X%` | `(close - ma20) / ma20 × 100` | `距MA20 +8%` / `距MA20 -4%` |
+| `RSI <value>` | 直接 round | `RSI 82` / `RSI 55` |
+
+無論值大小一律輸出，由 Opus 自行判斷意義。塞進 `candidates.reasons` JSON，與原 4 條定性標籤（中期趨勢向上 / 靠近均線支撐 / 法人買超 / 產業論點關聯）並列。
+
+**`pullbackScore` bug 修正：** 原 `abs(close-ma20)/ma20 < 0.05` 不分正負乖離（追高位置也算回檔加分）。修正為 `close <= ma20 * 1.01 && close >= ma20 * 0.95`（價格在 MA20 +1% 噪音容差內到 -5% 之間才算回檔）。
+
+#### 連續入選 streak（容忍斷訊日）
+
+`SwingScreenerService::priorSelectionStreak()` 從今日往前回推：
+- 該日有跑 swing screening（`candidates` 表有 `mode=swing` 任一筆）且本檔未入選 → **真正打斷**
+- 該日整個 swing 沒跑（API/系統故障、空白） → **跨過不打斷**，繼續回推
+- Cap 30 天
+
+**注意 streak 語意：** streak ≠「人類連續看到入選的日數」，而是「未被 AI 主動剔除的累計交易日數」。極端情況（系統一週沒跑）streak 會跨過該段空白繼續累加。
+
+寫入 `candidates.swing_thesis.consecutive_days_selected`：
+- AI `selected=true` → `prior + 1`
+- AI `selected=false` → `0`
+
+#### Prompt 注入
+
+`SwingScreenerService::askAi()` 每檔多兩段 `| reasons=t1,t2,t3,... | streak=N日 |`（streak 永遠輸出，包含 `streak=0日`，避免欄位有無造成 prompt 結構不一致）。
+
+第 10 條規則為**原則性描述**（不含硬閾值）：「reasons 中的事實標籤反映動能與位置狀態，streak 反映 thesis 連續入選日數。請整合判斷是否過熱、是否仍適合 4 週短線；過熱判斷不給硬閾值，由你綜合考量。」
+
+#### UI 顯示
+
+- `SwingView.vue`：每張候選卡 risk-tag-strip 後加 `入選 N 日` badge（N ≥ 2 才顯示），thesis-line 下加 reasons line（8 條 chip 含原 4 + 新 4 動態，淡灰 dashed border）
+- `CandidatesView.vue`：reasons chips 區自動帶出新標籤；streak badge 加 `mode === 'swing'` guard，避免當沖/隔日沖卡片污染
+
+#### cohort 切點警告
+
+`pullbackScore` bug 修正日為分水嶺。修正前的 `trend_pullback` 樣本含追高股污染，與修正後不可直接比較；`compute-strategy-stats`（§1 排程表）、`BacktestService` 等 by_strategy 統計做跨期分析時，請以該日為切點分段或加註說明。

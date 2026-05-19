@@ -148,6 +148,33 @@ class TechnicalIndicator
         return ['label' => '均線混排', 'code' => 'mixed'];
     }
 
+    /**
+     * 從相鄰收盤計算連續同向天數。
+     * $closes 由新到舊排序。平盤（close 相等）即中斷。
+     * 回傳：正=連漲、負=連跌、0=首日平盤或無資料。Cap ±$cap。
+     */
+    public static function priceStreak(array $closes, int $cap = 20): int
+    {
+        if (count($closes) < 2) {
+            return 0;
+        }
+        $direction = 0;
+        $streak = 0;
+        for ($i = 0; $i < min($cap, count($closes) - 1); $i++) {
+            $diff = $closes[$i] <=> $closes[$i + 1];
+            if ($diff === 0) {
+                break;
+            }
+            if ($direction === 0) {
+                $direction = $diff;
+            } elseif ($diff !== $direction) {
+                break;
+            }
+            $streak++;
+        }
+        return $direction * $streak;
+    }
+
     private static function ema(array $data, int $period): array
     {
         if (count($data) < $period) return [];

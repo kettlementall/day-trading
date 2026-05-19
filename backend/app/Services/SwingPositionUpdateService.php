@@ -379,6 +379,7 @@ stop {$position->current_stop} | target {$position->current_target}
 - target_price_reasoning 必須引用：壓力區 / 均線通道 / ATR / R:R / 題材催化 其一
 - eta_reasoning 必須引用：趨勢斜率 / 波動 / 量能 / 籌碼 / 題材催化窗 其一
 - thesis_health、technical_health、chip_health、risk_pressure 必須真實反映 context
+- 技術 context 中的 `gain_3d_pct / price_streak_days / ma20_dist_pct / rsi / volume_ratio_20d` 反映持倉的動能延伸、位置偏離與量能狀態。`health` 為單向下檔指標（跌破 MA20 才 weak），不會反映上檔過熱。若這些事實整合顯示持倉已遠離均線、動能轉強過熱、或量價背離，請判斷是否該 `trim` 鎖利或上移 `current_stop`；過熱與否由你綜合考量，不給硬閾值。
 
 # 進階仲裁
 - related_stock_context 存在時：判斷此股是否仍符合 benefit_level 與 role，若角色弱化要反映在 thesis_health/risk_pressure/reasoning/target/ETA。
@@ -687,6 +688,7 @@ PROMPT;
         $ma20 = TechnicalIndicator::sma($closes, 20);
         $ma60 = TechnicalIndicator::sma($closes, 60);
         $atr = TechnicalIndicator::atr($highs, $lows, $closes);
+        $rsi = TechnicalIndicator::rsi($closes);
         $avgVolume20 = count($volumes) >= 20 ? array_sum(array_slice($volumes, 0, 20)) / 20 : null;
         $volumeRatio = $avgVolume20 ? round(($volumes[0] ?? 0) / max(1, $avgVolume20), 2) : null;
         $health = 'healthy';
@@ -697,6 +699,13 @@ PROMPT;
             $health = 'broken';
         }
 
+        // 與選股 reasons 標籤對稱的 4 條事實（無門檻、永遠輸出，過熱判斷交給 AI）
+        $gain3d = count($closes) >= 4 && $closes[3] > 0
+            ? round(($closes[0] - $closes[3]) / $closes[3] * 100, 1)
+            : 0;
+        $ma20Dist = ($close && $ma20) ? round(($close - $ma20) / $ma20 * 100, 1) : 0;
+        $priceStreak = TechnicalIndicator::priceStreak($closes);
+
         return [
             'close' => $close,
             'ma10' => $ma10,
@@ -704,6 +713,10 @@ PROMPT;
             'ma60' => $ma60,
             'atr' => $atr,
             'volume_ratio_20d' => $volumeRatio,
+            'gain_3d_pct' => $gain3d,
+            'price_streak_days' => $priceStreak,
+            'ma20_dist_pct' => $ma20Dist,
+            'rsi' => $rsi !== null ? (int) round($rsi) : null,
             'health' => $health,
         ];
     }

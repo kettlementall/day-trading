@@ -7,11 +7,13 @@ use App\Models\DailyQuote;
 use App\Models\InstitutionalTrade;
 use App\Models\InvestmentThesis;
 use App\Models\MarginTrade;
+use App\Models\MarketHoliday;
 use App\Models\Stock;
 use App\Models\SectorIndex;
 use App\Models\StockValuation;
 use App\Models\SwingPosition;
 use App\Models\ThesisStockLink;
+use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -57,6 +59,46 @@ class SwingScreenerService
         }
 
         $aiRows = $rows->take(30)->values();
+
+        // 預載過去 60 天 swing 跑日與各候選股入選日，供 priorSelectionStreak 用（避免 N+1）
+        // 注意：trade_date 在 model 是 datetime cast，必須用 toDateString() 統一成 'Y-m-d' 才能與 previousTradingDay 對齊
+        $cutoff = Carbon::parse($tradeDate)->subDays(60)->toDateString();
+        $normalizeDate = fn ($d) => $d instanceof \DateTimeInterface
+            ? $d->format('Y-m-d')
+            : Carbon::parse((string) $d)->toDateString();
+        $pastRunDates = array_flip(
+            Candidate::where('mode', 'swing')
+                ->where('trade_date', '<', $tradeDate)
+                ->where('trade_date', '>=', $cutoff)
+                ->distinct()
+                ->pluck('trade_date')
+                ->map($normalizeDate)
+                ->all()
+        );
+        $aiStockIds = $aiRows->pluck('stock_id')->all();
+        $pastSelectedByStock = $aiStockIds
+            ? Candidate::where('mode', 'swing')
+                ->where('ai_selected', true)
+                ->where('trade_date', '<', $tradeDate)
+                ->where('trade_date', '>=', $cutoff)
+                ->whereIn('stock_id', $aiStockIds)
+                ->get(['stock_id', 'trade_date'])
+                ->groupBy('stock_id')
+                ->map(fn ($g) => array_flip($g->pluck('trade_date')->map($normalizeDate)->all()))
+                ->all()
+            : [];
+
+        // 計算各 aiRow 的 prior streak，並注入 row 與餵給 AI prompt
+        $aiRows = $aiRows->map(function (array $row) use ($tradeDate, $pastRunDates, $pastSelectedByStock) {
+            $row['prior_streak'] = $this->priorSelectionStreak(
+                (int) $row['stock_id'],
+                $tradeDate,
+                $pastRunDates,
+                $pastSelectedByStock
+            );
+            return $row;
+        })->values();
+
         $selected = $this->askAiWithRetry($date, $rows, $theses, $aiRows);
         $selectedBySymbol = collect($selected)->keyBy('symbol');
 
@@ -85,6 +127,8 @@ class SwingScreenerService
                 is_array($row['thesis'] ?? null) ? $row['thesis'] : [],
                 is_array($ai['thesis'] ?? null) ? $ai['thesis'] : []
             );
+            $priorStreak = (int) ($row['prior_streak'] ?? 0);
+            $swingThesis['consecutive_days_selected'] = $aiSelected ? $priorStreak + 1 : 0;
 
             $candidate = Candidate::create([
                 'stock_id' => $row['stock_id'],
@@ -215,7 +259,8 @@ class SwingScreenerService
         $newsRisk = $this->newsRiskContext->build($stock, $date, 5, 6);
 
         $trendScore = ($ma20 && $ma60 && $close > $ma20 && $ma20 >= $ma60) ? 25 : 0;
-        $pullbackScore = ($ma20 && abs($close - $ma20) / $ma20 < 0.05) ? 15 : 0;
+        // 真正回檔：價格 ≤ MA20 (+1% 噪音容差) 且 ≥ MA20 -5%；正乖離 >1% 算追高，不加分
+        $pullbackScore = ($ma20 && $close <= $ma20 * 1.01 && $close >= $ma20 * 0.95) ? 15 : 0;
         $chipScore = min(25, max(0, $inst->sum('total_net') / 100000));
         $volumeScore = min(15, max(0, (($volumes[0] / max(1, array_sum(array_slice($volumes, 0, 20)) / 20)) - 1) * 10));
         $thesisLinks = $this->scoreThesisLinks($stock, $theses);
@@ -225,6 +270,14 @@ class SwingScreenerService
         if ($preScore < 45) {
             return null;
         }
+
+        // 4 條動態事實標籤（無門檻，全部輸出；過熱判斷交給 AI）
+        $gain3d = count($closes) >= 4 && $closes[3] > 0
+            ? round(($closes[0] - $closes[3]) / $closes[3] * 100, 1)
+            : 0;
+        $priceStreak = TechnicalIndicator::priceStreak($closes);
+        $ma20Dist = $ma20 ? round(($close - $ma20) / $ma20 * 100, 1) : 0;
+        $rsiVal = $rsi !== null ? (int) round($rsi) : null;
 
         $entry = round($close, 2);
         $stop = round(max($close * 0.92, $close - (($atr ?: $close * 0.03) * 1.5)), 2);
@@ -249,6 +302,12 @@ class SwingScreenerService
                 $pullbackScore ? '靠近均線支撐' : null,
                 $chipScore ? '法人買超' : null,
                 $thesisScore ? '產業論點關聯' : null,
+                sprintf('近3日%s%s%%', $gain3d >= 0 ? '+' : '', $gain3d),
+                $priceStreak >= 0
+                    ? sprintf('連漲%d日', max(0, $priceStreak))
+                    : sprintf('連跌%d日', abs($priceStreak)),
+                sprintf('距MA20 %s%s%%', $ma20Dist >= 0 ? '+' : '', $ma20Dist),
+                $rsiVal !== null ? sprintf('RSI %d', $rsiVal) : null,
             ])),
             'indicators' => compact('ma5', 'ma10', 'ma20', 'ma60', 'rsi', 'kd', 'atr', 'bollinger', 'macd'),
             'valuation' => $valuation ? [
@@ -270,6 +329,35 @@ class SwingScreenerService
             'thesis' => $topThesis,
             'thesis_links' => $thesisLinks,
         ];
+    }
+
+    /**
+     * 回推計算「連續入選日數」，容忍斷訊日（該日整個 swing 沒跑不算打斷）。
+     * 預載 $pastRunDates / $pastSelectedByStock 避免 N+1。
+     */
+    private function priorSelectionStreak(
+        int $stockId,
+        string $tradeDate,
+        array $pastRunDates,
+        array $pastSelectedByStock,
+        int $cap = 30
+    ): int {
+        $streak = 0;
+        $date = $tradeDate;
+        $selectedSet = $pastSelectedByStock[$stockId] ?? [];
+        for ($i = 0; $i < $cap; $i++) {
+            $date = MarketHoliday::previousTradingDay($date);
+            // 該日整個 swing screening 沒跑（無 mode=swing candidates）— 不算打斷
+            if (!isset($pastRunDates[$date])) {
+                continue;
+            }
+            // 該日有跑但這檔沒入選 — 真正打斷
+            if (!isset($selectedSet[$date])) {
+                break;
+            }
+            $streak++;
+        }
+        return $streak;
     }
 
     private function scoreThesisLinks(Stock $stock, Collection $theses): array
@@ -386,7 +474,7 @@ class SwingScreenerService
         }
     }
 
-    private function askAi(string $date, Collection $rows, Collection $theses): array
+    private function askAi(string $date, Collection $rows, Collection $theses, ?Collection $aiRows = null): array
     {
         $thesisText = $theses->map(function ($t) {
             $related = collect($t->related_stocks ?? [])
@@ -397,7 +485,8 @@ class SwingScreenerService
 
             return "- #{$t->id} {$t->title} 信心{$t->confidence_score}: {$t->description}" . ($related ? " | 個股映射：{$related}" : '');
         })->implode("\n");
-        $candidates = $rows->take(30)->values();
+        // 優先用帶 prior_streak 的 aiRows；回退到 rows->take(30) 以保留歷史可呼叫性
+        $candidates = ($aiRows ?? $rows->take(30))->values();
         $stockText = $candidates->map(function ($r) {
             $val = $r['valuation'] ?? null;
             $valText = $val
@@ -420,8 +509,10 @@ class SwingScreenerService
                 )
                 : '類股=—';
             $newsRiskText = $this->newsRiskContext->toPrompt($r['news_risk'] ?? []);
+            $reasonsText = !empty($r['reasons']) ? implode(',', $r['reasons']) : '—';
+            $streakText = (int) ($r['prior_streak'] ?? 0) . '日';
 
-            return "{$r['symbol']} {$r['name']} {$r['industry']} pre_score={$r['pre_score']} close={$r['entry_price']} | {$valText} | {$secText} | news_risk={$newsRiskText} | thesis=" . json_encode($r['thesis'], JSON_UNESCAPED_UNICODE);
+            return "{$r['symbol']} {$r['name']} {$r['industry']} pre_score={$r['pre_score']} close={$r['entry_price']} | {$valText} | {$secText} | reasons={$reasonsText} | streak={$streakText} | news_risk={$newsRiskText} | thesis=" . json_encode($r['thesis'], JSON_UNESCAPED_UNICODE);
         })->implode("\n");
         $totalCount = $candidates->count();
         $lessonsSection = \App\Models\AiLesson::getSwingScreeningLessons();
@@ -448,6 +539,7 @@ class SwingScreenerService
 7. **單檔新聞風險必須處理**：若 news_risk 顯示 short_term_risk=true 或負面新聞，必須在 score、selected、reasoning、risk_notes 反映；不可只因產業論點正面而忽略單檔法說/財報/訂單風險。
 8. **字數紀律**：reasoning ≤50 字（策略 + 個股角色 + 風險）｜target_price_reasoning ≤35 字（含壓力/均線/ATR/R:R 之一）｜eta_reasoning ≤30 字（含趨勢/波動/量能/催化窗之一）｜risk_notes ≤3 條每條 ≤15 字｜selected=false 可更短 20-30 字。
 9. **禁止輸出 entry_plan 物件**（系統會自動從 top-level 欄位組合）。
+10. **整合事實標籤判斷動能與位置**：reasons 中的事實標籤（近 N 日漲幅、連漲/連跌、距 MA20、RSI）反映動能與位置狀態；streak 反映 thesis 連續入選日數。請整合判斷是否過熱、是否仍適合 4 週短線；過熱判斷不給硬閾值，由你綜合考量。
 
 # 輸出格式（JSON 陣列共 {$totalCount} 筆，不包 markdown）
 [{
@@ -517,7 +609,7 @@ PROMPT;
 
         for ($attempt = 1; $attempt <= $this->maxAiAttempts; $attempt++) {
             try {
-                $selected = $this->askAi($date, $rows, $theses);
+                $selected = $this->askAi($date, $rows, $theses, $aiRows);
                 $this->assertValidAiSelections($selected, $aiRows);
 
                 if ($attempt > 1) {
