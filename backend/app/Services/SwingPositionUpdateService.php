@@ -431,7 +431,8 @@ PROMPT;
                     ])
                     ->post('https://api.anthropic.com/v1/messages', [
                         'model' => $this->model,
-                        'max_tokens' => 1600,
+                        // 停損審查模式會塞 7 個額外欄位 + 整合判斷規則，1600 不夠常被截斷
+                        'max_tokens' => 2400,
                         'messages' => [['role' => 'user', 'content' => $prompt]],
                     ]);
 
@@ -451,7 +452,9 @@ PROMPT;
                 $start = strpos($text, '{');
                 $end = strrpos($text, '}');
                 if ($start === false || $end === false || $end <= $start) {
-                    Log::warning("SwingPositionUpdate {$symbol} attempt {$attempt}/{$maxAttempts} 無 JSON 大括號: " . mb_substr($text, 0, 200));
+                    // 多半是 max_tokens 截斷導致缺結尾 }（response 看似有 { 開頭但中途斷掉）
+                    $stopReason = $response->json('stop_reason', '');
+                    Log::warning("SwingPositionUpdate {$symbol} attempt {$attempt}/{$maxAttempts} JSON 不完整 (stop_reason={$stopReason}): " . mb_substr($text, 0, 200));
                     if ($attempt < $maxAttempts) {
                         sleep($attempt * 3);
                         continue;
