@@ -60,7 +60,15 @@ docker compose exec php php artisan db:seed --class=AdminSeeder
 
 # 匯入休市日（每年執行一次）
 docker compose exec php php artisan stock:import-holidays 2026
+
+# 設定 storage/logs default ACL（一次性 ops；避免 docker exec php 以 root 寫 log
+# 後 scheduler (www-data) 無法 append 導致整日排程連鎖失敗）
+sudo setfacl -d -m u:www-data:rwx,g:www-data:rwx,o::r-x backend/storage/logs
+sudo setfacl -m u:www-data:rwx,g:www-data:rwx backend/storage/logs
+# 驗證：getfacl backend/storage/logs 應出現 default:user:www-data:rwx 等 entries
 ```
+
+> **為什麼需要 ACL**：`php` container 以 root 跑（為了 `composer install`、`artisan migrate` 等需要 root 權限的操作），但 `scheduler` / `queue` 容器以 `www-data` 跑。若 root 先建了當日 log file（owner=root、mode 644），www-data 後續無法 append → Monolog throw → 排程連鎖失敗。Default ACL 讓任何 user 在 `storage/logs` 建檔都自動 inherit `www-data:rwx` 而能讀寫。
 
 ## 存取
 
