@@ -10,6 +10,7 @@ use App\Models\SectorIndex;
 use App\Models\StockValuation;
 use App\Models\SwingPosition;
 use App\Models\SwingPositionSnapshot;
+use App\Services\MarketContextService;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -290,6 +291,27 @@ class SwingPositionUpdateService
         $newsRiskText = $this->newsRiskContext->toPrompt($newsRiskContext);
         $recentExitText = $recentExitSignal ? 'true（近 7 日測過 stop 或論點失效）' : 'false';
         $riskZoneText = $riskZoneTouched ? 'true（未跌破今日停損，但近期碰過停損附近或出現 exit 壓力）' : 'false';
+
+        // 大盤情境（reuse 既有 service，與 ai-screen / briefing 對齊）
+        $marketContext = MarketContextService::detect($quote->date->toDateString());
+        $marketContextText = MarketContextService::toPromptSection($marketContext);
+
+        // 持倉軌跡：從進場以來最高水位 + 從高水位回撤（用 snapshot close 近似，誤差 1-3% 可接受）
+        $profitPct = $this->profitPercent($position, (float) $quote->close);
+        $peakSnapshot = SwingPositionSnapshot::where('swing_position_id', $position->id)
+            ->where('date', '>=', $position->entry_date)
+            ->where('date', '<', $quote->date->toDateString())
+            ->orderByDesc('unrealized_profit_percent')
+            ->first();
+        // 首日無 snapshot 或今日浮盈即高於歷史 → peak = currentProfit、drawdown = 0
+        $peakProfitPct = $peakSnapshot ? max((float) $peakSnapshot->unrealized_profit_percent, $profitPct) : $profitPct;
+        $drawdownFromPeakPct = max(0.0, round($peakProfitPct - $profitPct, 2));
+        $trajectoryText = sprintf(
+            '進場後高水位：%s%% | 目前浮盈：%s%% | 從高水位回撤：%s%%',
+            $peakProfitPct >= 0 ? '+' . $peakProfitPct : $peakProfitPct,
+            $profitPct >= 0 ? '+' . $profitPct : $profitPct,
+            $drawdownFromPeakPct
+        );
         $lessonsSection = \App\Models\AiLesson::getSwingAdviceLessons();
         $lessonsBlock = $lessonsSection !== '' ? $lessonsSection . "\n\n" : '';
         $previousStopReview = $this->lastStopReviewAdvice($position);
@@ -360,9 +382,11 @@ RISKZONE;
 股票：{$position->stock->symbol} {$position->stock->name}
 收盤 {$quote->close} | 成本 {$position->entry_price} | 股數 {$position->shares} | 持有 {$holdingDays} 日
 stop {$position->current_stop} | target {$position->current_target}
+{$trajectoryText}
 原由：{$candidate?->swing_reasoning}
 
 # Context
+{$marketContextText}
 論點：{$thesisJson}
 技術：{$technicalJson}
 籌碼：{$chipJson}
@@ -391,6 +415,7 @@ stop {$position->current_stop} | target {$position->current_target}
 - thesis_status.invalidation_signal=true：不可單獨 exit。只有「論點失效＋技術 weak/broken」或「論點失效＋瀕臨 stop」雙條件成立才 exit；否則 trim/adjust 上移 stop，給時間驗證。invalidation_reason=title_not_found_in_db 多半只是命名飄移，非基本面壞。
 - 近 7 日 exit 訊號=true：這是風險提醒，不是出場命令。若 thesis 仍有效、價格已收回關鍵位置、籌碼沒有惡化，可以 hold；若只是尚未確認修復，才 trim/adjust；若核心支柱破壞才 exit。
 - stop_breached=false 時，stop_review_state 與 stop_review_reasoning 必須是 null，只能用 risk_zone_touched 表達近期受壓。
+- `市場情境` 為 `bearish_panic` / `bullish_catalyst` 時，股價短期表現相當程度受大盤拖累/帶動；判 thesis_health 與 market_vs_stock_issue 時請整合考量。`進場後高水位` vs `目前浮盈` 顯著回撤（無硬閾值，由你判讀）時，請評估是否 trim 鎖利或上移 stop 而非直接 exit。
 
 # 輸出 schema
 {

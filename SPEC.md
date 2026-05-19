@@ -1851,6 +1851,40 @@ daily review 用結構化 JSON key 而非 chip 字串，因為 prompt context �
 
 **`volume_ratio_20d`** 既有欄位（line 691），本次規則一併納入「動能 + 位置 + 量」三軸整合。
 
+### 9.5c 大盤情境與持倉軌跡注入
+
+定義於 `SwingPositionUpdateService::askAi()`。
+
+**Why：** swing daily review 過去 30 天 70% advice 是 exit、過去 14 天 22 筆 real-AI exit 中 55% 賣早。根因之一為 AI 看不到「大盤背景」與「持倉軌跡」：
+- **缺大盤情境**：panic 日（如費半 -6.39%）時，AI 無法區分「個股 thesis 失效」vs「全市場拖累」→ 傾向歸因個股 → exit
+- **缺持倉軌跡**：AI 只看當日 close vs entry_price，看不出「曾經 +12% 現在 +3%」vs「持平到現在」差別 → 沒有 trim 鎖利的判斷依據
+
+**Feature 1：MarketContext 注入**
+
+`askAi` 開頭呼叫 `MarketContextService::detect($tradeDate)` 與 `toPromptSection($context)`，注入 `# Context` 區塊頂端。reuse 既有 service（與 `AiScreenerService` / `HaikuPreFilterService` / `PremarketBriefingService` 共用，避免重複實作）。`normal` label 時 `toPromptSection` 回空字串 → 不加 noise；`bullish_catalyst` / `bearish_panic` / `sector_rotation` 時注入完整 label + triggers + hint + 受益產業。
+
+**Feature 2：持倉軌跡（peak + drawdown）**
+
+從 `swing_position_snapshots` 撈 `position->entry_date` 至前一日的所有 snapshot，取 `unrealized_profit_percent` 最大值為 `peak_profit_pct`。`drawdown_from_peak_pct = max(0, peak - currentProfit)`。注入「持倉」區塊內：
+
+```
+進場後高水位：{peak}% | 目前浮盈：{current}% | 從高水位回撤：{drawdown}%
+```
+
+**Caveat 1（精度）**：peak 用當日 close 算的 unrealized_profit_percent，不是盤中 daily_high。真實最高水位可能高 1-3%（極端波動日更大）。本次接受精度誤差換實作簡單；若日後發現影響 AI 判斷，再改用 `DailyQuote::high` 自 entry_date 起 max。
+
+**Caveat 2（語意）**：持倉從未轉正（一直浮虧）時 peak 可能為負值（例：entry +0%、最低 -5%、現在 -3% → peak=0%、drawdown=3%）。Drawdown 描述「從 entry 點以來的回撤」而非「lock-in 機會回吐」。Prompt 不額外解釋，由 AI 從 `目前浮盈` 為負自行判讀。
+
+**首日退路**：無 snapshot 歷史時 peak = currentProfit、drawdown = 0；AI 該從 `holding_days=0` 推斷首日。
+
+**Prompt 規則注入**
+
+`# 進階仲裁` 段加第 11 條（原則性、無硬閾值）：
+
+> 「`市場情境` 為 `bearish_panic` / `bullish_catalyst` 時，股價短期表現相當程度受大盤拖累/帶動；判 thesis_health 與 market_vs_stock_issue 時請整合考量。`進場後高水位` vs `目前浮盈` 顯著回撤（無硬閾值，由你判讀）時，請評估是否 trim 鎖利或上移 stop 而非直接 exit。」
+
+**Feature 3 deferred**：「過去 advice 準確率」（AI 自我修正）需新增預計算統計表（風格類似 §9.6.1 `swing-news-risk-stats`），實作成本高，另開議題。
+
 ### 9.6 個股新聞風險訊號（`StockNewsRiskContextService`）
 
 短線（screener + 每日持倉審查）獨立於 §4 的總體 NewsIndex，需要看單檔層級「未來 1-5 個交易日是否有財報／訂單／成本／展望相關利空」。`StockNewsRiskContextService::build($stock, $date, $days=5, $limit=6)` 統一構建：
