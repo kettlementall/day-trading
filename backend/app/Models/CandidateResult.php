@@ -10,7 +10,7 @@ class CandidateResult extends Model
     protected $fillable = [
         'candidate_id', 'actual_open', 'actual_high', 'actual_low', 'actual_close',
         'hit_target', 'hit_stop_loss', 'max_profit_percent', 'max_loss_percent',
-        'buy_reachable', 'target_reachable', 'buy_gap_percent', 'target_gap_percent',
+        'buy_reachable', 'unreachable_reason', 'target_reachable', 'buy_gap_percent', 'target_gap_percent',
         'entry_time', 'exit_time', 'entry_price_actual', 'exit_price_actual',
         'entry_type',
         'mfe_percent', 'mae_percent', 'valid_entry', 'monitor_status',

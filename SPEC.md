@@ -47,7 +47,7 @@
 | **12:50** | **`stock:ai-screen-overnight`** | **隔日沖三階段 AI 選股（用今日盤中資料選明日建倉標的）** |
 | 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情                                                 |
 | 15:00 | `stock:update-results`      | 更新當日當沖候選標的的盤後結果                                           |
-| **15:05** | **`stock:update-overnight-results`** | **更新隔日沖候選標的盤後實際結果（T+1 收盤後）** |
+| **15:05** | **`stock:update-overnight-results`** | **更新隔日沖候選標的盤後實際結果（T+1 收盤後）；`--force-recompute` 旗標供歷史回填強制重算 `buy_reachable` / `unreachable_reason` / 實際出場欄位** |
 | 15:30 | `stock:daily-review`        | 自動產出當日 AI 檢討報告（依賴 15:00 結果回填，不含教訓萃取）                     |
 | **15:35** | **`stock:daily-review --mode=overnight`** | **自動產出隔日沖 AI 檢討報告（不含教訓萃取）** |
 | 16:30 | `stock:fetch-institutional` | 抓取三大法人買賣超（TWSE 約 16:15~16:30 上線）                          |
@@ -1095,7 +1095,8 @@ docker compose exec php php artisan stock:dry-run-movers --date=2026-04-29 --wat
 | `hit_stop_loss` | 有 monitor → monitor 狀態為 `stop_hit`；無 monitor → 當日最低價 ≤ `stop_loss` |
 | `max_profit_percent` | `(high - suggested_buy) / suggested_buy × 100` |
 | `max_loss_percent` | `(suggested_buy - low) / suggested_buy × 100` |
-| `buy_reachable` | 有 monitor → monitor 有實際進場；無 monitor → 當日最低價 ≤ 建議買入價 |
+| `buy_reachable` | 有 monitor → monitor 有實際進場；無 monitor → 當日最低價 ≤ 建議買入價 **AND T+0 未鎖死漲停**（隔日沖：T+0 鎖死漲停物理上無法成交 → false）|
+| `unreachable_reason` | 為何 `buy_reachable=false`。當前值域：`t0_limit_up_locked`（T+0 漲幅 ≥9.5% 且 high==close 且 close>low）/ NULL（可成交或仍可能 T+1 觸及 suggested_buy）|
 | `target_reachable` | 有 monitor → 同 `hit_target`；無 monitor → 當日最高價 ≥ 目標價 |
 | `buy_gap_percent` | `(suggested_buy - low) / suggested_buy × 100`（正值=買得到）|
 | `target_gap_percent` | `(high - effective_target) / effective_target × 100`（effective_target = monitor 最終目標 or 原始目標）|
@@ -1310,6 +1311,11 @@ overnight 模式的物理篩選上限為 **top 100**（`max_candidates = 100`，
 | `open_follow_through` | 今日收盤強勢，明日延續開盤動能 |
 | `limit_up_chase` | 今日漲停收盤，明日開盤追強 |
 
+**T+0 鎖死漲停 hard rule：**
+若 per-stock 訊息出現「T+0 鎖死漲停警示」（盤中漲幅 ≥9.5% 且現價=日高），entry_type **禁止回傳 `limit_up_chase`**——鎖死漲停的標的當日盤後無法以 suggested_buy 成交，計入此策略會污染回測。Opus 應改用 `gap_up_open` 或 `selected=false`；若 Opus 違反，`applyResultOvernight` 會自動降級為 `gap_up_open` 並 log warning。
+
+> **觀察期決策點**：此規則上線後等 15 個交易日新樣本，若「可成交」的 limit_up_chase 仍負期望值或樣本 <5，應正式從 entry_type enum 拿掉（同步刪除 `buildSystemPromptOvernight` 的選項與 `BacktestService::computeOvernightMetrics` 的列舉）。
+
 **DB 寫入欄位（`applyResultOvernight`）：**
 - `overnight_strategy` ← `entry_type`（枚舉）
 - `overnight_reasoning` ← `overnight_strategy`（完整說明文字）
@@ -1368,6 +1374,10 @@ Fallback（API 失敗）：回傳 `{action: "hold"}`，維持現狀。
 
 查詢 `candidates.trade_date = T+1, mode = 'overnight'` 且尚未建立結果，或既有 `candidate_results` 缺少 `overnight_outcome` / `open_gap_percent` 的候選，寫入或補齊 `candidate_results`。若候選有 `overnight_strategy` 但 `gap_predicted_correctly` 缺漏，也會一併補齊；未選入且沒有 entry type 的標的允許該欄位維持 null。若候選有 `CandidateMonitor`，同步寫入 `monitor_status`、`entry_price_actual`、`exit_price_actual`、`entry_time`、`exit_time`，供實際出場績效報表使用；這些欄位不改變本節既有理論 outcome 口徑。
 
+帶 `--force-recompute` 旗標時跳過上述「whereNull 補齊條件鏈」，對 `trade_date` 當日所有 overnight 候選強制重算所有欄位，並 `updateOrCreate` 覆寫——供歷史回填（如 `buy_reachable` 規則調整、新增欄位）使用。
+
+判斷 T+0 是否鎖死漲停所需的 T+0 / T-1 日 K 採批次預載（`whereIn stock_ids`），避免每筆 candidate 各別 query。
+
 | 欄位 | 說明 |
 |------|------|
 | `actual_open/high/low/close` | T+1 實際 OHLC |
@@ -1375,7 +1385,8 @@ Fallback（API 失敗）：回傳 `{action: "hold"}`，維持現狀。
 | `open_gap_percent` | (T+1 開盤 - T+0 收盤) / T+0 收盤 × 100 |
 | `gap_predicted_correctly` | 跳空方向與 `entry_type` 預測是否一致 |
 | `overnight_outcome` | hit_target / hit_stop / gap_up_strong / gap_up / gap_down / up / down / neutral |
-| `monitor_status` / `entry_price_actual` / `exit_price_actual` | 實際出場績效用欄位；entry price 優先採 monitor，若隔日沖 monitor 未記錄進場價則以 `suggested_buy` 作為建倉參考價 |
+| `buy_reachable` / `unreachable_reason` | T+1 low ≤ suggested_buy **AND T+0 未鎖死漲停**；若 T+0 鎖死漲停（漲幅 ≥9.5% 且 high==close 且 close>low），`buy_reachable=false`、`unreachable_reason='t0_limit_up_locked'` |
+| `monitor_status` / `entry_price_actual` / `exit_price_actual` | 實際出場績效用欄位；entry price 優先採 monitor，若隔日沖 monitor 未記錄進場價則以 `suggested_buy` 作為建倉參考價。**鎖漲停樣本不清空 entry/exit 價格**，僅以 `buy_reachable=false` 過濾，保留資料供「假設追進去多慘」分析 |
 
 ### 6.8 AI 每日檢討（overnight 模式）
 
@@ -1396,6 +1407,8 @@ Fallback（API 失敗）：回傳 `{action: "hold"}`，維持現狀。
 | `market_condition`（dimension_type） | 依當日台指期漲跌幅分組（大盤>+1%、-1~+1%、<-1%）|
 
 統計欄位：`target_reach_rate`（達標率）、`expected_value`（期望報酬%）、`avg_risk_reward`（平均風報比）。
+
+> **過濾規則**：`StrategyStatsService` 各 dimension 統一加 `where buy_reachable = true`，因此 `unreachable_reason='t0_limit_up_locked'` 的樣本不計入任何 `target_reach_rate` / `expected_value` / `avg_risk_reward`。物理上買不到的「假成交」不污染績效，也不會被注入 Opus prompt 誤導下一輪選股。
 
 這些統計資料會注入 Opus overnight 選股的 System Prompt，提供量化基準。
 

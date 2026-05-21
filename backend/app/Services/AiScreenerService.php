@@ -28,6 +28,12 @@ class AiScreenerService
     private string $model;
     private array $preloaded = [];
 
+    /**
+     * Overnight：buildStockMessageOvernight 偵測到 T+0 鎖死漲停的 candidate_id 集合。
+     * applyResultOvernight 用此作 post-validation，攔截 Opus 違反 hard rule 的回傳。
+     */
+    private array $t0LimitUpLockedByCandidate = [];
+
     public function __construct()
     {
         $this->apiKey = config('services.anthropic.api_key', '');
@@ -656,6 +662,7 @@ MSG;
 - avoid：逐檔分析已排除、價格結構不佳、普通延續型證據不足、或相對排序落後。
 - 不要因單一硬門檻機械排除；請比較尾盤強度、量能、類股位置、風報比、隔日跳空潛力與風險。
 - 若市場偏弱，普通 open_follow_through 必須比 limit_up_chase 或明顯抗跌主流股有更高證據。
+- 若逐檔分析仍將 T+0 已鎖死漲停的標的標為 limit_up_chase（系統會自動降級並標記 buy_reachable=false），請降為 watch/avoid，不得列為 primary——這類訊號對隔日沖實質無效。
 - 不得把逐檔 Opus 已排除且缺少買進/目標/停損價格的標的列為 primary。
 
 請直接回覆 JSON，不要 markdown：
@@ -881,6 +888,7 @@ WARN;
 - **fundamental_reason**：**只能**引用「基本面估值」區塊的本益比、殖利率、股價淨值比具體數字，說明估值偏低/合理/偏高及對隔日沖的影響（1句）；若無估值資料則填 null
 - **overnight_strategy**：操作須知，含何時建倉、明日關鍵觀察點、預期走勢（2–3句）
 - **entry_type**：gap_up_open（跳空高開）｜pullback_entry（拉回建倉）｜open_follow_through（延續開盤）｜limit_up_chase（漲停追強）
+  - **硬性規則**：若 per-stock 訊息出現「T+0 鎖死漲停警示」（漲幅 ≥9.5% 且現價=日高），entry_type **嚴禁回傳 limit_up_chase**——鎖死漲停的標的當日盤後無法以 suggested_buy 成交，計入此策略會污染回測統計。應改用 gap_up_open，或視為不可建倉而 selected=false。
 
 ## 回覆格式
 請直接回覆 JSON（不要加 markdown 標記），格式：
@@ -910,6 +918,17 @@ SYSTEM;
     // -------------------------------------------------------------------------
     // Overnight: per-stock user message
     // -------------------------------------------------------------------------
+
+    /**
+     * 判斷盤中當下 T+0 是否鎖死漲停（與 UpdateOvernightResults::isT0LimitUpLocked 採同源條件，
+     * 差別僅在資料來源：此處用即時 currentPrice / dayHigh / changePct，後者用日 K）。
+     */
+    private static function isT0LimitUpLockedNow(float $changePct, float $currentPrice, float $dayHigh): bool
+    {
+        return $dayHigh > 0
+            && $changePct >= 9.5
+            && abs($currentPrice - $dayHigh) < 0.01;
+    }
 
     private function buildStockMessageOvernight(
         string $tradeDate,
@@ -1079,6 +1098,17 @@ SYSTEM;
             );
         }
 
+        // T+0 是否鎖死漲停（建倉日盤中已無法以 suggested_buy 成交）
+        // 條件：盤中漲幅 ≥ 9.5% 且現價 = 日高（容忍 1 分精度），同步注入警示與快取供 applyResultOvernight post-validation
+        $t0LimitUpLocked = self::isT0LimitUpLockedNow($changePct, $currentPrice, $dayHighSnap);
+        $this->t0LimitUpLockedByCandidate[$candidate->id] = $t0LimitUpLocked;
+        if ($t0LimitUpLocked) {
+            $snapSummary .= sprintf(
+                "\n⚠️ **T+0 鎖死漲停警示**：當日漲幅 %+.2f%%，現價 %.2f 已等於日高 %.2f，下午盤實際無法以 suggested_buy 成交買進。entry_type **禁標 limit_up_chase**；若仍認為有隔日延續性，請改用 gap_up_open，或 selected=false 不選入。",
+                $changePct, $currentPrice, $dayHighSnap
+            );
+        }
+
         // 衍生特徵：連漲天數
         $allChgPcts    = $quotes->pluck('change_percent')->map(fn($v) => (float) $v)->toArray();
         $consecutiveUp = 0;
@@ -1223,6 +1253,15 @@ MSG;
     {
         $selected = (bool) ($result['selected'] ?? false);
         $symbol   = $candidate->stock->symbol;
+
+        // Post-validation：T+0 鎖漲停股 entry_type 不得為 limit_up_chase（Opus 有時會違反 hard rule）
+        if ($selected
+            && ($result['entry_type'] ?? null) === 'limit_up_chase'
+            && ($this->t0LimitUpLockedByCandidate[$candidate->id] ?? false)
+        ) {
+            Log::warning("AiScreenerService overnight {$symbol}: Opus 違反 hard rule 對 T+0 鎖漲停股標 limit_up_chase，自動降級為 gap_up_open");
+            $result['entry_type'] = 'gap_up_open';
+        }
 
         $updates = [
             'ai_selected'                   => $selected,

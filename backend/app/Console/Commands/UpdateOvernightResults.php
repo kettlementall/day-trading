@@ -12,12 +12,13 @@ use Illuminate\Support\Facades\Log;
 
 class UpdateOvernightResults extends Command
 {
-    protected $signature = 'stock:update-overnight-results {date?}';
+    protected $signature = 'stock:update-overnight-results {date?} {--force-recompute : 強制重新計算所有欄位（不僅補齊 null），用於歷史回填}';
     protected $description = '更新隔日沖候選標的盤後實際結果（T+1 15:05 執行）';
 
     public function handle(): int
     {
         $tradeDate = $this->argument('date') ?? now()->format('Y-m-d');
+        $force = (bool) $this->option('force-recompute');
 
         // 排程執行時跳過休市日
         if (!$this->argument('date') && MarketHoliday::isHoliday($tradeDate)) {
@@ -25,77 +26,95 @@ class UpdateOvernightResults extends Command
             return self::SUCCESS;
         }
 
-        $candidates = Candidate::where('trade_date', $tradeDate)
-            ->where('mode', 'overnight')
-            ->where(function ($query) {
-                $query->whereDoesntHave('result')
-                    ->orWhereHas('result', function ($resultQuery) {
-                        $resultQuery
-                            ->whereNull('overnight_outcome')
-                            ->orWhereNull('open_gap_percent');
-                    })
-                    ->orWhere(function ($candidateQuery) {
-                        $candidateQuery
-                            ->whereNotNull('overnight_strategy')
-                            ->whereHas('result', function ($resultQuery) {
-                                $resultQuery->whereNull('gap_predicted_correctly');
-                            });
-                    })
-                    ->orWhere(function ($candidateQuery) {
-                        $candidateQuery
-                            ->whereHas('monitor', function ($monitorQuery) {
-                                $monitorQuery->whereIn('status', CandidateMonitor::TERMINAL_STATUSES);
-                            })
-                            ->where(function ($needsMonitorBackfill) {
-                                $needsMonitorBackfill
-                                    ->whereHas('result', function ($resultQuery) {
-                                        $resultQuery->whereNull('monitor_status');
-                                    })
-                                    ->orWhere(function ($needsEntryBackfill) {
-                                        $needsEntryBackfill
-                                            ->whereHas('monitor', function ($monitorQuery) {
-                                                $monitorQuery->where('status', '!=', CandidateMonitor::STATUS_SKIPPED);
-                                            })
-                                            ->whereHas('result', function ($resultQuery) {
-                                                $resultQuery->whereNull('entry_price_actual');
-                                            });
-                                    });
-                            });
-                    })
-                    ->orWhere(function ($candidateQuery) {
-                        $candidateQuery
-                            ->whereHas('monitor', function ($monitorQuery) {
-                                $monitorQuery->whereNotNull('exit_price');
-                            })
-                            ->whereHas('result', function ($resultQuery) {
-                                $resultQuery->whereNull('exit_price_actual');
-                            });
-                    });
-            })
-            ->with(['stock', 'result', 'monitor'])
-            ->get();
+        $baseQuery = Candidate::where('trade_date', $tradeDate)->where('mode', 'overnight');
+
+        if ($force) {
+            $candidates = $baseQuery->with(['stock', 'result', 'monitor'])->get();
+            $this->info("--force-recompute：重算 {$tradeDate} 全部 {$candidates->count()} 筆 overnight 候選");
+        } else {
+            $candidates = $baseQuery
+                ->where(function ($query) {
+                    $query->whereDoesntHave('result')
+                        ->orWhereHas('result', function ($resultQuery) {
+                            $resultQuery
+                                ->whereNull('overnight_outcome')
+                                ->orWhereNull('open_gap_percent');
+                        })
+                        ->orWhere(function ($candidateQuery) {
+                            $candidateQuery
+                                ->whereNotNull('overnight_strategy')
+                                ->whereHas('result', function ($resultQuery) {
+                                    $resultQuery->whereNull('gap_predicted_correctly');
+                                });
+                        })
+                        ->orWhere(function ($candidateQuery) {
+                            $candidateQuery
+                                ->whereHas('monitor', function ($monitorQuery) {
+                                    $monitorQuery->whereIn('status', CandidateMonitor::TERMINAL_STATUSES);
+                                })
+                                ->where(function ($needsMonitorBackfill) {
+                                    $needsMonitorBackfill
+                                        ->whereHas('result', function ($resultQuery) {
+                                            $resultQuery->whereNull('monitor_status');
+                                        })
+                                        ->orWhere(function ($needsEntryBackfill) {
+                                            $needsEntryBackfill
+                                                ->whereHas('monitor', function ($monitorQuery) {
+                                                    $monitorQuery->where('status', '!=', CandidateMonitor::STATUS_SKIPPED);
+                                                })
+                                                ->whereHas('result', function ($resultQuery) {
+                                                    $resultQuery->whereNull('entry_price_actual');
+                                                });
+                                        });
+                                });
+                        })
+                        ->orWhere(function ($candidateQuery) {
+                            $candidateQuery
+                                ->whereHas('monitor', function ($monitorQuery) {
+                                    $monitorQuery->whereNotNull('exit_price');
+                                })
+                                ->whereHas('result', function ($resultQuery) {
+                                    $resultQuery->whereNull('exit_price_actual');
+                                });
+                        });
+                })
+                ->with(['stock', 'result', 'monitor'])
+                ->get();
+        }
 
         if ($candidates->isEmpty()) {
             $this->info("日期 {$tradeDate} 無需更新的隔日沖候選標的");
             return self::SUCCESS;
         }
 
+        // 批次預載 T+0 / T-1 日 K（trade_date 之前最近兩筆，避免 N+1）
+        $stockIds = $candidates->pluck('stock_id')->unique()->all();
+        $recentQuotesByStock = DailyQuote::whereIn('stock_id', $stockIds)
+            ->where('date', '<', $tradeDate)
+            ->orderBy('stock_id')
+            ->orderByDesc('date')
+            ->get()
+            ->groupBy('stock_id');
+
+        // T+1（trade_date 當日）日 K 也批次預載
+        $t1QuotesByStock = DailyQuote::whereIn('stock_id', $stockIds)
+            ->where('date', $tradeDate)
+            ->get()
+            ->keyBy('stock_id');
+
         $count = 0;
 
         foreach ($candidates as $candidate) {
-            $quote = DailyQuote::where('stock_id', $candidate->stock_id)
-                ->where('date', $tradeDate)
-                ->first();
+            $quote = $t1QuotesByStock->get($candidate->stock_id);
 
             if (!$quote) {
                 $this->warn("{$candidate->stock->symbol} 找不到 {$tradeDate} 日K資料，跳過");
                 continue;
             }
 
-            $prevQuote = DailyQuote::where('stock_id', $candidate->stock_id)
-                ->where('date', '<', $tradeDate)
-                ->orderByDesc('date')
-                ->first();
+            $stockHistory = $recentQuotesByStock->get($candidate->stock_id, collect());
+            $prevQuote = $stockHistory->first();    // T+0
+            $tMinus1   = $stockHistory->skip(1)->first(); // T-1（用來算 T+0 漲幅判斷鎖漲停）
 
             $open      = (float) $quote->open;
             $high      = (float) $quote->high;
@@ -121,10 +140,14 @@ class UpdateOvernightResults extends Command
                 $gapPredictedCorrectly = ($predictedGapUp === $actualGapUp);
             }
 
+            // T+0 是否鎖死漲停（建倉日盤後）→ 物理上無法以 suggested_buy 成交
+            $t0LimitUpLocked = self::isT0LimitUpLocked($prevQuote, $tMinus1);
+            $unreachableReason = $t0LimitUpLocked ? 't0_limit_up_locked' : null;
+
             // 基本結果
             $hitTarget    = $suggestedBuy > 0 && $targetPrice > 0 && $high >= $targetPrice;
             $hitStopLoss  = $suggestedBuy > 0 && $stopLoss > 0 && $low <= $stopLoss;
-            $buyReachable = $suggestedBuy > 0 && $low <= $suggestedBuy;
+            $buyReachable = $suggestedBuy > 0 && $low <= $suggestedBuy && !$t0LimitUpLocked;
 
             $maxProfit = $suggestedBuy > 0
                 ? round(($high - $suggestedBuy) / $suggestedBuy * 100, 2)
@@ -156,6 +179,7 @@ class UpdateOvernightResults extends Command
                 'max_profit_percent'      => $maxProfit,
                 'max_loss_percent'        => $maxLoss,
                 'buy_reachable'           => $buyReachable,
+                'unreachable_reason'      => $unreachableReason,
                 'target_reachable'        => $hitTarget,
                 'open_gap_percent'        => $openGapPct,
                 'gap_predicted_correctly' => $gapPredictedCorrectly,
@@ -170,10 +194,11 @@ class UpdateOvernightResults extends Command
 
             $count++;
             $this->line(sprintf(
-                '  %s: 開%.2f(跳空%+.2f%%) 高%.2f 低%.2f 收%.2f → %s',
+                '  %s: 開%.2f(跳空%+.2f%%) 高%.2f 低%.2f 收%.2f → %s%s',
                 $candidate->stock->symbol,
                 $open, $openGapPct, $high, $low, $close,
-                $overnightOutcome
+                $overnightOutcome,
+                $t0LimitUpLocked ? '  ⚠ T+0鎖漲停(buy_reachable=false)' : ''
             ));
         }
 
@@ -181,6 +206,31 @@ class UpdateOvernightResults extends Command
         Log::info("UpdateOvernightResults {$tradeDate}：更新 {$count} 筆");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * 判斷 T+0（建倉日）是否鎖死漲停 → 物理上無法以 suggested_buy 成交買進。
+     * 條件：T+0 漲幅 ≥ 9.5% AND T+0 收盤 = 日高 AND T+0 收盤 > 日低（排除一字漲停跌停同價的退市股噪音）
+     */
+    private static function isT0LimitUpLocked(?DailyQuote $t0, ?DailyQuote $tMinus1): bool
+    {
+        if (!$t0 || !$tMinus1) {
+            return false;
+        }
+
+        $prevClose = (float) $tMinus1->close;
+        if ($prevClose <= 0) {
+            return false;
+        }
+
+        $t0Close = (float) $t0->close;
+        $t0High  = (float) $t0->high;
+        $t0Low   = (float) $t0->low;
+        $changePct = ($t0Close - $prevClose) / $prevClose * 100;
+
+        return $changePct >= 9.5
+            && abs($t0Close - $t0High) < 0.01
+            && $t0Close > $t0Low + 0.01;
     }
 
     private function getMonitorPayload(Candidate $candidate, float $suggestedBuy): array
