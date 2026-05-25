@@ -16,6 +16,16 @@
         <el-button size="small" type="primary" plain :loading="loading" @click="fetchAll">
           刷新
         </el-button>
+        <el-button
+          v-if="authStore.isAdmin"
+          size="small"
+          type="warning"
+          plain
+          :loading="rescreening"
+          @click="doRescreen"
+        >
+          {{ rescreening ? (rescreenProgress || '選股中...') : '重新選股' }}
+        </el-button>
       </div>
     </header>
 
@@ -638,6 +648,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '../stores/auth'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -648,7 +659,9 @@ import {
   getSwingCandidates,
   getSwingLivePrices,
   getSwingPositions,
+  getSwingRescreenStatus,
   reduceSwingShares,
+  rescreenSwing,
   updateSwingPosition,
 } from '../api'
 
@@ -703,6 +716,11 @@ const livePriceUpdatedAt = ref(null)
 const flashIds = ref(new Set())
 let livePollTimer = null
 
+const authStore = useAuthStore()
+const rescreening = ref(false)
+const rescreenProgress = ref('')
+let rescreenTimer = null
+
 const archivedPositions = computed(() => positions.value.filter(isArchivedClosedPosition))
 const currentPositions = computed(() => positions.value.filter((p) => !isArchivedClosedPosition(p)))
 const visiblePositions = computed(() => (
@@ -719,7 +737,48 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopLivePolling()
+  stopRescreenPoll()
 })
+
+async function doRescreen() {
+  rescreening.value = true
+  rescreenProgress.value = '排隊中...'
+  try {
+    await rescreenSwing(currentDate.value)
+    startRescreenPoll()
+  } catch {
+    ElMessage.error('觸發失敗')
+    rescreening.value = false
+  }
+}
+
+function startRescreenPoll() {
+  rescreenTimer = setInterval(async () => {
+    try {
+      const { data } = await getSwingRescreenStatus(currentDate.value)
+      if (data.progress) rescreenProgress.value = data.progress
+      if (data.status === 'done') {
+        stopRescreenPoll()
+        rescreening.value = false
+        if (data.success) {
+          ElMessage.success('選股完成')
+          await fetchAll()
+        } else {
+          ElMessage.error(data.message || '選股失敗')
+        }
+      }
+    } catch {
+      // ignore polling errors
+    }
+  }, 3000)
+}
+
+function stopRescreenPoll() {
+  if (rescreenTimer) {
+    clearInterval(rescreenTimer)
+    rescreenTimer = null
+  }
+}
 
 function isMarketHours() {
   const now = dayjs()

@@ -186,6 +186,12 @@ export const calculateSwingSizing = (data) =>
 export const getSwingLessons = () =>
   api.get('/swing/lessons')
 
+export const rescreenSwing = (date) =>
+  api.post('/swing/rescreen', { date })
+
+export const getSwingRescreenStatus = (date) =>
+  api.get('/swing/rescreen-status', { params: { date } })
+
 export const getInvestmentTheses = () =>
   api.get('/investment-theses')
 

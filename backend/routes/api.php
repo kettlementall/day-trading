@@ -94,6 +94,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/news/fetch',       [NewsController::class, 'fetch']);
         Route::get('/news/fetch-status', [NewsController::class, 'fetchStatus']);
 
+        // 短線選股（手動重跑，admin only）
+        Route::post('/swing/rescreen',       [SwingController::class, 'rescreen']);
+        Route::get('/swing/rescreen-status', [SwingController::class, 'rescreenStatus']);
+
         // 公式設定
         Route::get('/formula-settings',           [FormulaSettingController::class, 'index']);
         Route::put('/formula-settings/{type}',    [FormulaSettingController::class, 'update']);

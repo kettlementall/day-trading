@@ -1702,6 +1702,20 @@ AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`�
 - 報價變動時 800ms `livePulse` 動畫高亮邊框
 - 卡片下方 5 欄 stats 改為「成本 / 股數 / 停損 / 目標 / 市值」（現價已拉到右上不再重複）
 
+### 9.3b admin 手動重跑選股
+
+頁首 admin-only「重新選股」按鈕(`SwingView.vue`,`v-if="authStore.isAdmin"`),用頁首日期選擇器的 `currentDate` 當參數——切到哪天就重跑哪天(對應 19:00 排程失敗、或凌晨手動補某交易日的情境)。
+
+**Why:** `ai-screen-swing` 靠 Opus,偶爾連續 3 次回覆不通過 `assertValidAiSelections` 校驗 → `askAiWithRetry` 耗盡 throw → 當日零候選(「寧缺毋濫」設計,不退回規則分)。原本只有次日 22:00 health check 標 `短線候選未產出` 事後告警,admin 無法即時補。
+
+**流程**(全照 `ProcessNewsFetch` / `NewsController::fetch` 模式):
+
+1. `POST /api/swing/rescreen`(admin only):cache `swing_rescreen_status:{date}` 若 `running` 則擋重複派發,否則 dispatch `RescreenSwing` job、立即回「已觸發」。
+2. `RescreenSwing` job(redis queue,timeout 600):跑 `Artisan::call('stock:ai-screen-swing', ['date'=>$date])`,前後寫 cache 狀態。**`try/catch` 包起來**——順手補了 command 本身沒有 try/catch、失敗會靜默 crash 的洞;Opus 失格時寫 `success=false` + 友善訊息。
+3. `GET /api/swing/rescreen-status`(admin only):前端每 3 秒輪詢,`done` 後依 `success` 彈成功/失敗提示,成功則重新拉 `/swing/candidates`。
+
+`date` 經 `ai-screen-swing` 既有邏輯:非休市日 `trade_date = date`,所以補哪天就精準寫哪天的 `trade_date`。
+
 ### 9.4 AI 短線教訓回流系統（AiLesson mode=swing）
 
 當沖 / 隔日沖已有 `AiLesson` 教訓系統（每週五 16:00 從 `daily_reviews` 萃取），短線（swing）原本沒有對應機制 — 使用者按平倉的瞬間，那筆持倉就從 AI 視野裡完全消失：`SwingPositionUpdateService` 與 `DailyReviewService::buildSwingReview()` 都只看 `ACTIVE_STATUSES`，`SwingScreenerService::askAi()` 與 `SwingPositionUpdateService::askAi()` 兩支 AI prompt 也沒有教訓注入點。導致使用者好決策（提前停利避過拉回）與壞決策（過早殺低錯失反彈）都無法回流到 AI。

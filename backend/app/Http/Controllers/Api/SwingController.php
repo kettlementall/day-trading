@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\RescreenSwing;
 use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\DailyQuote;
@@ -19,6 +20,35 @@ use Illuminate\Support\Facades\Log;
 
 class SwingController extends Controller
 {
+    /**
+     * admin 手動觸發指定日期的短線 AI 選股(背景 job,因 Opus 需 1-3 分鐘)。
+     */
+    public function rescreen(Request $request): JsonResponse
+    {
+        $date = $request->get('date', now()->toDateString());
+        $cacheKey = "swing_rescreen_status:{$date}";
+
+        $current = Cache::get($cacheKey);
+        if ($current && ($current['status'] ?? null) === 'running') {
+            return response()->json(['queued' => true, 'message' => '選股進行中，請稍候...']);
+        }
+
+        Cache::put($cacheKey, ['status' => 'running', 'progress' => '已排入佇列...'], 600);
+        RescreenSwing::dispatch($date);
+
+        return response()->json(['queued' => true, 'message' => "已觸發 {$date} 選股，約 1-3 分鐘"]);
+    }
+
+    /**
+     * 查詢手動選股進度。
+     */
+    public function rescreenStatus(Request $request): JsonResponse
+    {
+        $date = $request->get('date', now()->toDateString());
+
+        return response()->json(Cache::get("swing_rescreen_status:{$date}", ['status' => 'idle']));
+    }
+
     public function candidates(Request $request): JsonResponse
     {
         $requestedDate = $request->get('date', now()->toDateString());
