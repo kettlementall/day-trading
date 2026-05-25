@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\NewsArticle;
 use App\Models\NewsIndex;
+use App\Services\NewsIndustryMap;
 use App\Services\SentimentAnalyzer;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
@@ -67,12 +68,18 @@ class ComputeNewsIndices extends Command
             foreach ($articles as $i => $article) {
                 $result = $results[$i] ?? [];
 
-                // 如果 Claude 回傳了更精確的產業分類，更新
-                $industries = $result['industries'] ?? [];
-                $industry = $article->industry;
-                if (!$industry && !empty($industries)) {
-                    $industry = $industries[0];
-                }
+                // Haiku 語義歸類優先（看了內文，比死關鍵字準，能處理新題材），
+                // 關鍵字 classify 結果（$article->industry）當 fallback。
+                // Haiku 可能把多個產業用頓號/逗號/斜線連寫成單一字串元素（如 "半導體、電子零組件"），
+                // 先拆開再用白名單過濾——只收 NewsIndustryMap 清單內的類，擋對不上 stocks.industry 的雜值。
+                $industries = collect($result['industries'] ?? [])
+                    ->filter(fn ($i) => is_string($i))
+                    ->flatMap(fn ($i) => preg_split('/[、，,\/／]+/u', $i))
+                    ->map(fn ($i) => trim($i))
+                    ->filter(fn ($i) => array_key_exists($i, NewsIndustryMap::INDUSTRIES))
+                    ->values()
+                    ->all();
+                $industry = $industries[0] ?? $article->industry;
 
                 $article->update([
                     'sentiment_score' => $result['sentiment_score'] ?? 0,

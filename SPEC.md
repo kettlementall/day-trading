@@ -1020,7 +1020,7 @@ docker compose exec php php artisan stock:dry-run-movers --date=2026-04-29 --wat
 
 每日 06:00 / 08:00 / 12:00 / 18:00 透過 `news:fetch` 抓取，`news:compute-indices` 計算。
 
-唯一來源為**鉅亨新聞** JSON API（`api.cnyes.com`），抓取三個分類：
+新聞主要來源為**鉅亨新聞** JSON API（`api.cnyes.com`），抓取三個分類：
 
 | 分類 | API category | 對應 | 每次上限 |
 |------|-------------|------|---------|
@@ -1029,6 +1029,19 @@ docker compose exec php php artisan stock:dry-run-movers --date=2026-04-29 --wat
 | 外匯 | `forex` | `international` | 100 篇 × 2 頁 |
 
 每個分類抓取第 1、2 頁（每頁 100 篇，頁間延遲 300ms），每次執行約 180+ 篇新聞（扣除重複）。無關鍵字過濾，全數收錄。
+
+另每日 12:05 / 18:05 透過 `news:fetch-mops`（`FetchMopsAnnouncements`）抓取**上市櫃每日重大訊息 (MOPS)**，存為 `source='mops'` 的 `NewsArticle`，自動流入 `news:compute-indices` 的 Haiku 情緒分析與 `research()` 論點生成：
+
+| 市場 | OpenAPI 端點 |
+|------|------|
+| 上市 | `openapi.twse.com.tw/v1/opendata/t187ap04_L` |
+| 上櫃 | `tpex.org.tw/openapi/v1/mopsfin_t187ap04_O` |
+
+- 重訊自帶**公司代號 + 結構化主旨/說明**，是一手、個股層級訊號，補 cnyes 綜合新聞在「個股早期訊號」上的弱項；`title` 組為「公司名(代號) 主旨」，`StockNewsRiskContextService` 的股名 like 比對能自動關聯到個股。
+- **當日快照**端點（只回當日出表的重訊），每天抓累積、無法回補歷史。重訊發布後內容固定 → `firstOrNew(source + title + fetched_date)` 已存在即跳過，不覆蓋 compute-indices 已優化的 industry / 情緒。
+- 民國年日期（`1150524`）轉西元、發言時間（`210422`）組 `published_at`；上櫃欄位名英文化（`SecuritiesCompanyCode` / `CompanyName`）、上市「主旨」key 帶尾隨空格，均做容錯 normalize。
+- **全抓不預過濾**，題材價值交給 Haiku 在情緒分析時判 `impact` / `short_term_risk`（符合「物理層不塞硬閾值、判斷交給 LLM」原則）。
+- 時序銜接：18:05 抓重訊 → 18:15 `compute-indices` 分析情緒並歸類 → 18:20 `research` 論點即可用上當日重訊。
 
 ### 指數定義 (NewsIndex)
 
@@ -1045,6 +1058,18 @@ docker compose exec php php artisan stock:dry-run-movers --date=2026-04-29 --wat
 |-------|------|
 | `overall` | 整體市場（單筆） |
 | `industry` | 按產業分（多筆，`scope_value` = 產業名） |
+
+### 產業歸類（NewsIndustryMap）
+
+`NewsArticle.industry` 歸入 15 個產業類（`NewsIndustryMap::INDUSTRIES`）：半導體、AI與雲端、機器人、電子零組件、散熱、面板光電、通訊網路、金融、傳產、生技醫療、綠能車用、重電儲能、地緣政治、軍工航太、總體經濟。
+
+**歸類優先序（`ComputeNewsIndices::analyzeArticles`）：Haiku 語義歸類優先、關鍵字 fallback。**
+
+- `FetchNews` 抓取當下先用 `NewsIndustryMap::classify()`（關鍵字 best-match）設一個初值。
+- `news:compute-indices` 跑 `SentimentAnalyzer` 時，Haiku 讀過內文摘錄後輸出 `industries`（語義判斷，能處理死關鍵字抓不到/歸錯的新題材），**先按頓號/逗號/斜線拆開連寫**（Haiku 偶把多產業連寫成單一字串如 `半導體、電子零組件`）、再經**白名單過濾**（只收清單內的類，擋對不上 `stocks.industry` 的雜值）後取首項覆蓋初值；Haiku 無對應時才退回關鍵字初值。
+- **清單單一事實來源**：`SentimentAnalyzer` 兩個 prompt 的可選產業清單由 `array_keys(NewsIndustryMap::INDUSTRIES)` 動態生成，新增產業類只需改 `NewsIndustryMap` 一處，prompt 自動同步。
+
+> 擴充產業類只影響往後抓取/分析的新聞；歷史 `NewsArticle.industry` 不回填。「散熱」「重電儲能」分別由「電子零組件」「綠能車用」拆出獨立成類（移走 `散熱` / `儲能` 關鍵字），避免 AI 伺服器散熱、資料中心電力等大題材被母類稀釋。
 
 ### 新聞內文 (`NewsArticle.content`)
 

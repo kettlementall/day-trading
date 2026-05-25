@@ -72,8 +72,11 @@ scheduledCommand('news:compute-indices', '新聞指數(08:15)', selfNotify: true
 scheduledCommand('stock:premarket-briefing', '盤前方向簡報', selfNotify: true)
     ->dailyAt('08:30')->weekdays();
 scheduledCommand('news:fetch', '新聞抓取(12:00)', selfNotify: true)->dailyAt('12:00');
+scheduledCommand('news:fetch-mops', '重大訊息抓取(12:05)', selfNotify: true)->dailyAt('12:05');
 scheduledCommand('news:compute-indices', '新聞指數(12:15)', selfNotify: true)->dailyAt('12:15');
 scheduledCommand('news:fetch', '新聞抓取(18:00)', selfNotify: true)->dailyAt('18:00');
+// 18:05 抓盤後重訊 → 18:15 compute-indices 分析情緒 → 18:20 research 論點用上，時序銜接
+scheduledCommand('news:fetch-mops', '重大訊息抓取(18:05)', selfNotify: true)->dailyAt('18:05');
 scheduledCommand('news:compute-indices', '新聞指數(18:15)', selfNotify: true)->dailyAt('18:15');
 
 // 每週一 17:30 重算短線股票池（流動性、價格、ETF 類型）

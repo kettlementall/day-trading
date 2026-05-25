@@ -101,6 +101,7 @@ class SentimentAnalyzer
         $title = $article->title;
         $summary = $article->summary ? mb_substr($article->summary, 0, 300) : '';
         $content = $this->contentExcerpt($article, 1200);
+        $industryList = implode('、', array_keys(NewsIndustryMap::INDUSTRIES));
 
         return <<<PROMPT
 分析以下台灣財經新聞的市場情緒。
@@ -124,7 +125,7 @@ risk_type 分類指引：
 {
   "sentiment_score": <-100到100的整數，正面為正、負面為負>,
   "sentiment_label": "<positive/negative/neutral>",
-  "industries": ["<受影響的產業，從以下選擇: 半導體, AI與雲端, 電子零組件, 面板光電, 通訊網路, 金融, 傳產, 生技醫療, 綠能車用, 地緣政治, 總體經濟>"],
+  "industries": ["<受影響的產業，從以下擇要選擇（可多選，無對應則留空）: {$industryList}>"],
   "impact": "<high/medium/low>",
   "panic_signal": <true/false，是否含有恐慌性字眼>,
   "summary": "<一句話摘要影響>",
@@ -147,6 +148,7 @@ PROMPT;
         }
         $newsList = implode("\n", $lines);
         $count = count($articles);
+        $industryList = implode('、', array_keys(NewsIndustryMap::INDUSTRIES));
 
         return <<<PROMPT
 分析以下 {$count} 則台灣財經新聞的市場情緒。
@@ -163,7 +165,7 @@ risk_type 分類指引：margin_pressure（毛利率/獲利率承壓）｜earnin
     "index": 1,
     "sentiment_score": <-100到100的整數>,
     "sentiment_label": "<positive/negative/neutral>",
-    "industries": ["<受影響的產業: 半導體/AI與雲端/電子零組件/面板光電/通訊網路/金融/傳產/生技醫療/綠能車用/地緣政治/總體經濟>"],
+    "industries": ["<受影響的產業，從以下擇要選擇（可多選，無對應則留空）: {$industryList}>"],
     "impact": "<high/medium/low>",
     "panic_signal": <true/false>,
     "summary": "<一句話>",
