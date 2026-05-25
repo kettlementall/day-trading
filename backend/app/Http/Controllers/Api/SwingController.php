@@ -611,9 +611,12 @@ class SwingController extends Controller
     private function riskExposure($positions): array
     {
         $active = $positions->whereIn('status', SwingPosition::ACTIVE_STATUSES);
-        $byThesis = $active->groupBy(fn ($p) => $p->candidate?->swing_thesis['title'] ?? '未分類')
-            ->map(fn ($group, $title) => [
-                'thesis' => $title,
+        // 以 thesis_id 為分組鍵（title fallback）：同一論點即使改過名也聚在同一組，不被拆成兩條。
+        $byThesis = $active->groupBy(fn ($p) => $p->candidate?->swing_thesis['thesis_id']
+                ?? $p->candidate?->swing_thesis['title']
+                ?? '未分類')
+            ->map(fn ($group) => [
+                'thesis' => $group->first()->candidate?->swing_thesis['title'] ?? '未分類',
                 'positions' => $group->count(),
                 'market_value' => round($group->sum('market_value'), 2),
                 'risk_amount' => round($group->sum('risk_amount'), 2),

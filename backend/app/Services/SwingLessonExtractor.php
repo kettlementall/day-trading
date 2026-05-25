@@ -189,9 +189,12 @@ class SwingLessonExtractor
         $userVsAi = in_array($lastAction, ['hold', 'trim'], true) && $position->status === SwingPosition::STATUS_CLOSED;
 
         $candidate = $position->candidate;
-        $thesisTitle = $candidate?->swing_thesis['title'] ?? null;
+        $thesisSnapshot = is_array($candidate?->swing_thesis) ? $candidate->swing_thesis : null;
+        // thesis_id 優先解析回 DB 現值：論點改名後教訓仍歸到正確論點，不會散成兩個 title。
+        $thesisTitle = \App\Models\InvestmentThesis::resolveFromSnapshot($thesisSnapshot)?->title
+            ?? ($thesisSnapshot['title'] ?? null);
         $strategy = $candidate?->swing_strategy ?? '-';
-        $benefitLevel = $candidate?->swing_thesis['benefit_level'] ?? null;
+        $benefitLevel = $thesisSnapshot['benefit_level'] ?? null;
 
         $holdingDays = ($position->entry_date && $position->exit_date)
             ? (int) $position->entry_date->diffInDays($position->exit_date) : null;

@@ -412,7 +412,7 @@ stop {$position->current_stop} | target {$position->current_target}
 # 進階仲裁
 - related_stock_context 存在時：判斷此股是否仍符合 benefit_level 與 role，若角色弱化要反映在 thesis_health/risk_pressure/reasoning/target/ETA。
 - 個股新聞風險若有 short_term_risk=true 或負面新聞，必須判斷是否破壞原始 thesis；說明它是短線價格風險、獲利品質風險，還是 thesis 失效。不可只用技術面忽略法說/財報/訂單利空。
-- thesis_status.invalidation_signal=true：不可單獨 exit。只有「論點失效＋技術 weak/broken」或「論點失效＋瀕臨 stop」雙條件成立才 exit；否則 trim/adjust 上移 stop，給時間驗證。invalidation_reason=title_not_found_in_db 多半只是命名飄移，非基本面壞。
+- thesis_status.invalidation_signal=true：不可單獨 exit。只有「論點失效＋技術 weak/broken」或「論點失效＋瀕臨 stop」雙條件成立才 exit；否則 trim/adjust 上移 stop，給時間驗證。invalidation_reason=thesis_not_found_in_db 表示論點以 id 對齊後仍找不到（多半已被淘汰或人工移除），非必然基本面壞；仍不可單獨 exit，請交叉技術/籌碼判斷。
 - 近 7 日 exit 訊號=true：這是風險提醒，不是出場命令。若 thesis 仍有效、價格已收回關鍵位置、籌碼沒有惡化，可以 hold；若只是尚未確認修復，才 trim/adjust；若核心支柱破壞才 exit。
 - stop_breached=false 時，stop_review_state 與 stop_review_reasoning 必須是 null，只能用 risk_zone_touched 表達近期受壓。
 - `市場情境` 為 `bearish_panic` / `bullish_catalyst` 時，股價短期表現相當程度受大盤拖累/帶動；判 thesis_health 與 market_vs_stock_issue 時請整合考量。`進場後高水位` vs `目前浮盈` 顯著回撤（無硬閾值，由你判讀）時，請評估是否 trim 鎖利或上移 stop 而非直接 exit。
@@ -845,20 +845,23 @@ PROMPT;
 
     private function resolveThesisStatus(SwingPosition $position): array
     {
-        $title = $position->candidate?->swing_thesis['title'] ?? null;
-        if (!$title) {
+        $snapshot = $position->candidate?->swing_thesis;
+        $snapshot = is_array($snapshot) ? $snapshot : null;
+        $title = $snapshot['title'] ?? null;
+        if (!$title && empty($snapshot['thesis_id'])) {
             return ['status' => 'unknown', 'confidence_score' => null, 'invalidation_signal' => false];
         }
 
-        $thesis = InvestmentThesis::where('title', $title)->first();
+        // thesis_id 優先、title fallback：論點改名仍能對齊，只有真的被刪除/徹底飄移才走 missing。
+        $thesis = InvestmentThesis::resolveFromSnapshot($snapshot);
         if (!$thesis) {
-            // title 不見 = 命名飄移或被人工刪除；標 signal 但不直接 exit，讓 AI 仲裁
+            // id 與 title 都撈不到 = 論點已被淘汰/刪除或人工移除；標 signal 但不直接 exit，讓 AI 仲裁
             return [
                 'title' => $title,
                 'status' => 'missing',
                 'confidence_score' => null,
                 'invalidation_signal' => true,
-                'invalidation_reason' => 'title_not_found_in_db',
+                'invalidation_reason' => 'thesis_not_found_in_db',
             ];
         }
 

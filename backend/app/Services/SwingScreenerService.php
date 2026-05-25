@@ -127,6 +127,12 @@ class SwingScreenerService
                 is_array($row['thesis'] ?? null) ? $row['thesis'] : [],
                 is_array($ai['thesis'] ?? null) ? $ai['thesis'] : []
             );
+            // thesis_id 與 title 必須同源於物理層比對結果（topThesis），不可讓 AI 自由發揮 title
+            // 造成 id/title 脫鉤——否則持倉複查靠 title 撈論點時會因 AI 改名而誤判失效。
+            if (!empty($row['thesis']['thesis_id'])) {
+                $swingThesis['thesis_id'] = $row['thesis']['thesis_id'];
+                $swingThesis['title'] = $row['thesis']['title'];
+            }
             $priorStreak = (int) ($row['prior_streak'] ?? 0);
             $swingThesis['consecutive_days_selected'] = $aiSelected ? $priorStreak + 1 : 0;
 

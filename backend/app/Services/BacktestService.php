@@ -566,9 +566,11 @@ class BacktestService
         }
 
         // by_thesis（看哪個論點命中率高）
+        // 以 thesis_id 為分組鍵（title fallback）：論點改名後績效不會被拆成兩條而失真。
         $metrics['by_thesis'] = $candidates
-            ->groupBy(fn ($c) => $c->swing_thesis['title'] ?? '未連結論點')
-            ->map(function (Collection $group, string $title) use ($paperOutcomes) {
+            ->groupBy(fn ($c) => $c->swing_thesis['thesis_id'] ?? $c->swing_thesis['title'] ?? '未連結論點')
+            ->map(function (Collection $group) use ($paperOutcomes) {
+                $title = $group->first()->swing_thesis['title'] ?? '未連結論點';
                 $outcomes = $group->map(fn ($c) => $paperOutcomes[$c->id] ?? null)->filter();
                 $count = $group->count();
                 $hit = $outcomes->where('outcome', 'target')->count();

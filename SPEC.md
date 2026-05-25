@@ -1839,6 +1839,19 @@ AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`�
 
    **`is_fallback` 語意**：表示「AI 未完成審查」，**不代表決策本身錯誤**。三條 fallback 路徑（A: 停損 + AI 失敗 → exit；B: 論點失效 + 技術破壞 + AI 失敗 → exit；C: 論點失效 + AI 失敗 → trim）的 action 本身仍然是合理的風控選擇；標記僅用來防止這些「機器決策」被當作「AI 已審慎判斷」綁定後續真實 AI 的選擇空間。
 
+### 9.5a 持倉↔論點對齊：`thesis_id` 權威鍵
+
+持倉與其進場論點的綁定**以 `thesis_id` 為權威鍵、`title` 為 fallback**，不再單靠 title 字串對齊。
+
+**Why：** `InvestmentThesisResearchService` 的 research prompt 雖要求「命名穩定」，但 title 是 Opus 自由產生的字串，無法保證不漂移。一旦論點被改名（例如「…HBM/PCB/散熱鏈」→「…HBM/PCB/散熱/CCL 鏈」），舊靠 `swing_thesis['title']` 撈論點的邏輯就會撈不到 → `resolveThesisStatus` 誤判 `missing` → 若當天技術面剛好轉弱，§9.5 fallback 路徑 B（論點失效＋技術破壞）就誤觸 `exit`，把基本面仍健康的持倉洗出場。
+
+**機制：**
+
+1. **寫入端一致性**（`SwingScreenerService::screen()`）：`swing_thesis` 快照的 `thesis_id` 與 `title` 強制同源於物理層比對結果（`topThesis`），不讓選股 AI 自由發揮的 `title` 蓋掉物理層值造成 id/title 脫鉤。AI 的 `benefit_level` / `role`（個股角色判斷）仍保留。`topThesis` 為 null（該股無任何 thesis link）時快照無 `thesis_id`，下游走 title fallback。
+2. **解析 helper**（`InvestmentThesis::resolveFromSnapshot(?array $snapshot)`）：`thesis_id` 優先 `find()`、撈不到才用 `title` 查；id 與 title 都撈不到回 `null`。相容沒有 `thesis_id` 的舊快照，**無需回填歷史資料**。
+3. **持倉複查**（`resolveThesisStatus`）：改用 `resolveFromSnapshot`。只有 id 與 title 都撈不到才標 `status=missing` / `invalidation_signal=true`，`invalidation_reason` 改為 `thesis_not_found_in_db`（語意：論點以 id 對齊後仍找不到，多半已被淘汰或人工移除，非必然基本面壞，仍不可單獨 exit）。
+4. **統計/顯示分組**（`SwingController::riskExposure` 曝險、`BacktestService` by_thesis 績效、`SwingLessonExtractor` 教訓萃取）：groupBy 鍵改為 `thesis_id ?? title`，同一論點即使改過名也聚在同一組，績效/曝險不被拆成兩條失真。
+
 ### 9.5b 持倉過熱事實對稱化
 
 定義於 `SwingPositionUpdateService::buildTechnicalContext()` 與 `askAi()` 基礎約束段。
