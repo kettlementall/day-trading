@@ -58,8 +58,7 @@
 | **18:20** | **`stock:research-investment-theses`** | **AI 自動研究/更新短線產業投資論點** |
 | **18:50** | **`stock:update-swing-positions`** | **每日盤後更新使用者短線持倉與損益快照** |
 | **19:00** | **`stock:ai-screen-swing`** | **AI 理專型短線選股（產業論點 + 技術/籌碼/估值；週一~週五寫入當日 trade_date，週日/連假最後一晚追加跑一次並以 `previousTradingDay` 為 trade_date 覆蓋最近交易日候選，讓使用者開盤前看到最新 thesis 選股）** |
-| **19:30** | **`stock:daily-review --mode=swing`** | **短線 AI 檢討報告** |
-| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + 短線檢討/候選/持倉快照/教訓新鮮度 + API 連通性 + Log 大小警告） |
+| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + 短線候選/持倉快照/教訓新鮮度 + API 連通性 + Log 大小警告） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
 | 週一 06:00 | `stock:fill-industry`       | 從 TWSE/TPEX 公司基本資料補上 `stocks.industry`（產業別），供類股強弱、新聞題材配對使用 |
 | **週一 17:30** | **`stock:refresh-swing-universe`** | **依流動性／價格／資料完整度／ETF 類型重算 `stocks.is_swing_eligible`，把短線選股池跟當沖名單解耦** |
@@ -1760,7 +1759,6 @@ AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`�
 - `swing_positions` (status closed/stopped + exit_date 落於窗口) join `candidates`+`stocks`
 - 每筆 `advice_log` 取最後 3 筆（last_ai_action 軌跡）
 - `daily_quotes` 每檔出場後 5 個交易日的 high/low/close
-- 該週 `daily_reviews` mode=swing 最多 2 筆（補組合上下文）
 
 **PHP 端預聚合**（先算好再餵 AI，省 token 也防幻覺）：
 - per-position：`realized_pct`、`forward_5d_pct`、`forward_max_pct`、`forward_min_pct`、`last_ai_actions[]`、`user_vs_ai_divergence`（最後 AI action ∈ [hold, trim] AND status=closed）
@@ -1827,16 +1825,15 @@ AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`�
 
 #### 9.4.5 健康檢查覆蓋
 
-`stock:health-check`（每日 22:00）新增 4 項與短線相關檢查（`HealthCheck.php` 5c3-5c6）：
+`stock:health-check`（每日 22:00）新增 3 項與短線相關檢查（`HealthCheck.php` 5c4-5c6）：
 
 | 檢查項 | 觸發條件 | 等級 |
 |---|---|---|
-| **短線 AI 檢討** | 工作日 19:30 排程跑完當日 swing daily-review 應產出；20:00 後仍無紀錄 → warn | ok / warn |
 | **短線候選** | 工作日 19:00 ai-screen-swing 應產出；20:00 後仍無 candidates 列入當日 trade_date → warn | ok / warn |
 | **短線持倉快照** | 有 active 持倉時，當日 `swing_position_snapshots` 數應等於 active 持倉數；20:00 後缺漏 → warn（提示 update-swing-positions 漏跑）| info / warn |
 | **短線教訓新鮮度** | `ai_lessons mode=swing source!=tip` 最新 trade_date 距今 > 14 天 → warn（提示 extractor 連續失敗）| ok / warn / info |
 
-20:00 後的時間閾值避免 09:50 跑健康檢查時誤報「當日沒有 19:30 才產出的東西」。
+20:00 後的時間閾值避免 09:50 跑健康檢查時誤報「當日沒有 19:00 才產出的東西」。
 
 ### 9.5 停損審查模式
 
@@ -1966,7 +1963,19 @@ daily review 用結構化 JSON key 而非 chip 字串，因為 prompt context �
 
 **重建條件:** 待 realized 樣本累積足夠(30+ 筆),再以 **realized(真實平倉)** 重建 `by_strategy` / `by_thesis` 拆解,並加盈虧比、最大回撤、扣交易成本。在那之前,回測的價值跟真實樣本數綁死,不是靠程式精巧——當務之急是累積真實交易,不是加回測功能。
 
-> 檢討/教訓系統(`DailyReviewService`、`SwingLessonExtractor`)與回測**完全獨立**,不依賴 paper,移除 paper 不影響它們。
+> 每週教訓萃取(`SwingLessonExtractor`)吃真實持倉 + 出場後股價,不依賴回測 paper。(註:swing 的**單日 AI 檢討**已另外移除,見 §9.5e。)
+
+### 9.5e 移除單日 AI 檢討（swing）
+
+`DailyReviewService` 的 swing 單日檢討(`reviewSwing`)已移除。它原本每日 19:30 抓當日候選 + 持倉餵 Opus,要它點評候選品質/持倉管理/組合風險/明日注意,產文字報告。
+
+**Why 移除:** 選股就是 Opus 做的,讓**同一個 Opus 盤後再點評自己剛選的股**——同模型、同框架、更少資訊(只給 TSV)、當天無結果——結構上是**自我背書**(確認偏誤),不是檢討。有意義的複核必須引入**新資訊**(事後真實結果)或**不同視角**(不同模型/對抗質疑),它都沒有。而且兩塊功能都冗餘:檢討候選 = 重疊選股(`SwingScreenerService`);檢討持倉 = 重疊每日 18:50 `update-swing-positions` 的持倉複查(後者帶技術/籌碼/估值/類股/新聞/大盤情境,資訊全得多)。
+
+**移除範圍:** `DailyReviewService::review()` 的 swing 分支 + `reviewSwing` 方法、排程 19:30 `daily-review --mode=swing`、HealthCheck 5c3 短線檢討檢查、前端 `SwingStatsView` 單日檢討區塊、`SwingLessonExtractor` 引用的 swing 檢討上下文(原 `daily_reviews` mode=swing 區塊)。
+
+**保留:** **每週教訓萃取**(`SwingLessonExtractor`)——對照出場後真實 5 日股價 + 決策軌跡、且回流選股 prompt,是真正的學習閉環。`DailyReviewService` 仍服務 intraday/overnight;`DailyReview` 表 / API / 教訓系統保留。
+
+> 與 §9.5d(移除 paper)同一脈絡:清掉「看起來在做事、實際是 AI 自評/冗餘」的功能,只留真正有反饋/驗證的部分。
 
 ### 9.6 個股新聞風險訊號（`StockNewsRiskContextService`）
 

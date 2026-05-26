@@ -234,17 +234,6 @@ class HealthCheck extends Command
             }
         }
 
-        // 5c3. 短線（swing）AI 檢討 — 工作日 19:30 跑
-        if (!$isHoliday) {
-            $hasSwingReview = DailyReview::where('trade_date', $date)->where('mode', 'swing')->exists();
-            if ($hasSwingReview) {
-                $checks[] = ['name' => '短線 AI 檢討', 'status' => 'ok', 'detail' => '已產出'];
-            } elseif (now()->hour >= 20) {
-                // 健康檢查 22:00 跑，到這時候沒檢討就是漏跑
-                $checks[] = ['name' => '短線 AI 檢討', 'status' => 'warn', 'detail' => '當日未產出（19:30 排程可能漏跑）'];
-            }
-        }
-
         // 5c4. 短線候選 — 工作日 19:00 跑
         if (!$isHoliday) {
             $swingToday = Candidate::where('trade_date', $date)->where('mode', 'swing')->count();

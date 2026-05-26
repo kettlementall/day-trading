@@ -144,9 +144,6 @@ scheduledCommand('stock:update-overnight-results', '隔日沖結果回填')
 scheduledCommand('stock:daily-review --mode=overnight', '隔日沖 AI 檢討')
     ->dailyAt('15:35')->weekdays();
 
-scheduledCommand('stock:daily-review --mode=swing', '短線 AI 檢討')
-    ->dailyAt('19:30')->weekdays();
-
 // 每週五 16:00 從整週檢討報告萃取通用教訓（依賴 15:30/15:35 檢討完成）
 scheduledCommand('stock:extract-weekly-lessons', '週教訓萃取')
     ->weeklyOn(5, '16:00');

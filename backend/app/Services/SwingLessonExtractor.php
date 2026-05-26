@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\AiLesson;
 use App\Models\DailyQuote;
-use App\Models\DailyReview;
 use App\Models\SwingPosition;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
@@ -281,15 +280,6 @@ class SwingLessonExtractor
             . 'exit_reason分布=' . json_encode($aggregate['exit_reasons'], JSON_UNESCAPED_UNICODE)
             . "，user_vs_ai_divergence={$aggregate['user_vs_ai_divergence_count']}";
 
-        $weekReview = DailyReview::where('mode', 'swing')
-            ->whereBetween('trade_date', [$monday->toDateString(), $sunday->toDateString()])
-            ->orderByDesc('trade_date')
-            ->limit(2)
-            ->get();
-        $reviewBlock = $weekReview->isEmpty()
-            ? '（本週無短線檢討報告）'
-            : $weekReview->map(fn ($r) => "## {$r->trade_date->format('Y-m-d')}\n" . mb_substr((string) $r->report, 0, 1200))->implode("\n\n");
-
         return <<<PROMPT
 你是台股短線策略檢討顧問。以下是本週使用者關閉的短線持倉，請萃取**最多 {$cases->count()} 筆樣本能支撐**、可在未來 AI 選股／滾動建議直接套用的結構化教訓。
 
@@ -300,9 +290,6 @@ class SwingLessonExtractor
 
 # 個別持倉（個股代號已脫敏為 [產業-序號]）
 {$caseLines}
-
-# 本週短線檢討報告（組合層級上下文，可參考）
-{$reviewBlock}
 
 # 重點分析角度（鎖死思考方向，逐項評估）
 1. exit_reason=`take_profit_manual` 之後股價繼續漲（forward_5d > 0）vs 拉回（forward_5d ≤ 0）：哪種模式重複出現？是否暗示 AI 預設 target 過遠 / 過近？
