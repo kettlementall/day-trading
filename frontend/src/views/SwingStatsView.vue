@@ -25,45 +25,20 @@
             <div class="stat-label">AI 選入</div>
             <div class="stat-value">{{ stats.ai_selected }}</div>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">已走完 20 日</div>
-            <div class="stat-value">{{ stats.evaluated }}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">平均風報比</div>
-            <div class="stat-value">{{ stats.avg_risk_reward }}</div>
-          </div>
         </div>
       </section>
 
-      <!-- 紙上績效（候選依 entry/target/stop 模擬走 20 個交易日） -->
-      <section class="section">
-        <h2 class="section-title">紙上績效（模擬持有 20 日）</h2>
-        <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-label">達標率</div>
-            <div class="stat-value highlight-up">{{ stats.paper_target_reach_rate }}%</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">停損率</div>
-            <div class="stat-value highlight-down">{{ stats.paper_stop_loss_rate }}%</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">期望值</div>
-            <div class="stat-value" :class="stats.paper_expected_value > 0 ? 'highlight-up' : 'highlight-down'">
-              {{ signed(stats.paper_expected_value) }}%
-            </div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">平均持有日數</div>
-            <div class="stat-value">{{ stats.paper_avg_holding_days }}</div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 實際持倉績效 -->
+      <!-- 實際持倉績效（唯一可信的真實對帳；paper 20 天假想模擬已移除） -->
       <section class="section" v-if="stats.realized">
         <h2 class="section-title">實現績效（已平倉/停損結束）</h2>
+        <el-alert
+          v-if="(stats.realized.closed_positions || 0) < 30"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px"
+          :title="`樣本僅 ${stats.realized.closed_positions || 0} 筆，不足以做統計判斷（建議累積 30+ 筆再參考勝率／報酬）`"
+        />
         <div class="stats-grid">
           <div class="stat-card">
             <div class="stat-label">已結束筆數</div>
@@ -194,51 +169,6 @@
         </div>
       </section>
 
-      <!-- by_strategy -->
-      <section class="section" v-if="byStrategyList.length">
-        <h2 class="section-title">策略分析</h2>
-        <div class="strategy-grid">
-          <article
-            v-for="item in byStrategyList"
-            :key="item.key"
-            class="stock-card strategy-card"
-          >
-            <div class="strategy-title">
-              <el-tag :type="strategyTagType(item.key)" size="small">{{ strategyLabel(item.key) }}</el-tag>
-              <span class="strategy-count">{{ item.evaluated }} 筆</span>
-            </div>
-            <div class="strategy-metrics">
-              <div><span class="label">達標率</span><span class="value highlight-up">{{ item.paper_target_reach_rate }}%</span></div>
-              <div><span class="label">停損率</span><span class="value highlight-down">{{ item.paper_stop_loss_rate }}%</span></div>
-              <div><span class="label">期望值</span><span class="value" :class="item.paper_expected_value > 0 ? 'highlight-up' : 'highlight-down'">{{ signed(item.paper_expected_value) }}%</span></div>
-              <div><span class="label">平均日數</span><span class="value">{{ item.paper_avg_holding_days }}</span></div>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <!-- by_thesis -->
-      <section class="section" v-if="stats.by_thesis?.length">
-        <h2 class="section-title">論點命中率</h2>
-        <div class="stock-card thesis-card">
-          <div class="thesis-row thesis-head">
-            <div class="thesis-name">論點</div>
-            <div>樣本</div>
-            <div>達標</div>
-            <div>停損</div>
-            <div>期望值</div>
-          </div>
-          <div v-for="(t, idx) in stats.by_thesis" :key="idx" class="thesis-row">
-            <div class="thesis-name">{{ t.thesis }}</div>
-            <div>{{ t.count }}</div>
-            <div class="highlight-up">{{ t.paper_target_reach_rate }}%</div>
-            <div class="highlight-down">{{ t.paper_stop_loss_rate }}%</div>
-            <div :class="t.paper_expected_value > 0 ? 'highlight-up' : 'highlight-down'">
-              {{ signed(t.paper_expected_value) }}%
-            </div>
-          </div>
-        </div>
-      </section>
     </template>
 
     <el-empty v-else description="尚無短線資料" />
@@ -403,16 +333,11 @@ function lessonTagLabel(type) {
   }[type] || type
 }
 
-const byStrategyList = computed(() => {
-  const map = stats.value?.by_strategy || {}
-  return Object.entries(map).map(([key, m]) => ({ key, ...m }))
-})
-
 const chartOption = computed(() => {
   const daily = stats.value?.daily || []
   return {
     tooltip: { trigger: 'axis' },
-    legend: { data: ['候選', 'AI 選入', '已走完'], top: 0 },
+    legend: { data: ['候選', 'AI 選入'], top: 0 },
     grid: { left: 40, right: 16, top: 30, bottom: 24 },
     xAxis: {
       type: 'category',
@@ -423,7 +348,6 @@ const chartOption = computed(() => {
     series: [
       { name: '候選', type: 'bar', data: daily.map(d => d.candidates), itemStyle: { color: '#94a3b8' } },
       { name: 'AI 選入', type: 'bar', data: daily.map(d => d.ai_selected), itemStyle: { color: '#1d4ed8' } },
-      { name: '已走完', type: 'line', data: daily.map(d => d.evaluated), itemStyle: { color: '#67c23a' } },
     ],
   }
 })
@@ -431,22 +355,6 @@ const chartOption = computed(() => {
 function signed(v) {
   if (v === null || v === undefined) return '-'
   return `${v >= 0 ? '+' : ''}${v}`
-}
-
-function strategyLabel(key) {
-  return {
-    trend_pullback: '趨勢回檔',
-    trend_follow: '趨勢追蹤',
-    base_breakout: '盤整突破',
-  }[key] || key
-}
-
-function strategyTagType(key) {
-  return {
-    trend_pullback: 'success',
-    trend_follow: 'primary',
-    base_breakout: 'warning',
-  }[key] || 'info'
 }
 
 watch(() => reviewLogs.value.length, async () => {

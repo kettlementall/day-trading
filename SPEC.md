@@ -64,7 +64,7 @@
 | 週一 06:00 | `stock:fill-industry`       | 從 TWSE/TPEX 公司基本資料補上 `stocks.industry`（產業別），供類股強弱、新聞題材配對使用 |
 | **週一 17:30** | **`stock:refresh-swing-universe`** | **依流動性／價格／資料完整度／ETF 類型重算 `stocks.is_swing_eligible`，把短線選股池跟當沖名單解耦** |
 | **T+1 09:05–13:25** | **`stock:monitor-overnight-exit --slot={time}`** | **隔日沖 T+1 出場監控，09:05-09:25 每 5 分鐘 + 09:30 後每 15 分鐘，13:25 強制平倉（獨立 Fugle 報價抓取；目標/停損到價自動終止；Sonnet 滾動判斷 hold/adjust/exit）** |
-| **週日 22:00** | **`stock:compute-strategy-stats`** | **計算當沖/隔日沖/短線策略量化績效統計（30/60 天窗口；短線含 by_strategy + by_thesis 維度）** |
+| **週日 22:00** | **`stock:compute-strategy-stats`** | **計算當沖/隔日沖策略量化績效統計（30/60 天窗口）；短線維度暫停（20 天 paper 模擬已移除，待 realized 真實樣本足夠再重建，見 §9.5d）** |
 
 > `stock:backtest --validated` 已停用自動排程。指令保留可手動執行回測指標檢視。
 
@@ -1889,7 +1889,7 @@ AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`�
 1. **寫入端一致性**（`SwingScreenerService::screen()`）：`swing_thesis` 快照的 `thesis_id` 與 `title` 強制同源於物理層比對結果（`topThesis`），不讓選股 AI 自由發揮的 `title` 蓋掉物理層值造成 id/title 脫鉤。AI 的 `benefit_level` / `role`（個股角色判斷）仍保留。`topThesis` 為 null（該股無任何 thesis link）時快照無 `thesis_id`，下游走 title fallback。
 2. **解析 helper**（`InvestmentThesis::resolveFromSnapshot(?array $snapshot)`）：`thesis_id` 優先 `find()`、撈不到才用 `title` 查；id 與 title 都撈不到回 `null`。相容沒有 `thesis_id` 的舊快照，**無需回填歷史資料**。
 3. **持倉複查**（`resolveThesisStatus`）：改用 `resolveFromSnapshot`。只有 id 與 title 都撈不到才標 `status=missing` / `invalidation_signal=true`，`invalidation_reason` 改為 `thesis_not_found_in_db`（語意：論點以 id 對齊後仍找不到，多半已被淘汰或人工移除，非必然基本面壞，仍不可單獨 exit）。
-4. **統計/顯示分組**（`SwingController::riskExposure` 曝險、`BacktestService` by_thesis 績效、`SwingLessonExtractor` 教訓萃取）：groupBy 鍵改為 `thesis_id ?? title`，同一論點即使改過名也聚在同一組，績效/曝險不被拆成兩條失真。
+4. **統計/顯示分組**（`SwingController::riskExposure` 曝險、`SwingLessonExtractor` 教訓萃取）：groupBy 鍵改為 `thesis_id ?? title`，同一論點即使改過名也聚在同一組，曝險/教訓不被拆成兩條失真。（原 `BacktestService` 的 by_thesis 績效也用此鍵，但已隨 paper 移除而一併刪除，見 §9.5d。）
 
 ### 9.5b 持倉過熱事實對稱化
 
@@ -1949,6 +1949,24 @@ daily review 用結構化 JSON key 而非 chip 字串，因為 prompt context �
 > 「`市場情境` 為 `bearish_panic` / `bullish_catalyst` 時，股價短期表現相當程度受大盤拖累/帶動；判 thesis_health 與 market_vs_stock_issue 時請整合考量。`進場後高水位` vs `目前浮盈` 顯著回撤（無硬閾值，由你判讀）時，請評估是否 trim 鎖利或上移 stop 而非直接 exit。」
 
 **Feature 3 deferred**：「過去 advice 準確率」（AI 自我修正）需新增預計算統計表（風格類似 §9.6.1 `swing-news-risk-stats`），實作成本高，另開議題。
+
+### 9.5d 短線回測：移除 20 天 paper 模擬，只保留 realized
+
+`BacktestService::computeSwingMetrics` 原本有兩套指標:**paper(紙上模擬)** 與 **realized(實現績效)**。paper 已**整段移除**,只保留 realized + daily 候選數趨勢。
+
+**Why 移除 paper:** paper 對每個候選模擬「機械持有 20 個交易日、碰 target/stop 才出、否則第 20 天收盤平倉」。但使用者真實操作是 AI 每日複查、動態調停損、提前停利、換倉——**paper 衡量的是一個不會照做的假想抱法**,對操盤決策無幫助;它回答「選股訊號準不準」,不回答「使用者能不能賺」。而且 paper 直接用 `suggested_buy` 當進場價、不檢查隔天是否跳空/漲停買不到,會**高估**;又沒扣手續費税。留著只會用好看的假數字誤導「以為有在對帳」。
+
+**移除範圍:**
+- 刪 `computeSwingPaperOutcomes()`、`calcSwingMetricsFromCollection()`。
+- `computeSwingMetrics` 只回 `total_candidates` / `ai_selected` / `realized` / `daily` / `period`;移除 paper 頂層指標、`by_strategy`、`by_thesis`(都是 paper 基礎)。
+- `StrategyStatsService::computeSwingDimensions` 改為 no-op(原本存的 swing 策略/論點統計是 paper 假數據且無下游讀取)。
+- 前端 `SwingStatsView` 移除紙上績效卡、策略分析、論點命中率區塊;實現績效區加「樣本不足」提示。
+
+**realized 是唯一可信的對帳基礎**,但前提是使用者有在系統記錄真實進出。**現況樣本僅約 5 筆,不具統計意義**(勝率 80% 也只是 4 勝 1 負,再一筆就跳動)。
+
+**重建條件:** 待 realized 樣本累積足夠(30+ 筆),再以 **realized(真實平倉)** 重建 `by_strategy` / `by_thesis` 拆解,並加盈虧比、最大回撤、扣交易成本。在那之前,回測的價值跟真實樣本數綁死,不是靠程式精巧——當務之急是累積真實交易,不是加回測功能。
+
+> 檢討/教訓系統(`DailyReviewService`、`SwingLessonExtractor`)與回測**完全獨立**,不依賴 paper,移除 paper 不影響它們。
 
 ### 9.6 個股新聞風險訊號（`StockNewsRiskContextService`）
 

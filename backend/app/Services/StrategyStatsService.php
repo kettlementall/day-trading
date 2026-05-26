@@ -44,46 +44,10 @@ class StrategyStatsService
 
     private function computeSwingDimensions(int $days, string $since): void
     {
-        $service = app(BacktestService::class);
-        $metrics = $service->computeSwingMetrics($since, now()->toDateString());
-
-        foreach ($metrics['by_strategy'] ?? [] as $strategy => $row) {
-            if (($row['evaluated'] ?? 0) === 0) continue;
-            StrategyPerformanceStat::updateOrCreate(
-                [
-                    'mode'            => 'swing',
-                    'dimension_type'  => 'strategy',
-                    'dimension_value' => (string) $strategy,
-                    'period_days'     => $days,
-                ],
-                [
-                    'sample_count'      => $row['evaluated'],
-                    'target_reach_rate' => $row['paper_target_reach_rate'],
-                    'expected_value'    => $row['paper_expected_value'],
-                    'avg_risk_reward'   => $row['avg_risk_reward'],
-                    'computed_at'       => now(),
-                ]
-            );
-        }
-
-        foreach ($metrics['by_thesis'] ?? [] as $row) {
-            if (($row['count'] ?? 0) === 0) continue;
-            StrategyPerformanceStat::updateOrCreate(
-                [
-                    'mode'            => 'swing',
-                    'dimension_type'  => 'thesis',
-                    'dimension_value' => (string) $row['thesis'],
-                    'period_days'     => $days,
-                ],
-                [
-                    'sample_count'      => $row['count'],
-                    'target_reach_rate' => $row['paper_target_reach_rate'],
-                    'expected_value'    => $row['paper_expected_value'],
-                    'avg_risk_reward'   => 0,
-                    'computed_at'       => now(),
-                ]
-            );
-        }
+        // paper(20 天假想抱法)已從 BacktestService::computeSwingMetrics 移除，
+        // 原本這裡存的 swing 策略/論點統計都是 paper 假數據、且無任何下游讀取(dead data)。
+        // 待真實平倉樣本累積足夠(30+ 筆)，再改以 realized(真實績效)重建 by_strategy / by_thesis 拆解。
+        // 目前暫不寫入 swing 維度統計。
     }
 
     // -------------------------------------------------------------------------
