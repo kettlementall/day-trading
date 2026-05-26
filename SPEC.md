@@ -58,7 +58,7 @@
 | **18:20** | **`stock:research-investment-theses`** | **AI 自動研究/更新短線產業投資論點** |
 | **18:50** | **`stock:update-swing-positions`** | **每日盤後更新使用者短線持倉與損益快照** |
 | **19:00** | **`stock:ai-screen-swing`** | **AI 理專型短線選股（產業論點 + 技術/籌碼/估值；週一~週五寫入當日 trade_date，週日/連假最後一晚追加跑一次並以 `previousTradingDay` 為 trade_date 覆蓋最近交易日候選，讓使用者開盤前看到最新 thesis 選股）** |
-| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + 短線候選/持倉快照/教訓新鮮度 + API 連通性 + Log 大小警告） |
+| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + 三大法人當日缺漏補跑 + 短線候選/持倉快照/教訓新鮮度 + API 連通性 + Log 大小警告） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
 | 週一 06:00 | `stock:fill-industry`       | 從 TWSE/TPEX 公司基本資料補上 `stocks.industry`（產業別），供類股強弱、新聞題材配對使用 |
 | **週一 17:30** | **`stock:refresh-swing-universe`** | **依流動性／價格／資料完整度／ETF 類型重算 `stocks.is_swing_eligible`，把短線選股池跟當沖名單解耦** |

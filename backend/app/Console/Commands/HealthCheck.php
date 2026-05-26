@@ -56,7 +56,15 @@ class HealthCheck extends Command
         if (!$isHoliday) {
             $instCount = InstitutionalTrade::where('date', $date)->count();
             if ($instCount === 0) {
-                $checks[] = ['name' => '三大法人', 'status' => 'error', 'detail' => "0 筆（預期 > 800）"];
+                // 16:30 排程應抓完；當日缺漏多是 TWSE 暫時性失敗，18:00 後補跑一次。
+                // （殘缺法人數據會嚴重誤導籌碼判斷——曾因漏 1 天把外資「連買」誤判成「倒貨」）
+                if (now()->hour >= 18) {
+                    Artisan::call('stock:fetch-institutional', ['date' => str_replace('-', '', $date)]);
+                    $instCount = InstitutionalTrade::where('date', $date)->count();
+                }
+                $checks[] = $instCount > 0
+                    ? ['name' => '三大法人', 'status' => 'ok', 'detail' => "補跑成功，{$instCount} 筆"]
+                    : ['name' => '三大法人', 'status' => 'error', 'detail' => '0 筆，補跑後仍無（TWSE 可能未公布）'];
             } elseif ($instCount < 800) {
                 $checks[] = ['name' => '三大法人', 'status' => 'warn', 'detail' => "{$instCount} 筆（預期 > 800）"];
             } else {
