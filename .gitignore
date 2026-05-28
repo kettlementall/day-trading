@@ -25,3 +25,6 @@ frontend/dist/
 # Docker
 mysql-data/
 backend/SPEC.md
+
+# 個人交易作戰計畫（非系統程式碼，不納入 repo）
+微型台指當沖_箱體作戰計畫.md

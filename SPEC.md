@@ -43,7 +43,7 @@
 | **09:35** | **`stock:scan-intraday-movers`** | **腿 2：盤中動態加入候選（4+1 軸聯集 → Fugle 即時報價 → 4 條規則 → Haiku 快評 → 寫入 candidates — 見 §3.9）** |
 | 12:00 | `news:fetch`                | 午間新聞抓取                                                    |
 | 12:15 | `news:compute-indices`      | 計算新聞指數                                                    |
-| **12:45** | **`stock:fetch-sector-indices`** | **抓取 TWSE 類股指數（供隔日沖選股使用）** |
+| **15:30** | **`stock:fetch-sector-indices`** | **抓取 TWSE 類股指數收盤（用帶日期端點為主、OpenAPI fallback；供隔日沖 12:50 ai-screen-overnight 以 T-1 形式取用，供 18:50 swing 持倉檢討看當日類股強弱）** |
 | **12:50** | **`stock:ai-screen-overnight`** | **隔日沖三階段 AI 選股（用今日盤中資料選明日建倉標的）** |
 | 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情                                                 |
 | 15:00 | `stock:update-results`      | 更新當日當沖候選標的的盤後結果                                           |
@@ -69,13 +69,39 @@
 
 ### 市場情境判斷（MarketContextService）
 
-在 `stock:ai-screen` 的 Step 1 之前，`MarketContextService::detect()` 根據美股指數判斷今日市場情境：
+`MarketContextService::detect($tradeDate)` 由兩條獨立訊號合成：
+
+**(A) 隔夜訊號**（永遠執行，讀 `us_market_indices`）：
 
 | 情境 | 判斷條件 | 選股調整 |
 |------|----------|----------|
 | `normal` | 費半 ±3%、台指期 ±1.5% | 不調整 |
 | `bullish_catalyst` | 費半 > +3% 或 台指期 > +1.5% | 放寬空頭排列篩選、加入超跌反彈候選、Haiku/Opus prompt 注入催化提示 |
 | `bearish_panic` | 費半 < -3% 或 台指期 < -1.5% | 收緊選股標準 |
+
+**(B) 當日台股廣度訊號**（盤後 `daily_quotes` 已寫入時才執行；少於 500 檔有量視為未寫入直接跳過）：
+
+從當日 `daily_quotes` 聚合大盤廣度（漲:跌、平均漲跌、>5% 跌停/漲停檔數），判定 panic / bull / normal：
+
+| 訊號 | 任一條件成立即觸發 |
+|------|---------|
+| 當日 panic | (a) 跌>5% ≥50 檔 **且** ≥ 漲>5% 檔數 × 2；(b) 全體平均 ≤ -1%；(c) 跌:漲 ≥ 1.8 **且** 平均 ≤ -0.3% |
+| 當日 bull | 對稱條件（漲>5% ≥50 且 ≥ 跌>5% ×2；平均 ≥ +1%；漲:跌 ≥ 1.8 且平均 ≥ +0.3%） |
+
+> 三條都要求方向明確（比例 + 廣度雙重門檻），避免「分歧日」(eg. 跌 78、漲 60) panic/bull 同時 fire 互相抵銷。
+
+**合成規則**（當日台股優先於隔夜）：
+
+| 隔夜 | 當日台股 | 最終 | 觸發描述 |
+|------|---------|------|---------|
+| any | normal | 維持隔夜 | — |
+| 同向 | 同向 | 維持隔夜 | triggers 補充「台股當日同步走強/恐慌」 |
+| 衝突 | panic | **bearish_panic**（覆蓋） | triggers 顯示「台股當日恐慌覆蓋海外訊號」+「海外隔夜：xxx（不採信，當日台股已反向）」+ hint 要求 AI 以「市場拖累」為基底解釋個股暴跌、修復條件以大盤先止穩為前提 |
+| 衝突 | bull | **bullish_catalyst**（覆蓋） | 對稱描述 |
+
+**Why 加當日台股**：原本 `detect()` 只看隔夜美股/TX，盤後（18:50 `SwingPositionUpdateService`）執行時，無視今日台股實況。5/28 案例：費半 +4.09% → 標 `bullish_catalyst`，但當日台股因戰爭新聞崩跌（多檔 -6~-9%、群創成交 12 億股），AI 仍帶 bullish 標籤推理，把 2313 -8.16% 歸因為「現增稀釋的結構性賣壓」（個股因素），而非市場性恐慌拖累。
+
+**時機自動切換**：盤前（08:00 / 08:30）執行時，今日 `daily_quotes` 尚未寫入（14:30 才寫），`detectTaiwanIntraday` 回 null → 完全走原隔夜邏輯，當沖選股不受影響；盤後（18:50 持倉檢討）`daily_quotes` 已寫入，自動疊加當日台股訊號。
 
 **利多催化日特別邏輯：**
 - 物理篩選額外標記「超跌反彈候選」：5日跌幅>10%（或>7%+外資買超），保證入選 top 100
@@ -107,7 +133,7 @@
 ```
 16:00 法人（T-1）──┐
 17:00 估值資料 ────┤
-12:00 新聞（T+0）──┼── 12:45 類股指數 → 12:50 隔日沖 AI 三階段選股
+12:00 新聞（T+0）──┼── 15:30 類股指數 → 12:50 隔日沖 AI 三階段選股（取最近交易日類股，即 T-1）
 12:50 盤中快照 ────┘                   │
                                        ├─ Step 1: overnight 物理篩選（top 100）
                                        ├─ Step 2: Haiku overnight（→ 最多 20 檔）
@@ -385,7 +411,7 @@ docker compose exec php php artisan stock:dry-run-screener --date=YYYY-MM-DD --w
 | 美股 + 夜盤 | `us_market_indices` (06:00 寫入) | trade_date 當日所有 symbol |
 | 新聞情緒 | `news_indices` (08:15 寫入) | overall 一筆 + industry 與前一交易日 sentiment 差異 top 8 |
 | 法人籌碼 T-1 | `institutional_trades` (16:30 寫入) | trade_date 之前最近一筆，total_net 買超 top 5 / 賣超 top 5 |
-| **類股強弱 T-1** | `sector_indices` (14:45 寫入) | trade_date 之前最近一筆，change_percent top 5 強 / top 5 弱 |
+| **類股強弱 T-1** | `sector_indices` (前一交易日 15:30 寫入) | trade_date 之前最近一筆，change_percent top 5 強 / top 5 弱 |
 | **大盤節奏代理** | `sector_indices` 近 5 個交易日 | 電子工業 / 金融保險 / 半導體業 5 日累計變化 + trend 標籤（strong_up / mild_up / sideways / mild_down / strong_down） |
 | **重大事件新聞** | `news_articles` 近 24 小時 | `ai_analysis.impact='high'` 或 `panic_signal=true` 的 top 5（依 panic 優先、`ABS(sentiment_score)` 排序），含 industries / risk_type |
 
@@ -1203,10 +1229,11 @@ expected_value = avg(所有 buy_reachable 為 true 的 profit)
 **關鍵時序：**
 
 ```
-12:45  抓取類股指數（stock:fetch-sector-indices）
+15:30  抓取類股指數（stock:fetch-sector-indices；當日盤後資料）
          │
 12:50  三階段 AI 選股（stock:ai-screen-overnight）
-         │  ← 類股指數為收盤指數，盤中取得的是前一日資料（自動 fallback）
+         │  ← 12:50 早於 15:30 sector 抓取，所以取的是 T-1 類股
+         │     （自動 fallback：latestDateOn 回最近一筆，符合「隔夜選股看 T-1」語意）
          │
          ├─ Step 1: StockScreener overnight 模式（物理門檻）
          ├─ Step 2: HaikuPreFilterService overnight 模式（→ 最多 20 檔）
@@ -1440,18 +1467,26 @@ Fallback（API 失敗）：回傳 `{action: "hold"}`，維持現狀。
 
 ### 6.10 類股指數（SectorIndex）
 
-資料來源：TWSE OpenAPI `https://openapi.twse.com.tw/v1/indicesReport/MI_INDEX`
+**資料來源**（雙端點、帶日期端點優先）：
 
-每日 **12:45** 由 `stock:fetch-sector-indices` 抓取並存入 `sector_indices` 表。
+1. **主要**：TWSE 帶日期端點 `https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={YYYYMMDD}&type=IND`
+   - 回應 `stat:OK` + 包含當日資料；`stat` 非 OK 視為「該日尚未發佈」回 null。
+   - 不會誤回 T-1（不像 OpenAPI 端點）。
+2. **Fallback**：TWSE OpenAPI `https://openapi.twse.com.tw/v1/indicesReport/MI_INDEX`
+   - 帶日期端點失敗時使用；保證有資料但可能為 T-1。
+
+每日 **15:30**（weekdays）由 `stock:fetch-sector-indices` 抓取並存入 `sector_indices` 表。
+
+**Why 15:30 而非更早**：TWSE OpenAPI MI_INDEX 端點實測 14:45 仍回 T-1，需給 TWSE 一段發佈時間；帶日期端點 15:30 後查當日多能拿到 stat=OK。
+
+**Why 雙端點**：原本只用 OpenAPI 導致**每天 sector_indices 都是 T-1 資料**（5/28 抓到 5/27、5/27 抓到 5/26 …），對 18:50 swing 持倉檢討影響嚴重——AI 看到「電子零組件業 +2.73%」以為今日強勢，但其實是昨日資料、當日實為 -3.79%。
 
 > **個股 ↔ 類股關聯依賴 `stocks.industry` 欄位**：個股查詢類股漲跌、類股排名、新聞題材配對，皆使用 `stocks.industry` 字串比對 `sector_indices.sector_name`。
 > 此欄位由 `stock:fill-industry` 從 TWSE/TPEX OpenAPI（`t187ap03_L` / `mopsfin_t187ap03_O`）抓取的 MOPS 產業別代碼對映成中文類股名（如 `24` → `半導體業`）。
 > 對映表 `INDUSTRY_NAME_MAP` 內建 36 種代碼，命名與 `sector_indices.sector_name` 對齊，化學工業（21）併入「化學生技醫療」（與 TWSE 公布的合併指數一致）。
 > 排程於**週一 06:00**執行（產業分類極少變動，每週一次足夠）；亦可帶 `--force` 重新覆蓋既有資料。
 
-> **注意：** TWSE MI_INDEX 為**收盤指數**，台股 13:30 收盤前 API 回傳的是前一交易日資料。
-> `updateOrCreate` 以 API 回傳的民國年日期為 key，因此 12:45 抓到的資料會存在前一日的 date 下。
-> 查詢方法已內建 fallback：指定日期無資料時自動使用最近一個有資料的交易日。
+> **資料日期保護**：所有查詢方法已內建 `latestDateOn` fallback：指定日期無資料時自動使用最近一個有資料的交易日。`SwingPositionUpdateService::buildSectorContext` 額外於回傳 dict 加 `data_date` + `is_previous_day` 欄位、prompt 明示「is_previous_day=true 代表前一交易日資料、不可當作當日強弱」，避免 AI 把 T-1 誤讀為當日。
 
 涵蓋 29 個類股，包含：電子工業、半導體業、金融保險、鋼鐵工業等主要類股。
 
@@ -1701,6 +1736,28 @@ AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`�
 - 報價變動時 800ms `livePulse` 動畫高亮邊框
 - 卡片下方 5 欄 stats 改為「成本 / 股數 / 停損 / 目標 / 市值」（現價已拉到右上不再重複）
 
+### 9.3a AI 檢討卡（advice-callout）資訊優先順序
+
+`SwingPositionUpdateService::askAi()` 回傳的 `latest_advice` JSON 欄位豐富（≈ 25 個 key），前端按「**結論 → 狀態 → 下一步觀察 → 深度**」分四層顯示，把可立即執行的訊號從長文 reasoning 裡抽出來：
+
+**Layer 1 — 結論（永遠顯示）：**
+- `action`（續抱／調整／減碼／出場）+ ⚠️停損已破 badge（`stop_breached=true` 時整個 callout 換紅左邊條 + 淡紅底）+ 技術 fallback badge（`is_fallback=true`）+ 快照時間
+- `decision_summary`：白底圓角一句話結論（💬 開頭），最該被掃到的 1 個欄位
+
+**Layer 2 — 狀態（永遠顯示）：**
+- `stop_changed` / `target_changed` 變化列（沿用既有 adjust-line）
+- health-grid：論點 / 技術 / 籌碼 / 風險
+- time-grid：預估持有 / 目標 ETA / 時間壓力
+
+**Layer 3 — 下一步觀察（條件式顯示）：**
+- `repair_condition` / `failure_condition`：綠／紅雙欄並排（行動驅動，告訴使用者明天看到什麼要續抱 vs 出場；停損審查 / 風險區觀察情境才會有值）
+- `chip_risk_notes[]`：白底框 + bullet list，把「籌碼🔴」的具體成因列出來（法人賣超、融資增、現增稀釋等）
+
+**Layer 4 — 深度（`<details>` 折疊）：**
+- `volume_price_signal`、`target_price_reasoning`、`eta_reasoning`、`why_not_exit`、`why_not_hold`、完整 `reasoning`
+
+**Why 這個順序：** 過去整個 advice 平鋪展示，使用者要讀 800+ 字 reasoning 才能找出「明天要看什麼」。新分層讓 `repair_condition` / `failure_condition` / `decision_summary` / `chip_risk_notes` 從 reasoning 裡浮出來，使用者打開卡片就能掌握「結論 + 狀態 + 該觀察什麼」，深度推理留在折疊區供需要時展開。
+
 ### 9.3b admin 手動重跑選股
 
 頁首 admin-only「重新選股」按鈕(`SwingView.vue`,`v-if="authStore.isAdmin"`),用頁首日期選擇器的 `currentDate` 當參數——切到哪天就重跑哪天(對應 19:00 排程失敗、或凌晨手動補某交易日的情境)。
@@ -1925,6 +1982,8 @@ daily review 用結構化 JSON key 而非 chip 字串，因為 prompt context �
 
 `askAi` 開頭呼叫 `MarketContextService::detect($tradeDate)` 與 `toPromptSection($context)`，注入 `# Context` 區塊頂端。reuse 既有 service（與 `AiScreenerService` / `HaikuPreFilterService` / `PremarketBriefingService` 共用，避免重複實作）。`normal` label 時 `toPromptSection` 回空字串 → 不加 noise；`bullish_catalyst` / `bearish_panic` / `sector_rotation` 時注入完整 label + triggers + hint + 受益產業。
 
+> 自 2026-05-28 起，`MarketContextService::detect()` 盤後執行時會自動疊加當日台股大盤廣度訊號（見 §1「市場情境判斷」），台股當日恐慌可覆蓋海外利多（反之亦然）。這對 swing daily review 直接受益 — 5/28 案例：費半 +4.09% 但台股戰爭崩跌時，AI 收到的不再是 `bullish_catalyst`，而是 `bearish_panic` + 「個股暴跌先以市場拖累為基底解釋」hint，避免把市場性恐慌歸因為個股 thesis 失效。
+
 **Feature 2：持倉軌跡（peak + drawdown）**
 
 從 `swing_position_snapshots` 撈 `position->entry_date` 至前一日的所有 snapshot，取 `unrealized_profit_percent` 最大值為 `peak_profit_pct`。`drawdown_from_peak_pct = max(0, peak - currentProfit)`。注入「持倉」區塊內：
@@ -1946,6 +2005,18 @@ daily review 用結構化 JSON key 而非 chip 字串，因為 prompt context �
 > 「`市場情境` 為 `bearish_panic` / `bullish_catalyst` 時，股價短期表現相當程度受大盤拖累/帶動；判 thesis_health 與 market_vs_stock_issue 時請整合考量。`進場後高水位` vs `目前浮盈` 顯著回撤（無硬閾值，由你判讀）時，請評估是否 trim 鎖利或上移 stop 而非直接 exit。」
 
 **Feature 3 deferred**：「過去 advice 準確率」（AI 自我修正）需新增預計算統計表（風格類似 §9.6.1 `swing-news-risk-stats`），實作成本高，另開議題。
+
+### 9.5c-1 執行時點語意（T+1 開盤生效）
+
+`SwingPositionUpdateService::askAi()` 於 18:50 跑（盤後），但 AI 過去措辭常寫「**今日收盤後出場**」「**立即下修停損**」這類字眼，盤後時點已無法執行，使用者實際只能在下一交易日（T+1）09:00 開盤後手動執行。
+
+**Why：** prompt 沒明示時間語意，AI 用日常自然語言推理，容易把「現在」誤認為可即時動作的時點。
+
+**修法**：`# 基礎約束` 段第 1 條（最頂）強制：
+
+> 「執行時點：本檢討於 T 日盤後執行，所有 action 與 stop/target 調整於 **T+1 開盤後**由使用者執行。`decision_summary` 與 `reasoning` 提及執行時點時，請用『明日開盤』『下一交易日』等字眼，禁止使用『今日收盤後』『立即』『即刻』『現在』這類盤後無法執行的措辭。`repair_condition` / `failure_condition` 描述的觀察點，也應以『明日』或具體交易日為基準。」
+
+放在基礎約束最頂的原因：時間語意是 reasoning / decision_summary / repair / failure 等多個欄位共同的約束，提前放才能影響整段輸出。
 
 ### 9.5d 短線回測：移除 20 天 paper 模擬，只保留 realized
 

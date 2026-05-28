@@ -391,7 +391,7 @@ stop {$position->current_stop} | target {$position->current_target}
 技術：{$technicalJson}
 籌碼：{$chipJson}
 估值：{$valuationJson}
-類股：{$sectorJson}
+類股（注意 data_date 與當日比對，is_previous_day=true 代表為前一交易日資料、不可當作當日強弱）：{$sectorJson}
 個股新聞風險：
 {$newsRiskText}
 近 7 日 exit 訊號：{$recentExitText}
@@ -400,6 +400,7 @@ stop {$position->current_stop} | target {$position->current_target}
 {$riskZoneBlock}
 {$previousStopReviewBlock}
 {$lessonsBlock}# 基礎約束
+- **執行時點**：本檢討於 T 日盤後執行，所有 action 與 stop/target 調整於 **T+1 開盤後**由使用者執行。`decision_summary` 與 `reasoning` 提及執行時點時，請用「明日開盤」「下一交易日」等字眼，禁止使用「今日收盤後」「立即」「即刻」「現在」這類盤後無法執行的措辭。`repair_condition` / `failure_condition` 描述的觀察點，也應以「明日」或具體交易日為基準。
 - action ∈ {hold, adjust, trim, exit}
 - current_stop 只能上移或維持（action=exit 例外）
 - current_target 可調，但 reasoning 必須說明
@@ -656,6 +657,13 @@ PROMPT;
             return ['available' => false];
         }
 
+        // 明確標示資料日期 — 14:45 排程時代 TWSE 常回 T-1，AI 容易把「電子零組件 +2.73%」誤讀為當日強勢
+        // 即使排程改 15:30，仍保留 fallback 機制，必須明確告訴 AI 資料日期
+        $effectiveDate = SectorIndex::latestDateOn($date);
+        if (!$effectiveDate) {
+            return ['available' => false, 'industry' => $industry];
+        }
+
         $change = SectorIndex::getChangeForIndustry($date, $industry);
         $rank = SectorIndex::getRankForIndustry($date, $industry);
 
@@ -676,6 +684,8 @@ PROMPT;
             'change_percent' => $change,
             'rank' => $rank,
             'strength' => $strength,
+            'data_date' => $effectiveDate,
+            'is_previous_day' => $effectiveDate !== $date,
         ];
     }
 

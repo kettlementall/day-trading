@@ -146,11 +146,22 @@
             </div>
           </div>
 
-          <div v-if="p.latest_advice" class="advice-callout">
+          <div
+            v-if="p.latest_advice"
+            class="advice-callout"
+            :class="{ 'is-stop-breached': p.latest_advice.stop_breached }"
+          >
             <span class="ai-badge">AI</span>
             <div class="advice-body">
               <div class="advice-action">
                 {{ adviceActionLabel(p.latest_advice.action) }}
+                <span
+                  v-if="p.latest_advice.stop_breached"
+                  class="stop-breached-badge"
+                  title="今日收盤已跌破停損，AI 進入停損審查模式"
+                >
+                  ⚠️ 停損已破
+                </span>
                 <span
                   v-if="p.latest_advice.is_fallback"
                   class="fallback-badge"
@@ -161,6 +172,9 @@
                 <span v-if="p.tracking_status?.latest_snapshot_at" class="advice-time">
                   {{ formatDateTime(p.tracking_status.latest_snapshot_at) }}
                 </span>
+              </div>
+              <div v-if="p.latest_advice.decision_summary" class="decision-summary">
+                💬 {{ p.latest_advice.decision_summary }}
               </div>
               <div v-if="p.latest_advice.stop_changed || p.latest_advice.target_changed" class="adjust-line">
                 <span v-if="p.latest_advice.stop_changed">
@@ -181,18 +195,57 @@
                 <span>目標 ETA {{ etaLabel(p.latest_advice.target_eta_days) }}</span>
                 <span>時間 {{ timePressureLabel(p.latest_advice.time_pressure) }}</span>
               </div>
-              <div v-if="p.latest_advice.target_price_reasoning || p.latest_advice.eta_reasoning" class="number-reasons">
-                <div v-if="p.latest_advice.target_price_reasoning">
-                  <span>目標理由</span>{{ p.latest_advice.target_price_reasoning }}
+              <div
+                v-if="p.latest_advice.repair_condition || p.latest_advice.failure_condition"
+                class="next-step-grid"
+              >
+                <div v-if="p.latest_advice.repair_condition" class="next-step repair">
+                  <div class="next-step-title">✅ 修復條件</div>
+                  <div class="next-step-body">{{ p.latest_advice.repair_condition }}</div>
                 </div>
-                <div v-if="p.latest_advice.eta_reasoning">
-                  <span>ETA 理由</span>{{ p.latest_advice.eta_reasoning }}
+                <div v-if="p.latest_advice.failure_condition" class="next-step failure">
+                  <div class="next-step-title">❌ 失敗條件</div>
+                  <div class="next-step-body">{{ p.latest_advice.failure_condition }}</div>
                 </div>
               </div>
-              <div v-if="p.latest_advice.volume_price_signal" class="advice-note">
-                {{ p.latest_advice.volume_price_signal }}
+              <div
+                v-if="Array.isArray(p.latest_advice.chip_risk_notes) && p.latest_advice.chip_risk_notes.length"
+                class="chip-risk-notes"
+              >
+                <div class="chip-risk-title">籌碼風險（{{ p.latest_advice.chip_risk_notes.length }}）</div>
+                <ul>
+                  <li
+                    v-for="(note, idx) in p.latest_advice.chip_risk_notes"
+                    :key="`crn-${p.id}-${idx}`"
+                  >
+                    {{ note }}
+                  </li>
+                </ul>
               </div>
-              <div class="advice-text">{{ p.latest_advice.reasoning }}</div>
+              <details class="advice-details">
+                <summary>完整分析</summary>
+                <div v-if="p.latest_advice.volume_price_signal" class="advice-note">
+                  <strong>量價訊號：</strong>{{ p.latest_advice.volume_price_signal }}
+                </div>
+                <div
+                  v-if="p.latest_advice.target_price_reasoning || p.latest_advice.eta_reasoning"
+                  class="number-reasons"
+                >
+                  <div v-if="p.latest_advice.target_price_reasoning">
+                    <span>目標理由</span>{{ p.latest_advice.target_price_reasoning }}
+                  </div>
+                  <div v-if="p.latest_advice.eta_reasoning">
+                    <span>ETA 理由</span>{{ p.latest_advice.eta_reasoning }}
+                  </div>
+                </div>
+                <div v-if="p.latest_advice.why_not_exit" class="advice-note">
+                  <strong>為何不出場：</strong>{{ p.latest_advice.why_not_exit }}
+                </div>
+                <div v-if="p.latest_advice.why_not_hold" class="advice-note">
+                  <strong>為何不續抱：</strong>{{ p.latest_advice.why_not_hold }}
+                </div>
+                <div class="advice-text">{{ p.latest_advice.reasoning }}</div>
+              </details>
             </div>
           </div>
 
@@ -1664,6 +1717,131 @@ function isArchivedClosedPosition(position) {
   font-weight: 700;
   letter-spacing: 0.5px;
   cursor: help;
+}
+
+.advice-callout.is-stop-breached {
+  border-left-color: #dc2626;
+  background: rgba(254, 226, 226, 0.55);
+}
+
+.stop-breached-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  border: 1px solid rgba(220, 38, 38, 0.45);
+  background: rgba(254, 226, 226, 0.92);
+  color: #b91c1c;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  cursor: help;
+}
+
+.decision-summary {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--c-primary-line);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text);
+  line-height: 1.5;
+}
+
+.next-step-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+@media (max-width: 640px) {
+  .next-step-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.next-step {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.next-step.repair {
+  border-color: rgba(22, 163, 74, 0.32);
+  background: rgba(220, 252, 231, 0.6);
+}
+
+.next-step.failure {
+  border-color: rgba(220, 38, 38, 0.32);
+  background: rgba(254, 226, 226, 0.6);
+}
+
+.next-step-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.next-step.repair .next-step-title {
+  color: #15803d;
+}
+
+.next-step.failure .next-step-title {
+  color: #b91c1c;
+}
+
+.next-step-body {
+  color: var(--c-text-sub);
+}
+
+.chip-risk-notes {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--c-line);
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+}
+
+.chip-risk-title {
+  font-weight: 700;
+  color: var(--c-text);
+  margin-bottom: 4px;
+}
+
+.chip-risk-notes ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--c-text-sub);
+  line-height: 1.55;
+}
+
+.chip-risk-notes li {
+  margin-bottom: 2px;
+}
+
+.advice-details {
+  margin-top: 8px;
+}
+
+.advice-details > summary {
+  cursor: pointer;
+  color: var(--c-primary-strong);
+  font-weight: 600;
+  font-size: 12px;
+  padding: 4px 0;
+  list-style: revert;
+}
+
+.advice-details .advice-note strong {
+  margin-right: 4px;
+  color: var(--c-text);
+  font-weight: 700;
 }
 
 .adjust-line,

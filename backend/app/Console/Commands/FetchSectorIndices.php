@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Log;
 class FetchSectorIndices extends Command
 {
     protected $signature = 'stock:fetch-sector-indices {date?}';
-    protected $description = '抓取 TWSE 類股指數即時漲跌（12:25 執行，供隔日沖選股使用）';
+    protected $description = '抓取 TWSE 類股指數收盤漲跌（15:30 執行，盤後 swing 持倉檢討使用）';
 
     /**
      * TWSE MI_INDEX 回傳的「指數」中文名稱 → 系統 industry（對應 stocks.industry）
@@ -54,12 +54,30 @@ class FetchSectorIndices extends Command
         $date = $this->argument('date') ?? now()->format('Y-m-d');
         $this->info("抓取類股指數：{$date}");
 
+        // 主來源：TWSE 帶日期端點（明確要求指定日期，stat=OK 才回傳該日資料）
+        $data = null;
+        $source = null;
         try {
-            $data = $this->fetchFromTwse();
+            $data = $this->fetchFromTwseWithDate($date);
+            if ($data !== null) {
+                $source = 'twse_with_date';
+            }
         } catch (\Exception $e) {
-            $this->error('TWSE API 失敗：' . $e->getMessage());
-            Log::error('FetchSectorIndices TWSE API 失敗：' . $e->getMessage());
-            return self::FAILURE;
+            $this->warn("TWSE 帶日期端點失敗：{$e->getMessage()}，嘗試 OpenAPI fallback");
+            Log::warning("FetchSectorIndices: twse_with_date 失敗，fallback OpenAPI — {$e->getMessage()}");
+        }
+
+        // Fallback：OpenAPI（保證回得到資料、但常為 T-1）
+        if ($data === null) {
+            try {
+                $data = $this->fetchFromOpenApi();
+                $source = 'twse_openapi_fallback';
+                Log::info("FetchSectorIndices: 主端點無 {$date} 資料，已 fallback OpenAPI");
+            } catch (\Exception $e) {
+                $this->error('OpenAPI 也失敗：' . $e->getMessage());
+                Log::error('FetchSectorIndices 雙端點皆失敗：' . $e->getMessage());
+                return self::FAILURE;
+            }
         }
 
         $saved = 0;
@@ -94,8 +112,10 @@ class FetchSectorIndices extends Command
         }
 
         if ($actualDate !== $date) {
-            $this->warn("TWSE 回傳資料日期為 {$actualDate}（請求 {$date}），收盤指數尚未更新");
-            Log::info("FetchSectorIndices：API 回傳 {$actualDate}，請求 {$date}");
+            $this->warn("TWSE 回傳資料日期為 {$actualDate}（請求 {$date}），收盤指數尚未更新（source={$source}）");
+            Log::info("FetchSectorIndices：API 回傳 {$actualDate}，請求 {$date}，source={$source}");
+        } else {
+            Log::info("FetchSectorIndices {$date}：成功取得當日資料，source={$source}");
         }
 
         // 找出漲跌幅前3名
@@ -123,9 +143,66 @@ class FetchSectorIndices extends Command
         return self::SUCCESS;
     }
 
-    private function fetchFromTwse(): array
+    /**
+     * 帶日期端點：可明確指定日期取資料，當日尚未發佈時回 null（不會誤回 T-1）
+     *
+     * @return array<array<string,string>>|null  null = 該日資料尚未發佈或 API 異常
+     */
+    private function fetchFromTwseWithDate(string $date): ?array
     {
-        // TWSE OpenAPI 類股指數（每日收盤後更新，含各類股漲跌幅）
+        $compactDate = str_replace('-', '', $date);
+        $url = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={$compactDate}&type=IND";
+
+        $response = Http::timeout(15)
+            ->withHeaders(['Accept' => 'application/json'])
+            ->get($url);
+
+        if (!$response->successful()) {
+            throw new \RuntimeException("HTTP {$response->status()}: " . $response->body());
+        }
+
+        $data = $response->json();
+
+        // stat: OK = 成功；其他訊息（如「查詢日期大於今日」）= 該日尚未發佈
+        if (($data['stat'] ?? '') !== 'OK') {
+            Log::info("FetchSectorIndices twse_with_date 回應 stat={$data['stat']}（{$date}）");
+            return null;
+        }
+
+        $tables = $data['tables'] ?? [];
+        // 第一張表為「臺灣證券交易所價格指數」
+        $table = $tables[0] ?? null;
+        if (!$table || empty($table['data'])) {
+            return null;
+        }
+
+        // 轉成與 OpenAPI 相容的格式：['指數','收盤指數','漲跌','漲跌百分比','日期']
+        // 新端點 [指數,收盤,signHtml,點數,signed%] — % 已含正負號
+        $rows = [];
+        foreach ($table['data'] as $row) {
+            if (!is_array($row) || count($row) < 5) {
+                continue;
+            }
+            $pctStr = trim((string) $row[4]);
+            $sign = str_starts_with($pctStr, '-') ? '-' : '+';
+            $absPct = ltrim($pctStr, '-+');
+            $rows[] = [
+                '指數'         => (string) $row[0],
+                '收盤指數'     => (string) $row[1],
+                '漲跌'         => $sign,
+                '漲跌百分比'   => $absPct,
+                '日期'         => $this->toRocDate($date),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * OpenAPI fallback：當帶日期端點無法回應時使用，可能回 T-1
+     */
+    private function fetchFromOpenApi(): array
+    {
         $response = Http::timeout(15)
             ->withHeaders(['Accept' => 'application/json'])
             ->get('https://openapi.twse.com.tw/v1/indicesReport/MI_INDEX');
@@ -137,10 +214,23 @@ class FetchSectorIndices extends Command
         $data = $response->json();
 
         if (!is_array($data) || empty($data)) {
-            throw new \RuntimeException('TWSE API 回傳空資料');
+            throw new \RuntimeException('TWSE OpenAPI 回傳空資料');
         }
 
         return $data;
+    }
+
+    /**
+     * "2026-05-28" → "1150528"（民國年壓字串）
+     */
+    private function toRocDate(string $date): string
+    {
+        $ts = strtotime($date);
+        if ($ts === false) {
+            return '';
+        }
+        $year = (int) date('Y', $ts) - 1911;
+        return sprintf('%03d%s%s', $year, date('m', $ts), date('d', $ts));
     }
 
     private function parseFloat(mixed $value): float

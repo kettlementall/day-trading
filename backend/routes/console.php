@@ -108,9 +108,11 @@ Schedule::command('stock:monitor-intraday')
     ->appendOutputTo($scheduleLog);
 
 // ---- 隔日沖選股流程（每個交易日執行）----
-// 收盤後抓取 TWSE 類股指數（TWSE MI_INDEX 為收盤資料；12:50 regime 改由 Fugle 即時指數在 command 內現抓）
+// 收盤後抓取 TWSE 類股指數
+// 改用帶日期端點為主、OpenAPI 為 fallback；15:30 給 TWSE 留發佈時間
+// 14:45 OpenAPI 經常仍回 T-1，導致 swing 18:50 持倉檢討看到的「今日類股」其實是昨日 → 嚴重誤導 AI
 scheduledCommand('stock:fetch-sector-indices', '類股指數抓取', selfNotify: true)
-    ->dailyAt('14:45')->weekdays();
+    ->dailyAt('15:30')->weekdays();
 
 // 12:50 隔日沖 AI 選股（Screener → Haiku → Opus → Final Ranking，完成後可於 13:00-13:25 下單）
 scheduledCommand('stock:ai-screen-overnight', '隔日沖 AI 選股')
