@@ -89,7 +89,8 @@ class MarketContextService
         $indices = UsMarketIndex::where('date', $tradeDate)->get();
 
         $sox = $indices->firstWhere('symbol', '^SOX');
-        $tx = $indices->firstWhere('symbol', 'TX');
+        // TX 改讀 TX_NIGHT（夜盤收盤 vs 前一日盤收的正確語意），fallback TX（舊有日盤盤中價）
+        $tx = $indices->firstWhere('symbol', 'TX_NIGHT') ?? $indices->firstWhere('symbol', 'TX');
         $nasdaq = $indices->firstWhere('symbol', '^IXIC');
 
         $soxChange = $sox ? (float) $sox->change_percent : null;

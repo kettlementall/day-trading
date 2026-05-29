@@ -29,11 +29,13 @@
 
 | 時間  | 指令                        | 說明                                                        |
 |-------|-----------------------------|-----------------------------------------------------------|
-| 06:00 | `stock:fetch-us-indices`    | 抓取美股指數 + 台指期夜盤（S&P 500、費半、道瓊、那斯達克、美元指數、台指期）               |
+| **05:01** | **`stock:fetch-us-indices --tx-night-close`** | **抓台指期夜盤收盤**（symbol=TX_NIGHT，change vs T-1 日盤收的正確「夜盤漲跌」；供 08:30 簡報、MarketContext 讀） |
+| 06:00 | `stock:fetch-us-indices --no-tx` | 抓取美股指數（S&P 500、費半、道瓊、那斯達克、美元指數）；**TX 改由 05:01 / 14:00 / 08:45 三點抓** |
 | 06:00 | `news:fetch`                | 抓取隔夜國際新聞                                                  |
 | 06:15 | `news:compute-indices`      | 計算新聞指數（供選股用）                                              |
 | 08:00 | `stock:ai-screen`           | 三階段 AI 選股：物理門檻寬篩（intraday top 100，依當沖複合分數降冪 — 見 §2.5）→ Haiku 批量預篩（→ 最多 30 檔）→ Opus 精審，最終選出 10–15 檔 |
-| 08:45 | `stock:fetch-us-indices --tx-only` | 更新台指期日盤開盤價（日盤 08:45 開盤，確保候選頁顯示當日盤中即時價而非夜盤收盤價）             |
+| 08:45 | `stock:fetch-us-indices --tx-only` | 更新台指期日盤開盤價（symbol=TX，候選頁即時報價用；不影響 TX_NIGHT/TX_DAY） |
+| **14:00** | **`stock:fetch-us-indices --tx-day-close`** | **抓台指期日盤收盤**（symbol=TX_DAY，供隔天 05:01 TX_NIGHT 算 change 基準） |
 | 08:00 | `news:fetch`                | 開盤前新聞抓取                                                   |
 | 08:15 | `news:compute-indices`      | 計算新聞指數                                                    |
 | **08:30** | **`stock:premarket-briefing`** | **盤前方向簡報（Opus 聚合美股/夜盤/MarketContext/NewsIndex/法人 T-1 → Telegram，見 §3.0）** |
@@ -66,6 +68,34 @@
 | **週日 22:00** | **`stock:compute-strategy-stats`** | **計算當沖/隔日沖策略量化績效統計（30/60 天窗口）；短線維度暫停（20 天 paper 模擬已移除，待 realized 真實樣本足夠再重建，見 §9.5d）** |
 
 > `stock:backtest --validated` 已停用自動排程。指令保留可手動執行回測指標檢視。
+
+### 台指期三符號架構（TX / TX_DAY / TX_NIGHT）
+
+`us_market_indices` 表內台指期分三個 symbol，因為一筆 row 塞不下「日盤盤中價」「日盤收盤」「夜盤收盤」三種不同語意：
+
+| symbol | 寫入時點 | 語意 | 用途 |
+|---|---|---|---|
+| `TX` | 08:45 `--tx-only`（日盤開盤後） | 日盤即時/開盤後盤中價 | 候選頁、即時報價顯示 |
+| `TX_DAY` | 14:00 `--tx-day-close` | 日盤收盤（CLast at 14:00 = 13:45 收盤後最後一筆） | 給隔天 TX_NIGHT 算 change 基準 |
+| `TX_NIGHT` | 05:01 `--tx-night-close` | 夜盤收盤（CLast at 05:01 = 夜盤剛收的最後一筆） | **盤前簡報、MarketContext 讀「夜盤漲跌」** |
+
+**Why 三符號**：
+
+期交所即時 API 的 `CRefPrice` 在 session 切換時點不可靠（5/29 06:00 觀察到 CRef 仍掛 5/27 收 44794，而非預期的 5/28 收 43839），所以**不能信任 API 的 prev_close**。改採「**自己存日盤收盤 → 夜盤收盤算 change vs 自己存的日盤收盤**」雙時點抓取 + 自家算 change 的方式，避免 CRef 切換延遲帶來的語意錯位。
+
+**change_percent 計算**：
+- `TX_DAY[T]` change vs `TX_DAY[T-1]` = 日盤漲跌
+- `TX_NIGHT[T]` change vs 最近一筆 `TX_DAY[<T]`（= T-1 日盤收）= 真實「夜盤漲跌」
+
+**讀者層**：
+- `PremarketBriefingService::collectInputs`：優先讀 `TX_NIGHT`、fallback `TX`，傳給 Opus 時 symbol/name 統一改回 `TX`/`台指期夜盤`，避免 AI 看到多個 symbol 混淆
+- `MarketContextService::detect`：同上 fallback 邏輯讀 TX_NIGHT
+
+**5/29 案例**：
+- 戰爭新聞在 5/28 早盤、5/28 日盤收 43839（-2.13% vs 5/27 收 44794）
+- 5/28-5/29 夜盤翻多回升、收 44798（+2.19% vs 5/28 收 43839）
+- 修正前 briefing 看到的 TX 是 06:00 抓的 43842（CRef 還掛 44794 → -2.13%），把**前一天日盤崩跌錯標成今日夜盤跌幅**，判偏空
+- 修正後 briefing 看到 TX_NIGHT=44798（+2.19% vs T-1 TX_DAY 43839），判 bullish_catalyst，方向正確
 
 ### 市場情境判斷（MarketContextService）
 

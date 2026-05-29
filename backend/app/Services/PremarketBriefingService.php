@@ -80,11 +80,20 @@ class PremarketBriefingService
     {
         $marketContext = MarketContextService::detect($tradeDate);
 
+        // 台指期改讀 TX_NIGHT（夜盤收盤 vs 前一日盤收的正確語意），fallback TX（舊有日盤盤中價）
+        // 避免 AI 把日盤盤中價誤當成夜盤；TX_DAY 不送進 prompt（briefing 不需要昨日日盤）
         $usIndices = UsMarketIndex::where('date', $tradeDate)
+            ->whereIn('symbol', ['^GSPC', '^SOX', '^DJI', '^IXIC', 'DX-Y.NYB', '^VIX', 'TX_NIGHT', 'TX'])
             ->get()
-            ->map(fn($i) => [
-                'symbol'         => $i->symbol,
-                'name'           => $i->name,
+            ->groupBy('symbol');
+        $txRow = $usIndices->get('TX_NIGHT')?->first() ?? $usIndices->get('TX')?->first();
+        $usIndices = $usIndices->forget(['TX', 'TX_NIGHT'])->flatten();
+        if ($txRow) {
+            $usIndices->push($txRow);
+        }
+        $usIndices = $usIndices->map(fn($i) => [
+                'symbol'         => $i->symbol === 'TX_NIGHT' ? 'TX' : $i->symbol,
+                'name'           => $i->symbol === 'TX_NIGHT' ? '台指期夜盤' : $i->name,
                 'close'          => (float) $i->close,
                 'change_percent' => (float) $i->change_percent,
             ])

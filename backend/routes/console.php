@@ -58,8 +58,15 @@ scheduledCommand('stock:update-results', '候選結果回填')->dailyAt('15:00')
 scheduledCommand('stock:daily-review', 'AI 每日檢討')->dailyAt('15:30');
 
 // 每日 06:00 抓取隔夜國際新聞 + 美股指數（供 08:00 選股用）
-scheduledCommand('stock:fetch-us-indices', '美股指數抓取', selfNotify: true)->dailyAt('06:00');
-// 每日 08:45 更新台指期日盤開盤價（日盤 08:45 開盤，供候選頁顯示用）
+// 06:00 跳過 TX：期交所 API CRef 此時尚未切換到正確「T-1 日盤收」基準，會抓到語意錯誤的 -2.13%
+scheduledCommand('stock:fetch-us-indices --no-tx', '美股指數抓取', selfNotify: true)->dailyAt('06:00');
+// 每日 14:00 抓台指期「日盤收盤」（symbol=TX_DAY）— 給隔天夜盤算 change 基準用
+scheduledCommand('stock:fetch-us-indices --tx-day-close', '台指期日盤收盤', selfNotify: true)
+    ->dailyAt('14:00')->weekdays();
+// 每日 05:01 抓台指期「夜盤收盤」（symbol=TX_NIGHT，change vs 前一交易日 TX_DAY = 正確的「夜盤漲跌」）— 給 08:30 簡報用
+scheduledCommand('stock:fetch-us-indices --tx-night-close', '台指期夜盤收盤', selfNotify: true)
+    ->dailyAt('05:01')->weekdays();
+// 每日 08:45 更新台指期日盤開盤價（symbol=TX，候選頁即時報價用）
 scheduledCommand('stock:fetch-us-indices --tx-only', '台指期日盤更新', selfNotify: true)->dailyAt('08:45');
 scheduledCommand('news:fetch', '新聞抓取(06:00)', selfNotify: true)->dailyAt('06:00');
 scheduledCommand('news:compute-indices', '新聞指數(06:15)', selfNotify: true)->dailyAt('06:15');
