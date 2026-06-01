@@ -111,15 +111,29 @@ class HealthCheck extends Command
             $checks[] = ['name' => '新聞指數', 'status' => 'ok', 'detail' => "已計算（整體 + {$industryCount} 個產業）"];
         }
 
-        // 2e. 類股指數（TWSE 收盤指數，盤中只有前一日資料，用 latestDateOn 檢查）
+        // 2e. 類股指數（TWSE 收盤指數）
         if (!$isHoliday) {
-            $sectorLatest = SectorIndex::latestDateOn($date);
-            if (!$sectorLatest) {
-                $checks[] = ['name' => '類股指數', 'status' => 'warn', 'detail' => '無任何類股資料'];
+            $sectorToday = SectorIndex::where('date', $date)->count();
+            if ($sectorToday === 0) {
+                // 15:30 排程應抓完；當日缺漏多是 TWSE 暫時性失敗，18:00 後補跑一次。
+                // 類股強弱會餵進 18:50 短線持倉檢討 / 19:00 選股，缺漏時這些環節會退回前一交易日
+                // 的「今日類股」→ 誤導 AI（與三大法人同類風險）。
+                if (now()->hour >= 18) {
+                    Artisan::call('stock:fetch-sector-indices', ['date' => $date]);
+                    $sectorToday = SectorIndex::where('date', $date)->count();
+                }
+                if ($sectorToday > 0) {
+                    $checks[] = ['name' => '類股指數', 'status' => 'ok', 'detail' => "補跑成功，{$sectorToday} 個類股"];
+                } else {
+                    // 補跑後仍無：退而求其次顯示最近可得日期（盤中時段或 TWSE 未公布皆走此路）
+                    $sectorLatest = SectorIndex::latestDateOn($date);
+                    $checks[] = $sectorLatest
+                        ? ['name' => '類股指數', 'status' => 'warn',
+                            'detail' => SectorIndex::where('date', $sectorLatest)->count() . " 個類股（資料日期：{$sectorLatest}，當日尚未公布）"]
+                        : ['name' => '類股指數', 'status' => 'warn', 'detail' => '無任何類股資料'];
+                }
             } else {
-                $sectorCount = SectorIndex::where('date', $sectorLatest)->count();
-                $dateNote = $sectorLatest !== $date ? "（資料日期：{$sectorLatest}）" : '';
-                $checks[] = ['name' => '類股指數', 'status' => 'ok', 'detail' => "{$sectorCount} 個類股{$dateNote}"];
+                $checks[] = ['name' => '類股指數', 'status' => 'ok', 'detail' => "{$sectorToday} 個類股"];
             }
         }
 

@@ -46,6 +46,7 @@
 | 12:00 | `news:fetch`                | 午間新聞抓取                                                    |
 | 12:15 | `news:compute-indices`      | 計算新聞指數                                                    |
 | **15:30** | **`stock:fetch-sector-indices`** | **抓取 TWSE 類股指數收盤（用帶日期端點為主、OpenAPI fallback；供隔日沖 12:50 ai-screen-overnight 以 T-1 形式取用，供 18:50 swing 持倉檢討看當日類股強弱）** |
+| **17:35** | **`stock:fetch-sector-indices`（補抓）** | **15:30 有時因 TWSE 尚未發布而撲空。類股強弱會餵進 18:50 持倉檢討 / 19:00 選股，缺漏時退回前一交易日「今日類股」誤導 AI，故補一道趕在晚間短線排程之前；`updateOrCreate` 冪等。最終安全網為 22:00 health-check 缺漏補跑** |
 | **12:50** | **`stock:ai-screen-overnight`** | **隔日沖三階段 AI 選股（用今日盤中資料選明日建倉標的）** |
 | 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情                                                 |
 | **17:30** | **`stock:fetch-daily`（補抓）** | **14:30 有時因 TWSE 尚未發布收盤行情而撲空。`daily_quotes` 是所有下游的地基（結果回填、AI 檢討、短線持倉檢討都依賴），缺漏時下游會靜默退回前一交易日股價，故補一道趕在 18:20/18:50/19:00 晚間短線排程之前；`updateOrCreate` 冪等。最終安全網為 22:00 health-check 缺漏補跑** |
@@ -63,7 +64,7 @@
 | **18:20** | **`stock:research-investment-theses`** | **AI 自動研究/更新短線產業投資論點** |
 | **18:50** | **`stock:update-swing-positions`** | **每日盤後更新使用者短線持倉與損益快照** |
 | **19:00** | **`stock:ai-screen-swing`** | **AI 理專型短線選股（產業論點 + 技術/籌碼/估值；週一~週五寫入當日 trade_date，週日/連假最後一晚追加跑一次並以 `previousTradingDay` 為 trade_date 覆蓋最近交易日候選，讓使用者開盤前看到最新 thesis 選股）** |
-| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + 每日行情/三大法人當日缺漏補跑 + 短線候選/持倉快照/教訓新鮮度 + API 連通性 + Log 大小警告） |
+| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + 每日行情/三大法人/類股指數當日缺漏補跑 + 短線候選/持倉快照/教訓新鮮度 + API 連通性 + Log 大小警告） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
 | 週一 06:00 | `stock:fill-industry`       | 從 TWSE/TPEX 公司基本資料補上 `stocks.industry`（產業別），供類股強弱、新聞題材配對使用 |
 | **週一 17:30** | **`stock:refresh-swing-universe`** | **依流動性／價格／資料完整度／ETF 類型重算 `stocks.is_swing_eligible`，把短線選股池跟當沖名單解耦** |
@@ -185,7 +186,7 @@
             （規則：60 天日K + 過去 20 日均量 ≥ 1000 張 + 收盤 ≥ 10 元 + 排除衍生型 ETF）
             (此股票池與當沖 is_day_trading 解耦，獨立維護)
 
-14:30 日K ─┬─ 16:30 法人 ─ 17:00 融資 ─ 17:15 估值 ─ 17:30 日K補抓 ─ 18:00 法人補抓
+14:30 日K ─┬─ 15:30 類股 ─ 16:30 法人 ─ 17:00 融資 ─ 17:15 估值 ─ 17:30 日K補抓 ─ 17:35 類股補抓 ─ 18:00 法人補抓
 18:00 新聞 ─ 18:15 新聞指數
              │   （18:00 補抓確保下方晚間短線排程吃到當天籌碼，而非退回前一交易日）
              ├─ 18:20 AI 研究/更新 investment_theses（confidence 衰退與 inactive）

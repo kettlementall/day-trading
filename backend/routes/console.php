@@ -135,6 +135,10 @@ Schedule::command('stock:monitor-intraday')
 // 14:45 OpenAPI 經常仍回 T-1，導致 swing 18:50 持倉檢討看到的「今日類股」其實是昨日 → 嚴重誤導 AI
 scheduledCommand('stock:fetch-sector-indices', '類股指數抓取', selfNotify: true)
     ->dailyAt('15:30')->weekdays();
+// 17:35 補抓類股指數：15:30 有時 TWSE 尚未發布而撲空。類股強弱會餵進 18:50 持倉檢討 / 19:00 選股，
+// 缺漏時這些環節會退回前一交易日的「今日類股」誤導 AI，故補一道趕在晚間短線排程之前；指令冪等。
+scheduledCommand('stock:fetch-sector-indices', '類股指數補抓', selfNotify: true)
+    ->dailyAt('17:35')->weekdays();
 
 // 12:50 隔日沖 AI 選股（Screener → Haiku → Opus → Final Ranking，完成後可於 13:00-13:25 下單）
 scheduledCommand('stock:ai-screen-overnight', '隔日沖 AI 選股')
