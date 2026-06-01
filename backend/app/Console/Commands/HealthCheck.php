@@ -43,10 +43,18 @@ class HealthCheck extends Command
         // 1. 每日行情（休市日跳過）
         if (!$isHoliday) {
             $quoteCount = DailyQuote::where('date', $date)->count();
-            if ($quoteCount === 0) {
-                $checks[] = ['name' => '每日行情', 'status' => 'error', 'detail' => "0 筆（預期 > 800）"];
-            } elseif ($quoteCount < 800) {
-                $checks[] = ['name' => '每日行情', 'status' => 'warn', 'detail' => "{$quoteCount} 筆（預期 > 800）"];
+            if ($quoteCount < 800) {
+                // 收盤行情是所有下游的地基（結果回填、AI 檢討、短線持倉檢討都依賴 daily_quotes）；
+                // 缺漏時下游會靜默退回前一交易日股價。14:30/17:30 排程應抓完，殘缺多為 TWSE
+                // 暫時性失敗，18:00 後補跑一次兜底。
+                if (now()->hour >= 18) {
+                    Artisan::call('stock:fetch-daily', ['date' => str_replace('-', '', $date)]);
+                    $quoteCount = DailyQuote::where('date', $date)->count();
+                }
+                $checks[] = $quoteCount >= 800
+                    ? ['name' => '每日行情', 'status' => 'ok', 'detail' => "補跑成功，{$quoteCount} 筆"]
+                    : ['name' => '每日行情', 'status' => $quoteCount === 0 ? 'error' : 'warn',
+                        'detail' => "{$quoteCount} 筆（預期 > 800，補跑後仍不足，TWSE 可能未公布）"];
             } else {
                 $checks[] = ['name' => '每日行情', 'status' => 'ok', 'detail' => "{$quoteCount} 筆"];
             }

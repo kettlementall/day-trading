@@ -33,8 +33,19 @@ if (!function_exists('scheduledCommand')) {
 // 每日 14:30 收盤後抓取行情資料
 scheduledCommand('stock:fetch-daily', '每日行情抓取', selfNotify: true)->dailyAt('14:30');
 
+// 每日 17:30 補抓每日行情：TWSE 收盤行情有時 14:30 尚未發布而撲空。
+// 收盤行情是所有下游的地基（結果回填、AI 檢討、短線持倉檢討都依賴 daily_quotes），
+// 缺漏時下游會靜默退回前一交易日股價，故補一道趕在晚間短線排程之前。
+// updateOrCreate 冪等，14:30 已成功時重跑只是覆寫同值。
+scheduledCommand('stock:fetch-daily', '每日行情補抓', selfNotify: true)->dailyAt('17:30');
+
 // 每日 16:30 抓取三大法人（TWSE 通常 16:15~16:30 才上線）
 scheduledCommand('stock:fetch-institutional', '三大法人抓取', selfNotify: true)->dailyAt('16:30');
+
+// 每日 18:00 補抓三大法人：16:30 常因 TWSE 尚未發布而撲空，補一道確保晚間
+// 短線排程（18:20 論點 / 18:50 持倉檢討 / 19:00 選股）跑之前當天籌碼已就位。
+// updateOrCreate 冪等，16:30 已成功時重跑只是覆寫同值。
+scheduledCommand('stock:fetch-institutional', '三大法人補抓', selfNotify: true)->dailyAt('18:00');
 
 // 每日 17:00 抓取融資融券
 scheduledCommand('stock:fetch-margin', '融資融券抓取', selfNotify: true)->dailyAt('17:00');

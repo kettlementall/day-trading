@@ -48,19 +48,21 @@
 | **15:30** | **`stock:fetch-sector-indices`** | **抓取 TWSE 類股指數收盤（用帶日期端點為主、OpenAPI fallback；供隔日沖 12:50 ai-screen-overnight 以 T-1 形式取用，供 18:50 swing 持倉檢討看當日類股強弱）** |
 | **12:50** | **`stock:ai-screen-overnight`** | **隔日沖三階段 AI 選股（用今日盤中資料選明日建倉標的）** |
 | 14:30 | `stock:fetch-daily`         | 收盤後抓取每日行情                                                 |
+| **17:30** | **`stock:fetch-daily`（補抓）** | **14:30 有時因 TWSE 尚未發布收盤行情而撲空。`daily_quotes` 是所有下游的地基（結果回填、AI 檢討、短線持倉檢討都依賴），缺漏時下游會靜默退回前一交易日股價，故補一道趕在 18:20/18:50/19:00 晚間短線排程之前；`updateOrCreate` 冪等。最終安全網為 22:00 health-check 缺漏補跑** |
 | 15:00 | `stock:update-results`      | 更新當日當沖候選標的的盤後結果                                           |
 | **15:05** | **`stock:update-overnight-results`** | **更新隔日沖候選標的盤後實際結果（T+1 收盤後）；`--force-recompute` 旗標供歷史回填強制重算 `buy_reachable` / `unreachable_reason` / 實際出場欄位** |
 | 15:30 | `stock:daily-review`        | 自動產出當日 AI 檢討報告（依賴 15:00 結果回填，不含教訓萃取）                     |
 | **15:35** | **`stock:daily-review --mode=overnight`** | **自動產出隔日沖 AI 檢討報告（不含教訓萃取）** |
 | 16:30 | `stock:fetch-institutional` | 抓取三大法人買賣超（TWSE 約 16:15~16:30 上線）                          |
 | 17:00 | `stock:fetch-margin`        | 抓取融資融券                                                    |
+| **18:00** | **`stock:fetch-institutional`（補抓）** | **16:30 常因 TWSE 尚未發布而撲空，補一道確保 18:20/18:50/19:00 晚間短線排程跑之前當天籌碼已就位；`updateOrCreate` 冪等，已成功時重跑只覆寫同值。最終安全網仍為 22:00 health-check 缺漏補跑** |
 | **17:15** | **`stock:fetch-valuations`** | **從 TWSE 抓取本益比/殖利率/股價淨值比（BWIBBU_ALL），供隔日沖 Opus 估值判斷使用** |
 | 18:00 | `news:fetch`                | 盤後新聞抓取                                                    |
 | 18:15 | `news:compute-indices`      | 計算新聞指數                                                    |
 | **18:20** | **`stock:research-investment-theses`** | **AI 自動研究/更新短線產業投資論點** |
 | **18:50** | **`stock:update-swing-positions`** | **每日盤後更新使用者短線持倉與損益快照** |
 | **19:00** | **`stock:ai-screen-swing`** | **AI 理專型短線選股（產業論點 + 技術/籌碼/估值；週一~週五寫入當日 trade_date，週日/連假最後一晚追加跑一次並以 `previousTradingDay` 為 trade_date 覆蓋最近交易日候選，讓使用者開盤前看到最新 thesis 選股）** |
-| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + 三大法人當日缺漏補跑 + 短線候選/持倉快照/教訓新鮮度 + API 連通性 + Log 大小警告） |
+| 22:00 | `stock:health-check`        | 健康檢查（資料完整性 + 卡住 monitor 強制收尾 + 當沖/隔日沖結果與檢討補跑 + 每日行情/三大法人當日缺漏補跑 + 短線候選/持倉快照/教訓新鮮度 + API 連通性 + Log 大小警告） |
 | 週日 03:00 | `stock:cleanup`             | 清理過期資料（快照保留 30 天、AI 教訓過期刪除）                               |
 | 週一 06:00 | `stock:fill-industry`       | 從 TWSE/TPEX 公司基本資料補上 `stocks.industry`（產業別），供類股強弱、新聞題材配對使用 |
 | **週一 17:30** | **`stock:refresh-swing-universe`** | **依流動性／價格／資料完整度／ETF 類型重算 `stocks.is_swing_eligible`，把短線選股池跟當沖名單解耦** |
@@ -182,9 +184,9 @@
             （規則：60 天日K + 過去 20 日均量 ≥ 1000 張 + 收盤 ≥ 10 元 + 排除衍生型 ETF）
             (此股票池與當沖 is_day_trading 解耦，獨立維護)
 
-14:30 日K ─┬─ 16:30 法人 ─ 17:00 融資 ─ 17:15 估值
+14:30 日K ─┬─ 16:30 法人 ─ 17:00 融資 ─ 17:15 估值 ─ 17:30 日K補抓 ─ 18:00 法人補抓
 18:00 新聞 ─ 18:15 新聞指數
-             │
+             │   （18:00 補抓確保下方晚間短線排程吃到當天籌碼，而非退回前一交易日）
              ├─ 18:20 AI 研究/更新 investment_theses（confidence 衰退與 inactive）
              ├─ 18:50 更新 user 專屬 swing_positions + snapshots（hold/adjust/exit）
              └─ 19:00 swing AI 選股（讀 is_swing_eligible；全域 candidates.mode=swing；週日/連假最後一晚會以最新 thesis 重跑一次覆蓋最近交易日候選）
