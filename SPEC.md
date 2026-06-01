@@ -55,8 +55,9 @@
 | **15:35** | **`stock:daily-review --mode=overnight`** | **自動產出隔日沖 AI 檢討報告（不含教訓萃取）** |
 | 16:30 | `stock:fetch-institutional` | 抓取三大法人買賣超（TWSE 約 16:15~16:30 上線）                          |
 | 17:00 | `stock:fetch-margin`        | 抓取融資融券                                                    |
-| **18:00** | **`stock:fetch-institutional`（補抓）** | **16:30 常因 TWSE 尚未發布而撲空，補一道確保 18:20/18:50/19:00 晚間短線排程跑之前當天籌碼已就位；`updateOrCreate` 冪等，已成功時重跑只覆寫同值。最終安全網仍為 22:00 health-check 缺漏補跑** |
+| **17:05** | **`stock:fetch-dividends`** | **抓取 TWSE 除權息預告表（TWT48U），累積未來除權息行事曆（見 §10）。除權息日當天就從預告表消失，故須每日抓取累積；供短線持倉檢討與隔日沖 gap 在除息日校正股價基準** |
 | **17:15** | **`stock:fetch-valuations`** | **從 TWSE 抓取本益比/殖利率/股價淨值比（BWIBBU_ALL），供隔日沖 Opus 估值判斷使用** |
+| **18:00** | **`stock:fetch-institutional`（補抓）** | **16:30 常因 TWSE 尚未發布而撲空，補一道確保 18:20/18:50/19:00 晚間短線排程跑之前當天籌碼已就位；`updateOrCreate` 冪等，已成功時重跑只覆寫同值。最終安全網仍為 22:00 health-check 缺漏補跑** |
 | 18:00 | `news:fetch`                | 盤後新聞抓取                                                    |
 | 18:15 | `news:compute-indices`      | 計算新聞指數                                                    |
 | **18:20** | **`stock:research-investment-theses`** | **AI 自動研究/更新短線產業投資論點** |
@@ -2191,3 +2192,40 @@ news_risk 是新增資料源 + AI prompt 規則，**無法用歷史資料回測*
 #### cohort 切點警告
 
 `pullbackScore` bug 修正日為分水嶺。修正前的 `trend_pullback` 樣本含追高股污染，與修正後不可直接比較；`compute-strategy-stats`（§1 排程表）、`BacktestService` 等 by_strategy 統計做跨期分析時，請以該日為切點分段或加註說明。
+
+## 10. 除權息行事曆（dividend_events）
+
+### 10.1 為何需要
+
+`daily_quotes.change_percent` 直接採用 TWSE 回傳的漲跌欄，TWSE 已對除權息做基準校正，**存進 DB 的當日漲跌% 是對的**。但任何「**跨日自己相減**」的環節，因為用的是除息前的前一交易日收盤價當基準，會把除權息的價格調整誤判成真實漲跌：
+
+- **短線持倉檢討**（`SwingPositionUpdateService`）：`stopBreached = close <= stop`，除息日 close 已下調但 stop 仍為除息前設定 → 假跌破停損，誤觸 AI 停損審查甚至 fallback exit。
+- **隔日沖 gap**（`UpdateOvernightResults`）：`open_gap_percent = (open − prevClose)/prevClose`，除息日 prevClose 為除息前價 → 假跳空，污染 `gap_predicted_correctly`、`avg_open_gap` 回測統計（違反「假數據不可進回測」原則）。
+
+### 10.2 資料源與抓取
+
+- API：`https://www.twse.com.tw/exchangeReport/TWT48U?response=json`（除權除息預告表）。
+- **此表只含未來事件，除權息日當天就消失** → 排程每日 17:05 `stock:fetch-dividends` 抓取累積（`updateOrCreate` 冪等）。**無法回填歷史**（API 不提供過去資料）。
+- 僅收 4 碼普通股、找不到對應 `stocks` 的標的跳過（不主動建股）。日期優先解析欄位[8]內嵌 AD 日期，退回民國日期。
+- 表：`dividend_events`（`stock_id` + `ex_date` 唯一），存現金股利、無償配股率、現金增資配股率/認購價、TWSE 參考價試算。
+
+### 10.3 參考價公式
+
+`DividendEvent::referenceCloseFrom($prevClose)`：
+
+```
+參考價 = (前收 − 現金股利 + 現金增資認購價 × 現金增資配股率) ÷ (1 + 無償配股率 + 現金增資配股率)
+```
+
+純配息時退化為 `前收 − 現金股利`。
+
+### 10.4 兩處校正（方案 A 範圍）
+
+1. **短線持倉檢討**：除息日把停損比較基準同步下調（`stop × 參考價 / prevClose`）再判 `stopBreached`；同時在 AI prompt 注入「今日除權息」區塊，要求 AI 把 `current_stop`/`current_target` 一併下調（持久化後隔日基準即正確）。
+2. **隔日沖 gap**：`$tradeDate`（T+1）為除息日時，`prevClose` 換成除息參考價再算 gap。
+
+技術指標還原（adjusted close）屬方案 B，**暫不做**——單日缺口幾天後 MA 自然消化，CP 值低。
+
+### 10.5 前端提醒
+
+`/swing` 持倉卡：未來 14 天內有除權息時顯示黃色 `N 日後除息 / 明日除息 / 今日除息` 標籤（`upcoming_dividend`），tooltip 提醒「除息日股價以參考價開盤，停損基準會同步下調，勿把除權息調整誤判成下跌」。

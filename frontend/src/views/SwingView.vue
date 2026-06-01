@@ -81,6 +81,16 @@
               <el-tag size="small" :type="positionTag(p.status)" effect="light" round>
                 {{ statusLabel(p.status) }}
               </el-tag>
+              <el-tag
+                v-if="p.upcoming_dividend"
+                size="small"
+                type="warning"
+                effect="light"
+                round
+                :title="dividendTooltip(p.upcoming_dividend)"
+              >
+                {{ dividendLabel(p.upcoming_dividend) }}
+              </el-tag>
               <button class="quote-btn" title="即時報價" @click.stop="goQuote(p)">💹</button>
             </div>
             <div
@@ -1261,6 +1271,22 @@ function statusLabel(status) {
     closed: '已平倉',
     stopped: '停損結束',
   }[status] || status
+}
+
+function dividendLabel(d) {
+  if (!d) return ''
+  if (d.days_until <= 0) return '今日除息'
+  if (d.days_until === 1) return '明日除息'
+  return `${d.days_until}日後除息`
+}
+
+function dividendTooltip(d) {
+  if (!d) return ''
+  const parts = [`除權息日 ${d.ex_date}`]
+  if (d.cash_dividend > 0) parts.push(`現金股利 ${d.cash_dividend} 元`)
+  if (d.stock_ratio > 0) parts.push(`配股率 ${d.stock_ratio}`)
+  parts.push('除息日股價以參考價開盤，停損基準會同步下調，勿把除權息調整誤判成下跌')
+  return parts.join('｜')
 }
 
 function positionTag(status) {

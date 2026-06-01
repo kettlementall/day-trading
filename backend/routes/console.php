@@ -50,6 +50,10 @@ scheduledCommand('stock:fetch-institutional', '三大法人補抓', selfNotify: 
 // 每日 17:00 抓取融資融券
 scheduledCommand('stock:fetch-margin', '融資融券抓取', selfNotify: true)->dailyAt('17:00');
 
+// 每日 17:05 抓取除權息預告表（TWT48U）：除權息日當天就從表上消失，故須每日抓取累積成行事曆，
+// 供短線持倉檢討與隔日沖 gap 計算在除息日校正股價基準，避免把除權息調整誤判成真實漲跌。
+scheduledCommand('stock:fetch-dividends', '除權息行事曆', selfNotify: true)->dailyAt('17:05');
+
 // 每日 08:00 執行 AI 選股（規則式寬篩 + AI 審核）
 // 原 stock:screen-candidates 保留可手動執行
 scheduledCommand('stock:ai-screen', 'AI 選股審核')->dailyAt('08:00');

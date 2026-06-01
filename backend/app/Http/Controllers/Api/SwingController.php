@@ -7,6 +7,7 @@ use App\Jobs\RescreenSwing;
 use App\Models\AiLesson;
 use App\Models\Candidate;
 use App\Models\DailyQuote;
+use App\Models\DividendEvent;
 use App\Models\IntradaySnapshot;
 use App\Models\InvestmentThesis;
 use App\Models\MarketHoliday;
@@ -268,6 +269,20 @@ class SwingController extends Controller
                 $position->setAttribute('risk_amount', $position->current_stop ? max(0, ($entry - (float) $position->current_stop) * $shares) : null);
                 $position->setAttribute('average_exit_price', $position->averageExitPrice());
                 $position->setAttribute('realized_profit_percent', $position->average_exit_price && $entry > 0 ? round(((float) $position->average_exit_price - $entry) / $entry * 100, 2) : null);
+                // 即將除權息提醒（未來 14 天內最近一筆）：除息日股價會以參考價開盤，
+                // 提醒使用者別把除權息調整誤判成下跌、並注意停損基準會同步下調。
+                $upcomingDividend = DividendEvent::where('stock_id', $position->stock_id)
+                    ->whereDate('ex_date', '>=', now()->toDateString())
+                    ->whereDate('ex_date', '<=', now()->addDays(14)->toDateString())
+                    ->orderBy('ex_date')
+                    ->first();
+                $position->setAttribute('upcoming_dividend', $upcomingDividend ? [
+                    'ex_date' => $upcomingDividend->ex_date->format('Y-m-d'),
+                    'days_until' => (int) now()->startOfDay()->diffInDays($upcomingDividend->ex_date, false),
+                    'cash_dividend' => (float) $upcomingDividend->cash_dividend,
+                    'stock_ratio' => (float) $upcomingDividend->stock_ratio,
+                ] : null);
+
                 $latestDaily = DailyQuote::where('stock_id', $position->stock_id)->orderByDesc('date')->first();
                 $latestSnapshot = $position->snapshots->last();
                 $position->setAttribute('tracking_status', [

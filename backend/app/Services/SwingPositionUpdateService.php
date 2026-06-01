@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\DailyQuote;
+use App\Models\DividendEvent;
 use App\Models\InstitutionalTrade;
 use App\Models\InvestmentThesis;
 use App\Models\MarginTrade;
@@ -118,13 +119,29 @@ class SwingPositionUpdateService
         $stop = (float) ($position->current_stop ?: $entry * 0.92);
         $target = (float) ($position->current_target ?: $entry * 1.12);
         $profitPct = $this->profitPercent($position, $close);
-        $stopBreached = $close <= $stop;
+
+        // 除權息校正：收盤行情當天若除息，close 已是除息後價，但 stop/target 仍是除息前設定的，
+        // 直接比較會把「除息參考價下調」誤判成跌破停損。偵測到除息日時，把停損基準同步下調，
+        // 並把除息事實注入 AI prompt，要求 AI 一併下調 stop/target（持久化後隔日即正確）。
+        $dividend = DividendEvent::onDate($position->stock_id, $quote->date->toDateString());
+        $stopForBreach = $stop;
+        if ($dividend) {
+            // 以「除息前一交易日收盤」回推除息調整幅度，套用到 stop（target 交給 AI 重設）。
+            $prevClose = (float) (DailyQuote::where('stock_id', $position->stock_id)
+                ->where('date', '<', $quote->date)
+                ->orderByDesc('date')
+                ->value('close') ?? $close);
+            if ($prevClose > 0) {
+                $stopForBreach = round($stop * $dividend->referenceCloseFrom($prevClose) / $prevClose, 2);
+            }
+        }
+        $stopBreached = $close <= $stopForBreach;
         $riskZoneTouched = $recentExitSignal && !$stopBreached;
 
         // 停損跌破、論點 invalidation 仍交給 AI 完整審查；只有 AI 失敗才走 fallback 規則。
         // stop_breached=true 代表進入停損審查模式，不等於必須出場。
         if ($this->apiKey) {
-            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $newsRiskContext, $recentExitSignal, $stopBreached, $riskZoneTouched);
+            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $newsRiskContext, $recentExitSignal, $stopBreached, $riskZoneTouched, $dividend);
             if ($ai) {
                 $ai['stop_breached'] = $stopBreached;
                 $ai['risk_zone_touched'] = $riskZoneTouched;
@@ -280,7 +297,8 @@ class SwingPositionUpdateService
         array $newsRiskContext = [],
         bool $recentExitSignal = false,
         bool $stopBreached = false,
-        bool $riskZoneTouched = false
+        bool $riskZoneTouched = false,
+        ?DividendEvent $dividend = null
     ): ?array {
         $candidate = $position->candidate;
         $thesisJson = json_encode($thesisStatus, JSON_UNESCAPED_UNICODE);
@@ -375,6 +393,23 @@ STOPREVIEW;
 
 RISKZONE;
         }
+
+        $dividendBlock = '';
+        if ($dividend) {
+            $cash = (float) $dividend->cash_dividend;
+            $stockRatio = (float) $dividend->stock_ratio;
+            $dividendBlock = <<<DIVIDEND
+
+# ⚠️ 今日除權息（重要）
+本持倉今日為**除權息日**：現金股利 {$cash} 元/股、無償配股率 {$stockRatio}。
+今日「收盤 {$quote->close}」已是**除息後價格**，較昨日的下跌主要是除權息造成的價格調整，**不是真實下跌**，不可據此判 technical_health=broken 或 exit。
+你的 entry/成本與既有 stop/target 是**除息前**的價格基準，已不可直接比較。請務必：
+- 將 current_stop、current_target **同步往下調整除權息幅度**（純配息時約 = 原值 − 現金股利），否則隔日基準會錯亂。
+- 損益、技術位置請以除息後的新基準重新評估；除權息當天的「假跌」不計入 risk_pressure。
+
+DIVIDEND;
+        }
+
         $prompt = <<<PROMPT
 你是穩健派短線交易顧問，盤後針對單筆持倉給日建議，僅輸出 JSON。
 
@@ -384,6 +419,7 @@ RISKZONE;
 stop {$position->current_stop} | target {$position->current_target}
 {$trajectoryText}
 原由：{$candidate?->swing_reasoning}
+{$dividendBlock}
 
 # Context
 {$marketContextText}

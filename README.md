@@ -163,6 +163,10 @@ docker compose exec php php artisan stock:ai-screen-swing [date]
 # 重算短線股票池（is_swing_eligible，由每週一 17:30 排程自動執行；新部署或調整規則後可手動補跑）
 docker compose exec php php artisan stock:refresh-swing-universe
 
+# 抓取除權息預告表累積行事曆（排程每日 17:05 自動執行；除息日當天會從 TWSE 表上消失，須每日累積）
+# 用於短線持倉檢討/隔日沖 gap 在除息日校正股價基準，避免把除權息調整誤判成下跌，詳見 SPEC §10
+docker compose exec php php artisan stock:fetch-dividends
+
 # 從 TWSE 拉 ETF 名單寫進 stocks 並用 Fugle 補 80 天歷史日 K（新部署或月度補新上市 ETF）
 docker compose exec php php artisan stock:import-etfs [yyyymmdd]
 

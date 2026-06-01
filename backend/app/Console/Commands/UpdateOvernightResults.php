@@ -6,6 +6,7 @@ use App\Models\Candidate;
 use App\Models\CandidateMonitor;
 use App\Models\CandidateResult;
 use App\Models\DailyQuote;
+use App\Models\DividendEvent;
 use App\Models\MarketHoliday;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -121,6 +122,14 @@ class UpdateOvernightResults extends Command
             $low       = (float) $quote->low;
             $close     = (float) $quote->close;
             $prevClose = $prevQuote ? (float) $prevQuote->close : $open;
+
+            // 除權息校正：T+1（=$tradeDate）若為除息日，prevClose（T+0 收盤）是除息前價，
+            // 直接算 gap 會把除權息的價格調整誤判成假跳空，污染 gap_predicted_correctly / avg_open_gap 統計。
+            // 改用除息參考價當基準。（符合「假數據不可進回測」原則）
+            $dividend = DividendEvent::onDate($candidate->stock_id, $tradeDate);
+            if ($dividend && $prevClose > 0) {
+                $prevClose = $dividend->referenceCloseFrom($prevClose);
+            }
 
             $suggestedBuy = (float) $candidate->suggested_buy;
             $targetPrice  = (float) $candidate->target_price;
