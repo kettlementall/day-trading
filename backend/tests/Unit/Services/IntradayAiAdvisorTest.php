@@ -28,12 +28,12 @@ class IntradayAiAdvisorTest extends TestCase
 
     public function test_systemPrompt_contains_strategy_state_skip_framework(): void
     {
-        $this->assertStringContainsString('策略狀態與 skip 原則', $this->source);
-        $this->assertStringContainsString('valid：原策略仍有效', $this->source);
-        $this->assertStringContainsString('switched：原策略已不適合', $this->source);
-        $this->assertStringContainsString('uncertain：訊號不足或矛盾', $this->source);
-        $this->assertStringContainsString('failed：結構明確失敗', $this->source);
-        $this->assertStringContainsString('skip 只用在 strategy_state=failed', $this->source);
+        $this->assertStringContainsString('## strategy_state（每次必判斷）', $this->source);
+        $this->assertStringContainsString('valid：原策略有效', $this->source);
+        $this->assertStringContainsString('switched：原策略失效但可切', $this->source);
+        $this->assertStringContainsString('uncertain：訊號矛盾', $this->source);
+        $this->assertStringContainsString('failed：結構破壞且無可切策略', $this->source);
+        $this->assertStringContainsString('skip 僅在 strategy_state=failed', $this->source);
     }
 
     public function test_systemPrompt_softens_limit_up_skip_directive(): void
@@ -41,20 +41,20 @@ class IntradayAiAdvisorTest extends TestCase
         // 舊措辭應被移除（壓力位 = 漲停價代表上方無獲利空間，應建議 skip）
         $this->assertStringNotContainsString('壓力位 = 漲停價代表上方無獲利空間，應建議 skip', $this->source);
         // 新措辭：先評估階段性壓力或切策略
-        $this->assertStringContainsString('先評估是否能設更近的階段性壓力', $this->source);
-        $this->assertStringContainsString('沒有合理目標或流動性不足時才 skip', $this->source);
+        $this->assertStringContainsString('先評估階段性壓力', $this->source);
+        $this->assertStringContainsString('無合理目標才 skip', $this->source);
     }
 
     public function test_userMessage_watching_task_uses_priority_decision_tree(): void
     {
-        // 新任務段標題（依優先順序判斷）
-        $this->assertStringContainsString('## 任務（觀望中）— 依優先順序判斷', $this->source);
-        // 4 個明確順序步驟
+        // 新任務段標題（依順序判斷）
+        $this->assertStringContainsString('## 任務（觀望中）— 依順序判斷', $this->source);
+        // 3 個明確順序步驟（壓縮後 skip 併入「進場品質與 skip」）
         $this->assertStringContainsString('### 1. 策略適配檢查', $this->source);
-        $this->assertStringContainsString('### 2. 進場品質評估', $this->source);
-        $this->assertStringContainsString('### 3. 是否該 skip', $this->source);
-        $this->assertStringContainsString('只有 strategy_state=failed 才 skip', $this->source);
-        $this->assertStringContainsString('都不是 failed；優先 hold 或 switched', $this->source);
+        $this->assertStringContainsString('### 2. 進場品質與 skip', $this->source);
+        $this->assertStringContainsString('### 3. 日 K 趨勢檢核', $this->source);
+        $this->assertStringContainsString('僅 strategy_state=failed 才 skip', $this->source);
+        $this->assertStringContainsString('依 strategy_state 回 valid / switched / uncertain / failed', $this->source);
     }
 
     public function test_userMessage_strategy_switch_table_only_lists_switch_scenarios(): void
@@ -73,9 +73,9 @@ class IntradayAiAdvisorTest extends TestCase
 
     public function test_prompts_require_strategy_validity_before_skipping(): void
     {
-        $this->assertStringContainsString('先做策略狀態判斷', $this->source);
+        $this->assertStringContainsString('## strategy_state（每次必判斷）', $this->source);
         $this->assertStringContainsString('strategy_state', $this->source);
-        $this->assertStringContainsString('沒等到拉回，不等於 failed', $this->source);
+        $this->assertStringContainsString('策略仍可交易但需回測 / 止穩', $this->source);
         $this->assertStringContainsString('不可只因「沒到原買點」就 skip', $this->source);
     }
 
@@ -116,8 +116,8 @@ class IntradayAiAdvisorTest extends TestCase
         $this->assertStringContainsString('**wait**', $this->source);
         $this->assertStringContainsString('**skip**', $this->source);
         // 對稱成本提示（誤進場 > 誤延後）
-        $this->assertStringContainsString('誤進場成本', $this->source);
-        $this->assertStringContainsString('疑似訊號優先 wait', $this->source);
+        $this->assertStringContainsString('成本不對稱原則', $this->source);
+        $this->assertStringContainsString('疑似 wait', $this->source);
         // 警示型措辭範例
         $this->assertStringContainsString('「謹慎」', $this->source);
         $this->assertStringContainsString('「不宜」', $this->source);
@@ -138,9 +138,9 @@ class IntradayAiAdvisorTest extends TestCase
 
     public function test_rolling_prompt_separates_strategy_state_from_entry_quality(): void
     {
-        $this->assertStringContainsString('策略狀態 ≠ 進場品質', $this->source);
-        $this->assertStringContainsString('switched 只代表原策略不適合但可改用新策略，不等於 entry', $this->source);
-        $this->assertStringContainsString('不可直接把「錯過」合理化成追高', $this->source);
+        $this->assertStringContainsString('策略可切 ≠ 可進場', $this->source);
+        $this->assertStringContainsString('策略可切換 ≠ 可立刻進場', $this->source);
+        $this->assertStringContainsString('不可合理化成追高', $this->source);
         $this->assertStringContainsString('entry_timing：good / early / late_chase / wait_pullback / no_trade', $this->source);
         $this->assertStringContainsString('entry_quality：0-100', $this->source);
         $this->assertStringContainsString('chase_risk：0-100', $this->source);
@@ -156,7 +156,7 @@ class IntradayAiAdvisorTest extends TestCase
 
     public function test_entryConfirm_uses_rolling_entry_quality_context(): void
     {
-        $this->assertStringContainsString('entry_timing 是 late_chase / wait_pullback', $this->source);
+        $this->assertStringContainsString('entry_timing=late_chase/wait_pullback', $this->source);
         $this->assertStringContainsString('entry_quality 低、chase_risk 高', $this->source);
         $this->assertStringContainsString('timing=%s quality=%s chase=%s', $this->source);
         $this->assertStringContainsString('若最近 advice 顯示 entry_timing=late_chase/wait_pullback', $this->source);
@@ -164,11 +164,11 @@ class IntradayAiAdvisorTest extends TestCase
 
     public function test_rolling_prompt_includes_selected_universe_regime_context(): void
     {
-        $this->assertStringContainsString('候選池盤中環境使用原則', $this->source);
+        $this->assertStringContainsString('## 候選池 regime 處理', $this->source);
         $this->assertStringContainsString('不等於全市場大盤', $this->source);
-        $this->assertStringContainsString('regime=gap_fade_day', $this->source);
-        $this->assertStringContainsString('regime=trend_day', $this->source);
-        $this->assertStringContainsString('regime=selloff_day', $this->source);
+        $this->assertStringContainsString('gap_fade_day', $this->source);
+        $this->assertStringContainsString('trend_day', $this->source);
+        $this->assertStringContainsString('selloff_day', $this->source);
         $this->assertStringContainsString('## 今日候選池盤中環境', $this->source);
         $this->assertStringContainsString('source:', $this->source);
         $this->assertStringContainsString('entry_bias:', $this->source);

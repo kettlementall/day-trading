@@ -23,21 +23,21 @@ class DailyReviewServiceTest extends TestCase
 
     public function test_overnight_review_prompt_separates_theoretical_and_monitor_results(): void
     {
-        $this->assertStringContainsString('理論盤後結果與監控結果必須分開解讀', $this->source);
+        $this->assertStringContainsString('理論結果與監控結果必須分開', $this->source);
         $this->assertStringContainsString('theoretical_outcome/theoretical_profit%', $this->source);
-        $this->assertStringContainsString('monitor_status/monitor_exit/monitor_profit%', $this->source);
+        $this->assertStringContainsString('monitor_status/monitor_entry/monitor_exit/monitor_profit%', $this->source);
         $this->assertStringContainsString('理論盤後結果', $this->source);
         $this->assertStringContainsString('監控執行結果', $this->source);
-        $this->assertStringContainsString('請勿描述為真實成交報酬', $this->source);
+        $this->assertStringContainsString('不可說是真實成交報酬', $this->source);
     }
 
     public function test_overnight_review_prompt_distinguishes_planned_and_final_levels(): void
     {
         $this->assertStringContainsString('plan_target', $this->source);
         $this->assertStringContainsString('plan_stop', $this->source);
-        $this->assertStringContainsString('final_target/final_stop=監控最後使用目標/停損', $this->source);
+        $this->assertStringContainsString('final_target/final_stop=監控最後使用的目標/停損', $this->source);
         $this->assertStringContainsString('planned_target/planned_stop=原始計畫目標/停損', $this->source);
-        $this->assertStringContainsString('monitor_status=target_hit 不代表原始 planned_target 達標', $this->source);
+        $this->assertStringContainsString('monitor_status=target_hit 不代表 planned_target 達標', $this->source);
         $this->assertStringContainsString('exit_basis=monitor_exit 的價格依據', $this->source);
     }
 }

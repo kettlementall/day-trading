@@ -111,6 +111,8 @@ class BacktestServiceOvernightActualMetricsTest extends TestCase
             (object) [
                 'ai_selected' => true,
                 'result' => (object) [
+                    'buy_reachable' => true,
+                    'unreachable_reason' => null,
                     'gap_predicted_correctly' => true,
                     'overnight_outcome' => 'hit_target',
                     'open_gap_percent' => 2.0,
