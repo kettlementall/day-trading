@@ -2040,6 +2040,28 @@ daily review 用結構化 JSON key 而非 chip 字串，因為 prompt context �
 
 **Feature 3 deferred**：「過去 advice 準確率」（AI 自我修正）需新增預計算統計表（風格類似 §9.6.1 `swing-news-risk-stats`），實作成本高，另開議題。
 
+**Feature 4：市場廣度三層歸因（2026-06-02）**
+
+`buildMarketBreadthContext($position, $quote)` 純用 `daily_quotes` 算當日「大盤 vs 所屬大類 vs 本檔」三層相對強弱，注入 `# Context` 的 `市場廣度` 欄位：
+
+| Key | 計算 |
+|---|---|
+| `self_change_pct` | 本檔當日 `change_percent` |
+| `market_median_pct` | 當日全市場 `change_percent` 中位數（樣本 < 100 視為行情未回填 → `available=false`） |
+| `vs_market` | `self − market_median`（本檔相對大盤偏離） |
+| `sector_median_pct` | 所屬 `industry` 當日中位數（樣本 ≥ 3 才計；ETF 略過該層） |
+| `vs_sector` | `self − sector_median`（本檔相對大類偏離） |
+
+**Why：** §9.5c Feature 1 的 `MarketContextService` 給的是「全市場情境 label」（隔夜美股/台指期 + 盤後大盤廣度），但**沒有「本檔相對大盤/大類」的個股級對比**。`market_vs_stock_issue` 欄位（值域 `market_drag / sector_drag / stock_specific / mixed`）早已存在於 schema，但 AI 過去缺乏據以判定的數據。本 feature 補上：
+
+- **market_drag**：本檔跌、大盤與大類也同步弱 → 個股 thesis 未必失效。
+- **sector_drag**：大盤持平/偏強、但所屬大類顯著弱且本檔隨之弱 → 族群性事件（族群利空、大戶調節整族群），非個股自身崩壞。
+- **stock_specific**：大盤與大類都沒事、唯獨本檔顯著弱於兩者（`vs_market` 與 `vs_sector` 都大幅落後）→ 個股自身問題，才該提高 risk_pressure、考慮 trim/exit。
+
+對應 `# 進階仲裁` 段新增「三層歸因」規則（原則性、無硬閾值，breadth `available=false` 時退回 `市場情境` 與類股 context）。
+
+**顆粒度限制（已知）**：`industry`（如「電子零組件業」含百餘檔）無法識別「ABF 載板」這類細概念族群——細族群集體崩時會被大類中位數稀釋。本 feature 定位是穩定區分 **market_drag vs stock_specific**；細族群（sector_drag 精準到概念股）歸因待後續以「同投資論點分組」迭代。`market_breadth` 一併存入 `latest_advice` / snapshot 供事後審。
+
 ### 9.5c-1 執行時點語意（T+1 開盤生效）
 
 `SwingPositionUpdateService::askAi()` 於 18:50 跑（盤後），但 AI 過去措辭常寫「**今日收盤後出場**」「**立即下修停損**」這類字眼，盤後時點已無法執行，使用者實際只能在下一交易日（T+1）09:00 開盤後手動執行。

@@ -138,14 +138,18 @@ class SwingPositionUpdateService
         $stopBreached = $close <= $stopForBreach;
         $riskZoneTouched = $recentExitSignal && !$stopBreached;
 
+        // 市場廣度：當日大盤 vs 所屬大類 vs 本檔，供三層歸因（大盤拖累 / 族群連坐 / 個股自身弱）。
+        $breadthContext = $this->buildMarketBreadthContext($position, $quote);
+
         // 停損跌破、論點 invalidation 仍交給 AI 完整審查；只有 AI 失敗才走 fallback 規則。
         // stop_breached=true 代表進入停損審查模式，不等於必須出場。
         if ($this->apiKey) {
-            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $newsRiskContext, $recentExitSignal, $stopBreached, $riskZoneTouched, $dividend);
+            $ai = $this->askAi($position, $quote, $holdingDays, $thesisStatus, $technicalContext, $chipContext, $valuationContext, $sectorContext, $newsRiskContext, $recentExitSignal, $stopBreached, $riskZoneTouched, $dividend, $breadthContext);
             if ($ai) {
                 $ai['stop_breached'] = $stopBreached;
                 $ai['risk_zone_touched'] = $riskZoneTouched;
                 $ai['news_risk'] = $newsRiskContext;
+                $ai['market_breadth'] = $breadthContext;
                 return $this->normalizeAdvice($position, $ai, $profitPct);
             }
         }
@@ -298,7 +302,8 @@ class SwingPositionUpdateService
         bool $recentExitSignal = false,
         bool $stopBreached = false,
         bool $riskZoneTouched = false,
-        ?DividendEvent $dividend = null
+        ?DividendEvent $dividend = null,
+        array $breadthContext = []
     ): ?array {
         $candidate = $position->candidate;
         $thesisJson = json_encode($thesisStatus, JSON_UNESCAPED_UNICODE);
@@ -410,6 +415,12 @@ RISKZONE;
 DIVIDEND;
         }
 
+        $breadthBlock = '';
+        if (($breadthContext['available'] ?? false)) {
+            $breadthJson = json_encode($breadthContext, JSON_UNESCAPED_UNICODE);
+            $breadthBlock = "市場廣度（當日大盤 vs 所屬大類 vs 本檔，供三層歸因）：{$breadthJson}";
+        }
+
         $prompt = <<<PROMPT
 你是穩健派短線交易顧問，盤後針對單筆持倉給日建議，僅輸出 JSON。
 
@@ -428,6 +439,7 @@ stop {$position->current_stop} | target {$position->current_target}
 籌碼：{$chipJson}
 估值：{$valuationJson}
 類股（注意 data_date 與當日比對，is_previous_day=true 代表為前一交易日資料、不可當作當日強弱）：{$sectorJson}
+{$breadthBlock}
 個股新聞風險：
 {$newsRiskText}
 近 7 日 exit 訊號：{$recentExitText}
@@ -453,6 +465,11 @@ stop {$position->current_stop} | target {$position->current_target}
 - 近 7 日 exit 訊號=true：這是風險提醒，不是出場命令。若 thesis 仍有效、價格已收回關鍵位置、籌碼沒有惡化，可以 hold；若只是尚未確認修復，才 trim/adjust；若核心支柱破壞才 exit。
 - stop_breached=false 時，stop_review_state 與 stop_review_reasoning 必須是 null，只能用 risk_zone_touched 表達近期受壓。
 - `市場情境` 為 `bearish_panic` / `bullish_catalyst` 時，股價短期表現相當程度受大盤拖累/帶動；判 thesis_health 與 market_vs_stock_issue 時請整合考量。`進場後高水位` vs `目前浮盈` 顯著回撤（無硬閾值，由你判讀）時，請評估是否 trim 鎖利或上移 stop 而非直接 exit。
+- **三層歸因（market_vs_stock_issue 必須據此判定）**：用「市場廣度」context 做大盤 vs 大類 vs 本檔的相對比較，不要只看本檔絕對漲跌：
+  - 本檔當日跌、但大盤(market_median)與大類(sector_median)也同步弱 → 多為 `market_drag`，個股 thesis 未必失效，「修復條件」應以大盤先止穩為前提。
+  - 大盤持平/偏強、但本檔所屬大類顯著弱、本檔隨之弱（vs_sector 不顯著落後）→ `sector_drag`：這是族群性事件（例如族群利空、大戶調節整族群），非個股自身崩壞；不應僅因單日重挫就判 thesis 失效或急於 exit，但要評估族群利空是一次性或結構性。
+  - 大盤與大類都沒事、唯獨本檔顯著弱於兩者（vs_market 與 vs_sector 都大幅落後）→ `stock_specific`：個股自身問題，須優先交叉個股新聞/籌碼，這種獨弱才是真正該提高 risk_pressure、考慮 trim/exit 的情況。
+  - 判斷無硬閾值，由你綜合 vs_market / vs_sector 偏離幅度與其他 context 判讀；breadth 不可得（available=false）時退回 `市場情境` 與類股 context。
 
 # 輸出 schema
 {
@@ -746,6 +763,63 @@ PROMPT;
         return $recentExitSignal
             ? 'true（過去 7 日內曾觸發 exit，請偏向 trim 保護而非簡單 hold）'
             : 'false';
+    }
+
+    /**
+     * 市場廣度：當日大盤中位數 vs 所屬大類中位數 vs 本檔，供 AI 做三層歸因
+     * （market_drag / sector_drag / stock_specific）。純用 daily_quotes，不依賴新聞。
+     *
+     * 注意：industry 顆粒較粗（如「電子零組件業」含百餘檔），無法識別「ABF 載板」這類
+     * 細概念族群；此 context 的定位是「本檔是否顯著弱/強於大盤與所屬大類」，
+     * 能穩定區分 market_drag 與 stock_specific，細族群歸因待後續以論點分組迭代。
+     */
+    private function buildMarketBreadthContext(SwingPosition $position, DailyQuote $quote): array
+    {
+        $date = $quote->date->toDateString();
+        $self = $quote->change_percent !== null ? round((float) $quote->change_percent, 2) : null;
+        if ($self === null) {
+            return ['available' => false];
+        }
+
+        // 大盤：當日全市場 change% 中位數（樣本過少代表行情尚未回填，視為不可用）
+        $marketChanges = DailyQuote::where('date', $date)
+            ->whereNotNull('change_percent')
+            ->pluck('change_percent')
+            ->map(fn ($v) => (float) $v)
+            ->sort()
+            ->values();
+        if ($marketChanges->count() < 100) {
+            return ['available' => false];
+        }
+        $marketMedian = round($marketChanges[intdiv($marketChanges->count(), 2)], 2);
+
+        $result = [
+            'available' => true,
+            'self_change_pct' => $self,
+            'market_median_pct' => $marketMedian,
+            'vs_market' => round($self - $marketMedian, 2),
+        ];
+
+        // 所屬大類中位數（ETF 無單一大類則略過該層）
+        $industry = $position->stock->industry;
+        if ($industry && !$this->isLikelyEtf($position->stock)) {
+            $sectorChanges = DailyQuote::where('daily_quotes.date', $date)
+                ->whereNotNull('change_percent')
+                ->whereIn('stock_id', \App\Models\Stock::where('industry', $industry)->select('id'))
+                ->pluck('change_percent')
+                ->map(fn ($v) => (float) $v)
+                ->sort()
+                ->values();
+            if ($sectorChanges->count() >= 3) {
+                $sectorMedian = round($sectorChanges[intdiv($sectorChanges->count(), 2)], 2);
+                $result['industry'] = $industry;
+                $result['sector_median_pct'] = $sectorMedian;
+                $result['sector_sample'] = $sectorChanges->count();
+                $result['vs_sector'] = round($self - $sectorMedian, 2);
+            }
+        }
+
+        return $result;
     }
 
     private function isLikelyEtf(\App\Models\Stock $stock): bool
