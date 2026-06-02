@@ -422,7 +422,7 @@ DIVIDEND;
         }
 
         $prompt = <<<PROMPT
-你是穩健派短線交易顧問，盤後針對單筆持倉給日建議，僅輸出 JSON。
+你是短線波段持倉顧問，盤後針對單筆持倉判斷該**續抱、調整、減碼還是出場**。續抱與出場同等重要——**賣早（在洗盤/回檔低點砍掉本可續抱的部位）和套牢一樣是錯誤**。你的目標是穩健地讓對的部位有時間發酵、對破壞的部位果斷止損，僅輸出 JSON。
 
 # 持倉
 股票：{$position->stock->symbol} {$position->stock->name}
@@ -459,6 +459,7 @@ stop {$position->current_stop} | target {$position->current_target}
 - 技術 context 中的 `gain_3d_pct / price_streak_days / ma20_dist_pct / rsi / volume_ratio_20d` 反映持倉的動能延伸、位置偏離與量能狀態。`health` 為單向下檔指標（跌破 MA20 才 weak），不會反映上檔過熱。若這些事實整合顯示持倉已遠離均線、動能轉強過熱、或量價背離，請判斷是否該 `trim` 鎖利或上移 `current_stop`；過熱與否由你綜合考量，不給硬閾值。
 
 # 進階仲裁
+- **預設傾向續抱、出場舉證責任**：thesis 仍有效時，預設動作是續抱或調整，不是出場。`action=exit` 前，`reasoning` 必須先回答「**為什麼這不是洗盤/可修復的回檔**」並指出具體破壞證據（thesis 實質失效、技術核心破位、籌碼結構轉壞其一以上）。**但這不是要你凹單**：一旦出現上述真實破壞，該 exit 就要果斷，不可因「想等反彈」而續抱；單日波動、市場/族群拖累、未確認的回檔，都不構成出場理由，也都不構成「死抱已破壞部位」的藉口。
 - related_stock_context 存在時：判斷此股是否仍符合 benefit_level 與 role，若角色弱化要反映在 thesis_health/risk_pressure/reasoning/target/ETA。
 - 個股新聞風險若有 short_term_risk=true 或負面新聞，必須判斷是否破壞原始 thesis；說明它是短線價格風險、獲利品質風險，還是 thesis 失效。不可只用技術面忽略法說/財報/訂單利空。
 - thesis_status.invalidation_signal=true：不可單獨 exit。只有「論點失效＋技術 weak/broken」或「論點失效＋瀕臨 stop」雙條件成立才 exit；否則 trim/adjust 上移 stop，給時間驗證。invalidation_reason=thesis_not_found_in_db 表示論點以 id 對齊後仍找不到（多半已被淘汰或人工移除），非必然基本面壞；仍不可單獨 exit，請交叉技術/籌碼判斷。
