@@ -421,13 +421,19 @@ DIVIDEND;
             $breadthBlock = "市場廣度（當日大盤 vs 所屬大類 vs 本檔，供三層歸因）：{$breadthJson}";
         }
 
+        $stopAboveCostNote = '';
+        if ($position->current_stop !== null && $position->entry_price !== null
+            && (float) $position->current_stop > (float) $position->entry_price) {
+            $stopAboveCostNote = "\n（事實標籤）目前 stop {$position->current_stop} 高於平均成本 {$position->entry_price}——若本部位並非靠價格漲過此價位（移動停利鎖利），多為加碼攤平後停損未隨成本下移而卡死，請依下方停損規則判斷是否需重新錨定。";
+        }
+
         $prompt = <<<PROMPT
 你是短線波段持倉顧問，盤後針對單筆持倉判斷該**續抱、調整、減碼還是出場**。續抱與出場同等重要——**賣早（在洗盤/回檔低點砍掉本可續抱的部位）和套牢一樣是錯誤**。你的目標是穩健地讓對的部位有時間發酵、對破壞的部位果斷止損，僅輸出 JSON。
 
 # 持倉
 股票：{$position->stock->symbol} {$position->stock->name}
 收盤 {$quote->close} | 成本 {$position->entry_price} | 股數 {$position->shares} | 持有 {$holdingDays} 日
-stop {$position->current_stop} | target {$position->current_target}
+stop {$position->current_stop} | target {$position->current_target}{$stopAboveCostNote}
 {$trajectoryText}
 原由：{$candidate?->swing_reasoning}
 {$dividendBlock}
@@ -450,7 +456,7 @@ stop {$position->current_stop} | target {$position->current_target}
 {$lessonsBlock}# 基礎約束
 - **執行時點**：本檢討於 T 日盤後執行，所有 action 與 stop/target 調整於 **T+1 開盤後**由使用者執行。`decision_summary` 與 `reasoning` 提及執行時點時，請用「明日開盤」「下一交易日」等字眼，禁止使用「今日收盤後」「立即」「即刻」「現在」這類盤後無法執行的措辭。`repair_condition` / `failure_condition` 描述的觀察點，也應以「明日」或具體交易日為基準。
 - action ∈ {hold, adjust, trim, exit}
-- current_stop 只能上移或維持（action=exit 例外）
+- current_stop 預設只能上移或維持（action=exit 例外），以防為了凹單而放寬停損。**唯一下移例外**：當 stop 已高於平均成本（多為加碼攤平後停損卡在成本之上），請把停損重新錨定到新成本下方的合理風險位；此例外僅限成本基準改變，不得用於單純想給套牢部位更多下跌空間。
 - current_target 可調，但 reasoning 必須說明
 - expected_holding_days 與 target_eta_days 必須依今日狀態重估，不可沿用 20 天
 - target_price_reasoning 必須引用：壓力區 / 均線通道 / ATR / R:R / 題材催化 其一
@@ -580,7 +586,13 @@ PROMPT;
             : 'hold';
 
         $nextStop = isset($advice['current_stop']) ? round((float) $advice['current_stop'], 2) : $previousStop;
-        if ($action !== 'exit' && $previousStop !== null && $nextStop !== null) {
+        // 「停損只能上移」防止 AI 為了凹單而放寬停損。但若停損已高於平均成本（加碼攤平後停損未隨
+        // 成本下移而卡死的結構訊號），這條鎖本身是錯的——自動鬆鎖，讓 AI 本就每次都會給的
+        // current_stop 生效（新風險位由 AI 判斷）。正常持倉（stop 在成本之下）一律照舊防凹單。
+        $stopStrandedAboveCost = $position->entry_price !== null
+            && $previousStop !== null
+            && $previousStop > (float) $position->entry_price;
+        if ($action !== 'exit' && ! $stopStrandedAboveCost && $previousStop !== null && $nextStop !== null) {
             $nextStop = max($previousStop, $nextStop);
         }
 

@@ -49,6 +49,49 @@ class SwingWorkflowSourceTest extends TestCase
         $this->assertNull($advice['why_not_hold']);
     }
 
+    public function test_swing_advice_auto_unlocks_stop_when_stranded_above_cost(): void
+    {
+        // 加碼攤平後停損卡在成本之上：均價 1013.8、停損 1022.5（> 成本）→ 自動鬆鎖，AI 給的下移值直接生效
+        $position = new SwingPosition();
+        $position->setRawAttributes([
+            'entry_price' => '1013.80',
+            'current_stop' => '1022.50',
+            'current_target' => '1150.00',
+            'max_holding_days' => 20,
+            'advice_log' => null,
+        ], true);
+        $position->setRelation('candidate', null);
+
+        $advice = $this->invokeNormalizeAdvice($position, [
+            'action' => 'hold',
+            'current_stop' => 960,
+        ]);
+
+        // stop 高於成本 → 「只能上移」鎖自動解除，AI 的 960 直接套用（不靠任何新欄位）
+        $this->assertSame(960.0, $advice['current_stop']);
+    }
+
+    public function test_swing_advice_keeps_only_up_lock_when_stop_below_cost(): void
+    {
+        // 正常持倉：停損 95 在成本 100 之下 → 鎖照舊，下移被擋
+        $position = new SwingPosition();
+        $position->setRawAttributes([
+            'entry_price' => '100.00',
+            'current_stop' => '95.00',
+            'current_target' => '120.00',
+            'max_holding_days' => 20,
+            'advice_log' => null,
+        ], true);
+        $position->setRelation('candidate', null);
+
+        $advice = $this->invokeNormalizeAdvice($position, [
+            'action' => 'hold',
+            'current_stop' => 88,
+        ]);
+
+        $this->assertSame(95.0, $advice['current_stop']);
+    }
+
     public function test_swing_advice_normalization_separates_risk_zone_from_stop_review(): void
     {
         $position = new SwingPosition();
