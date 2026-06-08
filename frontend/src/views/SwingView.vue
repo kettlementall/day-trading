@@ -902,15 +902,26 @@ async function refreshLivePrices() {
 async function fetchAll() {
   loading.value = true
   try {
-    const [cRes, pRes] = await Promise.all([
+    // 候選與持倉解耦：用 allSettled，任一支失敗不該拖垮另一支。
+    // 之前用 Promise.all，持倉回應過大被連線截斷 parse 失敗時，整包 reject，
+    // 連已成功的候選也被丟掉，且外層無 catch → 整頁靜默空白、不報錯。
+    const [cRes, pRes] = await Promise.allSettled([
       getSwingCandidates(currentDate.value),
       getSwingPositions(),
     ])
-    candidates.value = cRes.data.data || []
-    swingMeta.value = cRes.data || null
-    positions.value = pRes.data.data || []
-    exposure.value = pRes.data.total_risk_exposure || null
-    livePriceUpdatedAt.value = positions.value[0]?.price_fetched_at || dayjs().format('YYYY-MM-DD HH:mm:ss')
+    if (cRes.status === 'fulfilled') {
+      candidates.value = cRes.value.data.data || []
+      swingMeta.value = cRes.value.data || null
+    } else {
+      ElMessage.error('短線候選載入失敗，請稍後重試')
+    }
+    if (pRes.status === 'fulfilled') {
+      positions.value = pRes.value.data.data || []
+      exposure.value = pRes.value.data.total_risk_exposure || null
+      livePriceUpdatedAt.value = positions.value[0]?.price_fetched_at || dayjs().format('YYYY-MM-DD HH:mm:ss')
+    } else {
+      ElMessage.error('短線持倉載入失敗，請稍後重試')
+    }
   } finally {
     loading.value = false
   }

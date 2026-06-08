@@ -1760,6 +1760,21 @@ AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`�
 
 `SwingController::positions()` 也改用同一個 `resolveLivePrice`，所以手動「刷新」按鈕也會拿到即時。
 
+#### 9.2a `GET /api/swing/positions` 回應瘦身（避免大 payload 截斷導致整頁空白）
+
+`positions()` 早期把整個 `SwingPosition` model 連同 `advice_log`、每筆 `snapshots` 的完整 `advice`（25 key、內嵌新聞文章）全部序列化。持有越久累積越多，實測 7 筆持倉達 **1.4MB**。在較慢/不穩連線（如 Tailscale）上 `Transfer-Encoding: chunked` 大回應易被截斷 → 前端 axios 拿到不完整 JSON、parse 失敗 → `SwingView.vue` 的 `fetchAll()` 用 `Promise.all([candidates, positions])` 整包 reject → **連已成功的候選一起被丟掉、整頁靜默空白**（2026-06-08 Safari 實例）。
+
+兩層修正：
+
+- **後端瘦身**（`SwingController::positions()` map 內）：
+  - `makeHidden('advice_log')` — 前端從不讀，整欄移除（最大宗）。
+  - 移除 `latest_advice.news_risk.articles` — 前端未引用的內嵌新聞。
+  - `snapshots` 只保留**最後 5 筆**、每筆只回 `id / date / current_stop / current_target / advice.{action,reasoning}`（前端折疊區實際用到的欄位）。`tracking_status` 已在瘦身前用 `snapshots->last()` 算完，不受影響。
+  - 結果 1.4MB → **約 216KB**（剩餘量為前端要顯示的 `reasoning` 長文）。
+- **前端韌性**（`SwingView.vue::fetchAll()`）：改用 `Promise.allSettled`，候選與持倉**解耦**，任一支失敗只跳 `ElMessage` 錯誤提示、不拖垮另一支、不再靜默空白。
+
+> 完整 `advice_log` 仍保留於 DB，供教訓萃取（§9.5b `extract-swing-lessons` 取每筆最後 3 筆）與後端讀取；只是不再經由列表端點往前端送。
+
 ### 9.3 UI
 
 每張持倉卡片右上角為「即時現價區塊」（取代原本只顯示 PnL 的位置）：

@@ -290,6 +290,39 @@ class SwingController extends Controller
                     'latest_snapshot_at' => $latestSnapshot?->updated_at?->toDateTimeString(),
                     'has_latest_snapshot' => $latestDaily && $latestSnapshot && $latestSnapshot->date->isSameDay($latestDaily->date),
                 ]);
+
+                // 列表端點瘦身：`advice_log` 隨持有天數無限累積（每筆建議又內嵌完整新聞），
+                // 7 筆持倉可達 1.4MB，在較慢/不穩連線（如 Tailscale）上易被截斷，導致前端
+                // axios JSON parse 失敗 → Promise.all reject → 整頁靜默空白。前端列表只用
+                // `latest_advice`，從不讀 `advice_log` 或 `latest_advice.news_risk.articles`，
+                // 故整欄隱藏 + 移除內嵌新聞，把回應壓回數十 KB。完整 advice 歷史走教訓萃取／後端。
+                $position->makeHidden('advice_log');
+                $advice = $position->latest_advice;
+                if (is_array($advice) && isset($advice['news_risk']['articles'])) {
+                    unset($advice['news_risk']['articles']);
+                    $position->setAttribute('latest_advice', $advice);
+                }
+
+                // 快照同樣瘦身：前端折疊區只顯示最後 5 筆，且每筆只讀
+                // date / current_stop / current_target / advice.action / advice.reasoning。
+                // 但每筆 snapshot 的 `advice` 是 25 key 完整 JSON，持有久的持倉累積上百筆 →
+                // 單筆持倉 snapshots 可達 145KB。只回前端會用到的欄位。
+                // 註：tracking_status 已在上面用 snapshots->last() 算完，這裡覆寫不影響它。
+                $position->setRelation('snapshots', $position->snapshots
+                    ->sortBy('date')
+                    ->slice(-5)
+                    ->map(fn ($s) => [
+                        'id' => $s->id,
+                        'date' => $s->date?->format('Y-m-d'),
+                        'current_stop' => $s->current_stop,
+                        'current_target' => $s->current_target,
+                        'advice' => [
+                            'action' => data_get($s->advice, 'action'),
+                            'reasoning' => data_get($s->advice, 'reasoning'),
+                        ],
+                    ])
+                    ->values());
+
                 return $position;
             });
 
