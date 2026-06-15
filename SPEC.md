@@ -673,10 +673,10 @@ API 失敗時，取 Haiku 信度前 15 名，預設 `intraday_strategy = 'moment
 | 服務 | 環境變數 | 預設 Model | 說明 |
 |------|---------|-----------|------|
 | Haiku 批量預篩 | `ANTHROPIC_HAIKU_MODEL` | claude-haiku-4-5-20251001 | 每批 15 檔，速度/成本優先 |
-| Opus 精審 | `ANTHROPIC_SCREENING_MODEL` | claude-opus-4-6 | 深度推理，每檔獨立 call，最多 30 檔 |
+| Opus 精審 | `ANTHROPIC_SCREENING_MODEL` | claude-opus-4-8 | 深度推理，每檔獨立 call，最多 30 檔 |
 | 盤中校準/滾動 | `ANTHROPIC_INTRADAY_MODEL` | claude-sonnet-4-6 | 快照每 30 秒，AI 建議每 10-15 分鐘，速度優先 |
 | 新聞情緒分析 | `ANTHROPIC_SENTIMENT_MODEL` | claude-haiku-4-5 | 高頻量大，簡單分類任務 |
-| 每日檢討 | `ANTHROPIC_MODEL` | claude-opus-4-6 | 深度分析，一天一次 |
+| 每日檢討 | `ANTHROPIC_MODEL` | claude-opus-4-8 | 深度分析，一天一次 |
 
 ### 3.6 成本估算
 
@@ -1716,7 +1716,7 @@ DB 有資料？──── 是 ──→ 用 DB 快照回傳主報價
 
 各自回傳：建議動作、分析內容（100字內）、停利/停損價位（如適用）。AI 回應格式為 JSON，包含 `short` 和 `long` 兩個區塊。
 
-AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-6`）。
+AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-8`）。
 
 ---
 

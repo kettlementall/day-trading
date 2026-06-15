@@ -584,7 +584,7 @@ stop_profit / stop_loss / add_price 不可超過漲停或低於跌停；接近�
 PROMPT;
 
         $anthropicKey = config('services.anthropic.api_key', '');
-        $model = config('services.anthropic.model', 'claude-opus-4-6');
+        $model = config('services.anthropic.model', 'claude-opus-4-8');
 
         $aiResp = Http::timeout(30)
             ->withHeaders([

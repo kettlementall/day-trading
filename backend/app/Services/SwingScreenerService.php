@@ -30,7 +30,7 @@ class SwingScreenerService
     )
     {
         $this->apiKey = config('services.anthropic.api_key', '');
-        $this->model = config('services.anthropic.screening_model', 'claude-opus-4-6');
+        $this->model = config('services.anthropic.screening_model', 'claude-opus-4-8');
     }
 
     public function screen(string $date, ?string $tradeDate = null): Collection

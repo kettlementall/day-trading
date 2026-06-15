@@ -37,7 +37,7 @@ class AiScreenerService
     public function __construct()
     {
         $this->apiKey = config('services.anthropic.api_key', '');
-        $this->model = config('services.anthropic.screening_model', 'claude-opus-4-6');
+        $this->model = config('services.anthropic.screening_model', 'claude-opus-4-8');
     }
 
     /**
