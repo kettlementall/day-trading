@@ -233,7 +233,7 @@ PROMPT;
                 ])
                 ->post('https://api.anthropic.com/v1/messages', [
                     'model' => $this->model,
-                    'max_tokens' => 16000,
+                    'max_tokens' => 32000,
                     'messages' => [['role' => 'user', 'content' => $prompt]],
                 ]);
 
