@@ -18,6 +18,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class SwingController extends Controller
 {
@@ -245,7 +246,8 @@ class SwingController extends Controller
 
     public function positions(Request $request): JsonResponse
     {
-        $positions = SwingPosition::with(['stock', 'candidate', 'snapshots' => fn ($q) => $q->orderBy('date')])
+        $positions = SwingPosition::select($this->listColumns())
+            ->with(['stock', 'candidate', 'snapshots' => fn ($q) => $q->orderBy('date')])
             ->where('user_id', $request->user()->id)
             ->orderByRaw("FIELD(status, 'holding', 'exit_suggested', 'watching', 'closed', 'stopped')")
             ->orderByDesc('entry_date')
@@ -291,11 +293,10 @@ class SwingController extends Controller
                     'has_latest_snapshot' => $latestDaily && $latestSnapshot && $latestSnapshot->date->isSameDay($latestDaily->date),
                 ]);
 
-                // 列表端點瘦身：`advice_log` 隨持有天數無限累積（每筆建議又內嵌完整新聞），
-                // 7 筆持倉可達 1.4MB，在較慢/不穩連線（如 Tailscale）上易被截斷，導致前端
-                // axios JSON parse 失敗 → Promise.all reject → 整頁靜默空白。前端列表只用
-                // `latest_advice`，從不讀 `advice_log` 或 `latest_advice.news_risk.articles`，
-                // 故整欄隱藏 + 移除內嵌新聞，把回應壓回數十 KB。完整 advice 歷史走教訓萃取／後端。
+                // advice_log 已在查詢階段排除於 SELECT 之外（見 listColumns()，根因為
+                // 無限累積 JSON 觸發 ORDER BY filesort 爆 sort_buffer_size → 1038）。
+                // 這裡 makeHidden 作為防禦：即使未來有人改回 select *，輸出也不夾帶它。
+                // latest_advice 仍保留，但移除內嵌新聞 articles（前端列表用不到、純佔體積）。
                 $position->makeHidden('advice_log');
                 $advice = $position->latest_advice;
                 if (is_array($advice) && isset($advice['news_risk']['articles'])) {
@@ -337,7 +338,8 @@ class SwingController extends Controller
      */
     public function livePrices(Request $request): JsonResponse
     {
-        $positions = SwingPosition::with('stock')
+        $positions = SwingPosition::select($this->listColumns())
+            ->with('stock')
             ->where('user_id', $request->user()->id)
             ->whereIn('status', SwingPosition::ACTIVE_STATUSES)
             ->get();
@@ -684,6 +686,25 @@ class SwingController extends Controller
             'suggested_lots' => intdiv($shares, 1000),
             'capital_required' => round($shares * $validated['entry_price'], 2),
         ]);
+    }
+
+    /**
+     * 唯讀列表/即時報價端點要 SELECT 的欄位（排除 advice_log）。
+     *
+     * advice_log 是無限累積的 JSON：每筆建議又內嵌完整新聞，單筆持倉可達數百 KB
+     * （實測 active 持倉 300KB+）。positions()/livePrices() 從不讀它（前端只用
+     * latest_advice），但 `select *` 仍會載入。最致命的是 positions() 帶
+     * `ORDER BY FIELD(status)` 觸發 filesort，MySQL 需把整列（含此巨大 JSON）塞進
+     * sort_buffer_size（預設 256KB），單列就超標 → SQLSTATE[HY001] 1038
+     * Out of sort memory → 端點 500 → 前端持倉整塊空白。
+     * 故查詢階段直接排除，filesort 不再扛大 JSON；完整 advice 歷史走後端教訓萃取。
+     */
+    private function listColumns(): array
+    {
+        return array_values(array_diff(
+            Schema::getColumnListing((new SwingPosition)->getTable()),
+            ['advice_log']
+        ));
     }
 
     private function riskExposure($positions): array

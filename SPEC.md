@@ -1775,6 +1775,14 @@ AI model 使用 `ANTHROPIC_MODEL` 環境變數設定（預設 `claude-opus-4-8`�
 
 > 完整 `advice_log` 仍保留於 DB，供教訓萃取（§9.5b `extract-swing-lessons` 取每筆最後 3 筆）與後端讀取；只是不再經由列表端點往前端送。
 
+##### 9.2a-2 查詢階段排除 `advice_log`（修 `SQLSTATE[HY001] 1038 Out of sort memory`）
+
+§9.2a 的 `makeHidden('advice_log')` 只瘦身**回應 body**，查詢仍是 `select *`，`advice_log`（無限累積、每筆內嵌新聞，實測 active 持倉單筆達 **300KB+**）照樣被載入。`positions()` 又帶 `ORDER BY FIELD(status,...)` 觸發 **filesort**：MySQL 須把整列（含這顆大 JSON）打包進 `sort_buffer_size`（預設僅 **256KB**），**單列就超標** → `SQLSTATE[HY001] 1038 Out of sort memory` → 端點整個 **500**。前端 `fetchAll()`（已是 `allSettled`）此時持倉支 reject、只跳 `ElMessage`、`positions` 維持空陣列 → **「我的短線持倉」整塊空白**（2026-06-29 實例）。
+
+修正：新增 `SwingController::listColumns()`，於 `positions()` 與 `livePrices()` 查詢以 `select($this->listColumns())` 排除 `advice_log`（兩端點皆唯讀、從不讀它）。filesort 不再扛大 JSON；`latest_advice`（單筆、有界 3–13KB）保留。`livePrices()` 同步受惠：每次輪詢不再白白載入數百 KB。`makeHidden('advice_log')` 保留作防禦（避免日後改回 `select *` 時又夾帶）。
+
+> 注意：純調大 `sort_buffer_size` 只是治標——根因是把**無限成長的 JSON 欄位**拉進 filesort，欄位繼續長遲早再爆。修在查詢欄位才是治本。
+
 ### 9.3 UI
 
 每張持倉卡片右上角為「即時現價區塊」（取代原本只顯示 PnL 的位置）：
